@@ -502,11 +502,11 @@ Each step is one small PR with the evidence report required by
 - LFS support.
 - Relay design for hosted OMA reaching private instances.
 - Whether `max_pat_lifetime_days` should default lower than 90.
-- Bot credential rotation. `POST /personal_access_tokens/self/rotate` on
-  17.1 needs the `api` scope, which widens the bot beyond
-  `write_repository`. Options are manual replacement, a separate rotation
-  token held only by the control plane, or the narrower `self_rotate` scope
-  where the instance version supports it.
+- Bot credential rotation. On 17.1.8 a bot cannot rotate its own token
+  (see Prototype results). A human Maintainer can rotate it, and the bot
+  user stays the same. Options are manual replacement by an administrator,
+  rotation by a human-held token kept only in the control plane, or the
+  narrower `self_rotate` scope where the instance version supports it.
 
 ## Prototype results
 
@@ -578,12 +578,69 @@ afterwards.
   own search pattern, and the cloned repository contains no token-like
   strings.
 
+### App principal run
+
+A third run on 2026-10-12 used a project access token with the Developer
+role and `read_api write_repository` as the bot credential. The token was
+created, rotated, and revoked by a human Maintainer during the run.
+
+- Registration checks:
+  - `GET /personal_access_tokens/self` returned the scopes and `expires_at`;
+  - `GET /user` returned `bot: true`;
+  - the bot saw exactly one project;
+  - without `api`, a REST write was refused with 403.
+- Rotation:
+  - bot self-rotation failed in every form: `insufficient_scope` without
+    `api`; 403 with `api`, even with the Maintainer role; and 401 on
+    `POST /projects/:id/access_tokens/self/rotate`;
+  - `POST /projects/:id/access_tokens/:id/rotate` by a human Maintainer
+    returned 200. The bot user stayed the same, and the old token failed
+    with 401 at once;
+  - revoking the project access token blocked its bot user.
+- Proxy run with the bot credential, 8 checks:
+  - a project the user could reach but the bot could not returned 404 for
+    the bot, so the intersection rule rejected it;
+  - clone through the proxy worked;
+  - commits carried the bot as author, plus the `Assisted-by` and
+    `Co-authored-by` trailers;
+  - a push to the default branch was denied by the proxy;
+  - the push-option merge request was authored by the bot, had label
+    `openma`, and its description carried "Requested by @user";
+  - no token appeared in the proxy log.
+
+The test merge request, branch, label, and tokens were removed afterwards.
+
+### OpenMatter Bond run
+
+A fourth run on 2026-10-12 drove `@openmatter/bond` with
+`@openmatter/bond-gitlab` through the loopback example in OpenMatter
+(`examples/gitlab-bond-local`). All 11 checks passed:
+
+- instance discovery succeeded and reported no device flow;
+- authorization code with PKCE returned `read_user read_api
+  write_repository`;
+- the store held only sealed tokens, and the credential resolved to the
+  linked user;
+- six concurrent credential calls caused one refresh, and all six received
+  the rotated token. The old access token then failed with 401, and the new
+  one worked;
+- unlink revoked the grant on GitLab, the token failed with 401, and the
+  next credential call returned `link_required`.
+
+The run found a defect: when the refresh skew exceeded the token lifetime,
+each waiting caller refreshed again, so six concurrent calls caused six
+refreshes. The kernel now reuses a token that another caller rotated while
+it waited, and a regression test covers the case.
+
+A second authorization for the same application and scopes redirected to
+the callback without showing the consent page. The signed `state` and PKCE
+verifier, not the consent page, bind a callback to the linking user.
+
 ## Unverified on the test instance
 
-- prefilled `name` and `scopes` on the token page;
+- prefilled `scopes` on the token page. The prefilled `name` was confirmed;
 - `DELETE /personal_access_tokens/self` with only the allowed scopes;
 - exact matching for a non-loopback HTTPS redirect URI;
 - `GET /personal_access_tokens/self` and `bot: true` from `/user` for a
   group access token. Creating one needs the group Owner role, which the
-  test account does not hold;
-- self-rotation of a bot credential.
+  test account does not hold.
