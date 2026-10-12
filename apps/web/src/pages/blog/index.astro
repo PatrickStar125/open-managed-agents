@@ -2,7 +2,10 @@
 import Base from "../../layouts/Base.astro";
 import { getCollection } from "astro:content";
 
+// English index — zh-CN posts (id prefix "zh-cn/") get their own index
+// at /blog/zh-cn/ and are excluded here.
 const posts = (await getCollection("blog", ({ data }) => !data.draft))
+  .filter((post) => !post.id.startsWith("zh-cn/"))
   .sort((a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf());
 
 function formatDate(d: Date) {

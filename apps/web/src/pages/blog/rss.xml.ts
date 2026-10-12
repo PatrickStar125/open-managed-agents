@@ -3,7 +3,9 @@ import { getCollection } from "astro:content";
 import type { APIContext } from "astro";
 
 export async function GET(context: APIContext) {
+  // English-only feed — zh-CN posts (id prefix "zh-cn/") are excluded.
   const posts = (await getCollection("blog", ({ data }) => !data.draft))
+    .filter((post) => !post.id.startsWith("zh-cn/"))
     .sort((a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf());
 
   return rss({

@@ -109,6 +109,8 @@ export interface BlogPostSchemaInput {
   tags: string[];
   /** Image URL (absolute). Falls back to logo if absent. */
   image?: string;
+  /** BCP-47 language of the post. Defaults to "en". */
+  inLanguage?: string;
 }
 
 export function blogPostSchema(p: BlogPostSchemaInput) {
@@ -133,6 +135,7 @@ export function blogPostSchema(p: BlogPostSchemaInput) {
     image: p.image ?? `${SITE_URL}/og-default.png`,
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
     url,
+    inLanguage: p.inLanguage ?? "en",
     keywords: p.tags.join(", "),
   };
 }
