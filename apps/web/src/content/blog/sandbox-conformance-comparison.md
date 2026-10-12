@@ -135,9 +135,11 @@ diverge:
   does not prove hosted egress-policy semantics" — operators bring and
   certify their own.
 
-Note what none of this is: the environment `allowed_hosts` limit,
-enforced inside the `web_fetch` tool in `apps/agent/src/harness/tools.ts`,
-is a tool-level check, not a sandbox firewall — `bash`/`curl` ignore it.
+Note what none of this is: the environment `allowed_hosts` limit —
+`assertWebFetchUrlAllowed` in `apps/agent/src/harness/web-fetch-http.ts`,
+a suffix match re-checked on every redirect hop inside the `web_fetch`
+tool — is a tool-level check, not a sandbox firewall. `bash`/`curl`
+ignore it.
 A general egress allowlist proxy is planned work
 ([issue #297](https://github.com/openma-ai/open-managed-agents/issues/297)),
 not a claim this table makes.

@@ -54,7 +54,7 @@ Provider 原生的网络策略是另一条轴,而这四家在这里分道扬镳:
 - **Daytona** 在创建时透传网络控制:`networkBlockAll`、`networkAllowList`、`domainAllowList`,以及一个 `outboundProxyUrl`,给想让出口流经自己代理的运营者用。
 - **E2B** 是诚实的例外。适配器注明网络访问由模板镜像控制,而 managed preset 干脆不提供凭证出口的接点,「因为已安装的 E2B SDK 证明不了托管侧的出口策略语义」——运营者自己带来并认证自己的方案。
 
-注意这一切*都不是*什么:环境的 `allowed_hosts` 限制是 `web_fetch` 工具内部(`apps/agent/src/harness/tools.ts`)的一次检查,是工具级检查,不是沙箱防火墙——`bash`/`curl` 不受它约束。一个通用的出口白名单代理是计划中的工作([issue #297](https://github.com/openma-ai/open-managed-agents/issues/297)),不是这张表做出的宣称。
+注意这一切*都不是*什么:环境的 `allowed_hosts` 限制——`apps/agent/src/harness/web-fetch-http.ts` 里的 `assertWebFetchUrlAllowed`,在 `web_fetch` 工具内部做后缀匹配、每次重定向跳转都重新检查——是工具级检查,不是沙箱防火墙。`bash`/`curl` 不受它约束。一个通用的出口白名单代理是计划中的工作([issue #297](https://github.com/openma-ai/open-managed-agents/issues/297)),不是这张表做出的宣称。
 
 ## 这张表拒绝说什么
 
