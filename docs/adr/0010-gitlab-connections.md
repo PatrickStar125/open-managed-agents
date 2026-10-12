@@ -1,0 +1,412 @@
+# ADR 0010: Self-managed GitLab connections without a bot identity
+
+**Status**: Proposed (2026-10-12)
+
+**Related**: [`0006-session-execution-authority.md`](0006-session-execution-authority.md),
+[`0007-sandbox-credential-egress.md`](0007-sandbox-credential-egress.md),
+[`0009-github-connections.md`](0009-github-connections.md),
+OpenMatter [`docs/CONNECTIONS.md`](https://github.com/openma-ai/OpenMatter/blob/main/docs/CONNECTIONS.md)
+and [`docs/IDENTITY_MODEL.md`](https://github.com/openma-ai/OpenMatter/blob/main/docs/IDENTITY_MODEL.md)
+
+---
+
+## Context
+
+Some workspaces keep their code on GitLab, often on a self-managed instance
+at a private hostname. They need the controls ADR 0009 gives GitHub:
+
+- repository picking from the user's own access;
+- per-repository and per-operation limits;
+- no long-lived token in the sandbox;
+- execution fencing, revocation, and audit.
+
+They also require that no bot or service account is introduced. Every GitLab
+operation runs as the user who linked the account.
+
+OMA has no GitLab repository resource today. The resolver handles only
+`github_repository`
+(`packages/managed-agents-application/src/sessions/resource-resolver-service.ts:131`).
+The `glab` capability spec targets only `gitlab.com` and a placeholder device
+flow client (`packages/cap/src/builtin/glab.ts`). ADR 0007 egress matches
+credentials by hostname, not by project path.
+
+GitLab facts were checked read-only against a self-managed GitLab 17.1.8
+Enterprise (JiHu) instance on 2026-10-12:
+
+- **No App or installation concept.** OAuth applications are owned by the
+  instance, a top-level group, or one user. Creating instance or group
+  applications needs an administrator or a group Owner.
+- **Grants.** OIDC discovery lists `authorization_code` with PKCE `S256` and
+  `refresh_token`. GitLab documents device flow from 17.1, but this instance
+  has no `device_authorization_endpoint`, and `POST /oauth/authorize_device`
+  returns 404, so the feature is disabled there.
+- **Account-wide scopes.** No scope narrows a user token to one project. The
+  test account has Developer access or higher on 825 projects, and a
+  `write_repository` token reaches all of them.
+- **No narrower credential without a bot.** Project access tokens, group
+  access tokens, and service accounts all create bot users. The instance
+  already has many `project_<id>_bot_*` users. The requirement excludes them.
+- **Git over HTTPS** accepts the token as the password with any username
+  (`oauth2`, the login, or an arbitrary string all worked).
+- **Path forms vary.**
+  - Git paths are case-insensitive.
+  - A git path without `.git` answers 301 to the `.git` form.
+  - REST accepts a numeric project ID or a case-insensitive URL-encoded path,
+    and returns 404 for a `.git` suffix.
+  - `/api/graphql` serves all projects from one endpoint.
+- **No delegation marker.** Merge requests expose no field that marks
+  app-mediated creation.
+- **Private network.** The instance hostname resolves to a private address
+  that is reachable from a corporate workstation. TLS uses a public CA.
+
+## Decision
+
+### Equivalence target
+
+| ADR 0009 control | This ADR |
+| --- | --- |
+| repository-scoped, 1 h installation token reaches the sandbox | no provider token reaches the sandbox; a control-plane git proxy uses the user token per request |
+| App permissions | operation classes `fetch`, `push`, `open_mr`, `comment_mr` |
+| repository picker over installation ∩ user | `GET /projects?membership=true&min_access_level=30&search=` |
+| access check at Session creation | `GET /projects/:id`, highest of `project_access` and `group_access` |
+| installation and authorization webhooks | none; refresh or request failure marks the link |
+| PR opened "with App" | user-authored with content marker and audit fact |
+| `pr_principal` with explicit fallback | fixed `user_only`; no fallback exists |
+| one way to link (App authorization) | `link_methods` policy: OAuth, personal access token, or both |
+| app principal for automations | none; unattended GitLab work is rejected |
+
+Enforcement sits in the application, not the network. It therefore works on
+every sandbox provider, including those that ADR 0007 rates `advisory`. A
+process that bypasses the proxy and connects to GitLab directly holds no
+GitLab credential.
+
+### Provider instances
+
+A workspace administrator registers each GitLab instance:
+
+```text
+connection_providers
+  id, workspace_id, provider ('gitlab'), base_url (canonical https origin),
+  link_methods ('pat_only' | 'oauth_only' | 'oauth_preferred'),
+  oauth_client_id (nullable), oauth_client_secret_cipher (nullable),
+  cipher_key_id, max_pat_lifetime_days (default 90),
+  identity_binding ('none' | 'sso_extern_uid'), sso_provider (nullable),
+  ca_bundle (nullable PEM), scopes, mr_mode ('push_options' | 'api'),
+  allow_user_principal_output (bool, default false), status,
+  created_by_user_id, created_at, updated_at
+  unique (workspace_id, base_url)
+```
+
+- gitlab.com is an instance like any other.
+- `allow_user_principal_output` must be true before any write. This is the
+  administrator opt-in required by OpenMatter IDENTITY_MODEL.
+- `ca_bundle` supports private CAs.
+
+### Link method policy
+
+`link_methods` decides how users may link. It is a policy in the same sense
+as `PrincipalPolicy`: the administrator configures it, the user chooses
+explicitly, and nothing switches silently.
+
+| Policy | User sees | Requires |
+| --- | --- | --- |
+| `pat_only` | paste a personal access token | nothing; the default when no OAuth application is registered |
+| `oauth_only` | authorize with GitLab | a registered OAuth application |
+| `oauth_preferred` | authorize with GitLab, with "paste a token" under Advanced | a registered OAuth application |
+
+Rules:
+
+1. The link records `method` (`oauth` or `pat`). Audit facts carry it.
+2. A failed OAuth refresh moves the link to `refresh_failed`. The user then
+   re-links with any allowed method. The host never asks for a token in place
+   of a failed OAuth link on its own.
+3. Each user has at most one active link per instance. Linking again, by
+   either method, revokes the previous link first.
+4. Tightening the policy, for example from `oauth_preferred` to
+   `oauth_only`, marks existing links of the removed method
+   `method_disallowed`. Their tokens are revoked, and users re-link at next
+   use.
+5. Everything after linking is method-independent. The proxy, fence,
+   attribution, and audit resolve the link, not the credential type.
+
+When an OAuth method is enabled:
+
+- registration reads `/.well-known/openid-configuration`. It fails unless
+  PKCE `S256` and `refresh_token` are supported and the issuer equals
+  `base_url`;
+- an instance-level application is recommended. A top-level group
+  application also works. A user-owned application is accepted with a
+  warning, because it disappears with its owner;
+- the redirect URI is
+  `${GATEWAY_ORIGIN}/v1/oma/connections/gitlab/{providerId}/callback`
+  (`apps/main-node/src/config.ts:283`);
+- the client secret uses
+  `secrets.cipherFor("connections.gitlab.client_secrets")`.
+
+### Linking
+
+Common to both methods:
+
+- The consent screen states that commits and merge requests will appear
+  under the user's own GitLab account and carry an OpenMA marker. The user's
+  consent is recorded.
+- The host reads `GET /user` (ID, username, name, `commit_email`,
+  `identities`). The numeric user ID is the stable key. Username and email are
+  display data.
+- With `identity_binding = 'sso_extern_uid'`, the `extern_uid` of the
+  identity whose provider equals `sso_provider` must equal the OMA user's SSO
+  subject. Otherwise linking fails with `gitlab_identity_mismatch`. This stops
+  a user from linking someone else's or a shared account.
+- One GitLab user ID may hold only one active link per workspace.
+- The link is stored in `connection_user_links` from ADR 0009, with
+  `provider_id` and `method` set and `installation_id` NULL. Tokens use
+  `secrets.cipherFor("connections.gitlab.user_tokens")`.
+- The allowed scopes are `read_user read_api write_repository`, plus `api`
+  only when `mr_mode = 'api'`.
+
+OAuth (`method = 'oauth'`):
+
+1. The host creates a signed, single-use state bound to the user and
+   provider, and a PKCE verifier.
+2. The callback exchanges the code and requests only the allowed scopes.
+3. Access tokens last 2 hours. Each refresh invalidates both the old access
+   token and the old refresh token, so refresh must be single-flight. It runs
+   under the OpenMatter refresh lease, and the rotated pair is committed under
+   that lease. A rejected refresh moves the link to `refresh_failed`.
+4. Unlink calls `POST /oauth/revoke` and writes a tombstone.
+
+Personal access token (`method = 'pat'`):
+
+1. The console offers a link to the instance's token page with the name and
+   allowed scopes prefilled. The token is submitted through a dedicated form,
+   never through chat or Session input.
+2. The host calls `GET /personal_access_tokens/self`. It rejects the token
+   when the token is inactive, has a scope outside the allowed set, has no
+   expiry, or expires later than `max_pat_lifetime_days` from now.
+3. There is no refresh. The host warns the user 7 days before `expires_at`. An
+   expired or rejected token moves the link to `expired` or `refresh_failed`,
+   and the user pastes a new one.
+4. Unlink calls `DELETE /personal_access_tokens/self` and writes a tombstone.
+
+### Session resource
+
+OMA adds an OMA-native resource. Claude Managed Agents shapes are not
+changed (ADR 0007, "Preserve the official protocol exactly").
+
+```jsonc
+{
+  "type": "oma_gitlab_repository",
+  "provider_id": "cp_...",
+  "project_id": 5487,
+  "checkout": { "type": "branch", "name": "main" },
+  "operations": ["fetch", "push", "open_mr"]
+}
+```
+
+At creation the resolver:
+
+1. requires an authenticated creator (`managed_sessions.created_by_user_id`,
+   ADR 0009) and that creator's active link for `provider_id`;
+2. reads `GET /projects/:id` with the creator's token and requires access
+   level 20 (Reporter) for `fetch`, or 30 (Developer) for `push`, `open_mr`,
+   and `comment_mr`;
+3. rejects write operations unless `allow_user_principal_output` is true;
+4. rejects the Session when it is unattended (schedules, webhooks, shared
+   channels, API keys without a user);
+5. stores a sealed reference `{providerId, userLinkId, projectId,
+   operations}`. The project path is display data, refreshed by ID, and never
+   an authority.
+
+Errors: `gitlab_provider_not_configured`, `gitlab_link_required`,
+`gitlab_identity_mismatch`, `gitlab_link_method_disallowed`,
+`gitlab_project_not_accessible`, `gitlab_user_output_disabled`,
+`gitlab_unattended_unsupported`, `gitlab_refresh_failed`.
+
+`GET /v1/oma/connections/gitlab/{providerId}/projects?query=` backs the
+console picker. It uses the creator's token, pages through `x-total`, and
+caches briefly per link.
+
+### Git proxy
+
+The control plane serves git smart HTTP at
+`/v1/oma/git/{sessionId}/{resourceId}.git/...`, beside the existing Layer-A
+routes.
+
+Sandbox setup during Session input preparation:
+
+- `url."<OMA origin>/v1/oma/git/<session>/<resource>.git".insteadOf` for the
+  project's `.git` and suffix-less URLs. Other spellings go directly to
+  GitLab without credentials and fail.
+- A credential helper scoped to the OMA origin returns the Session's current
+  Work capability (ADR 0006), following the `sessions_token` rules in ADR
+  0007. It is never sent to the GitLab host.
+
+Per request the proxy:
+
+1. validates the capability and the active fence generation, and rejects
+   stale or replayed capabilities;
+2. maps `{sessionId, resourceId}` to the stored numeric project and builds
+   the upstream URL itself. The client never supplies an upstream path;
+3. allows only `info/refs?service=git-upload-pack` and `git-upload-pack`. It
+   also allows `info/refs?service=git-receive-pack` and `git-receive-pack`
+   when `push` is granted. LFS, archive, and every other route are denied;
+4. parses the receive-pack command list without buffering the pack. It denies
+   tag pushes and ref deletions. It denies push options other than the
+   `merge_request.*` options needed by `open_mr`. GitLab still enforces
+   protected branches against the user's permission;
+5. never follows upstream redirects. A rename resolves through a project ID
+   refresh, not a redirect;
+6. streams with size and time limits, and logs binding ID, project ID,
+   operation, refs, status, and latency. Tokens and bodies are never logged.
+
+GraphQL and arbitrary REST from the sandbox are not proxied. In-sandbox `glab`
+is out of scope.
+
+### Merge requests and comments
+
+- `mr_mode = 'push_options'` (default) creates merge requests with
+  `git push -o merge_request.create -o merge_request.target=<branch>` through
+  the proxy. Only `write_repository` is needed. The proxy requires
+  `merge_request.label=openma` on any push that creates a merge request.
+- `mr_mode = 'api'` adds the `api` scope and a host-side connection tool on
+  the MCP proxy for opening merge requests and commenting (`comment_mr`). The
+  token still stays in the control plane.
+
+### Attribution
+
+| Artifact | Author | Marker |
+| --- | --- | --- |
+| Commits | creator's GitLab name and `commit_email`, written into the sandbox git config by the host | `Assisted-by: OpenMA <Session URL>` from a `prepare-commit-msg` hook; `Co-authored-by` for participants who hold their own link on the same instance |
+| Push | creator | proxy audit fact |
+| Merge request | creator | label `openma` and a description footer with the Session link |
+| Comments (`api` mode) | creator | footer with the Session link |
+
+Each write emits an audit fact containing principal kind `user`, link ID,
+provider ID, project ID, operation, refs or MR IID, Session, Work, and fence
+generation.
+
+### Multi-user Sessions
+
+Writes run as the creator. In v1, follow-up instructions from other users are
+always denied for Sessions with a GitLab resource, whatever the ADR 0009
+`sessions.followups_from_others` setting is. Otherwise one user could steer
+writes that appear under another person's account.
+
+### Network reach
+
+The control plane must reach each registered instance for token exchange,
+refresh, and git proxying. A private instance needs OMA deployed inside that
+network or behind a relay that terminates there. `ca_bundle` supports private
+CAs.
+
+## Compatibility
+
+- Claude Managed Agents resources and `authorization_token` behave as before.
+- `oma_gitlab_repository` is rejected by deployments without a registered
+  provider.
+- The `glab` capability spec is unchanged.
+
+## Verification gates
+
+Run against a self-managed instance in an opt-in lane:
+
+1. With an OAuth method enabled, registration rejects an origin without PKCE
+   `S256`, or one whose issuer does not match.
+2. Linking stores sealed tokens. No user token appears in Session events,
+   logs, sandbox environment, process listings, or API responses.
+3. The picker lists only Developer-or-higher projects. A non-member project is
+   rejected at Session creation.
+4. Clone, fetch, and push through the proxy succeed. A direct GitLab URL from
+   the sandbox carries no credential. A proxy path for another resource
+   returns 403.
+5. Tag pushes, ref deletions, and unknown push options are denied. A protected
+   branch rejection from GitLab reaches git intact.
+6. A push-option merge request has label `openma`. Commits carry the creator
+   as author and the `Assisted-by` trailer.
+7. A stale fence generation and a capability replayed from another Session
+   are rejected.
+8. Unlink revokes the grant. Parallel refreshes produce one committed
+   rotation.
+9. Unattended Sessions, and follow-ups from other users, are rejected for
+   GitLab resources.
+10. GraphQL, REST, LFS, and redirects through the proxy are denied.
+11. A personal access token with an extra scope, no expiry, or an expiry
+    beyond `max_pat_lifetime_days` is rejected. An accepted token works
+    through the same proxy path as an OAuth link.
+12. Each `link_methods` value shows only its allowed methods. Tightening the
+    policy marks and revokes links of the removed method. A failed OAuth
+    refresh never turns into a token prompt on its own.
+13. With `sso_extern_uid`, linking an account whose SSO identity differs from
+    the OMA user fails with `gitlab_identity_mismatch`.
+
+## Consequences
+
+Positive:
+
+- GitLab gets ADR 0009's per-project, per-operation, fenced, revocable,
+  audited control without a bot account.
+- Enforcement does not depend on the sandbox provider's network features.
+- `pat_only` works without an administrator or an OAuth application, so a
+  workspace can start immediately and move to OAuth later.
+
+Negative:
+
+- All git traffic passes through the control plane. Large repositories cost
+  bandwidth and need limits.
+- User tokens are account-wide. Host key compromise exposes more than the
+  GitHub equivalent would.
+- The content marker is weaker than GitHub's "with App". It relies on the
+  OpenMatter IDENTITY_MODEL exception.
+- There is no unattended GitLab work, and no in-sandbox `glab`.
+- Private instances constrain where OMA can be deployed.
+- OMA depends on `@openmatter/connections` and
+  `@openmatter/connection-gitlab`, pinned by OpenMatter git tag or commit SHA
+  like the GitHub packages in ADR 0009.
+- Personal access tokens are long-lived and are not rotated by OMA. A stolen
+  one stays valid until it expires or is revoked. The lifetime cap and
+  unlink-time revocation limit the exposure.
+
+## Delivery plan
+
+Each step is one small PR with the evidence report required by
+`CONTRIBUTING.md`:
+
+1. `docs(adr): add 0010 self-managed gitlab connections`. This lands with the
+   OpenMatter IDENTITY_MODEL amendment.
+2. `feat(main-node): add connection_providers table, provider_id and method on
+   links`.
+   Includes migrations for PostgreSQL, MySQL, and SQLite, and the conformance
+   suite.
+3. `feat(connections): register GitLab instances and link method policy`.
+   Adds the API and console screens.
+4. `feat(connections): add GitLab personal access token linking with scope and
+   expiry checks`.
+5. `feat(connections): add GitLab OAuth PKCE link, refresh, and unlink`.
+6. `feat(sessions): add oma_gitlab_repository resource and project picker`.
+7. `feat(main-node): add fenced git smart HTTP proxy with project and ref
+   policy`.
+8. `feat(sandbox): configure insteadOf, the capability helper, and the commit
+   hook`.
+9. `feat(connections): add push-option merge requests and opt-in api mode`.
+10. `test(connections): add self-managed GitLab live lane`.
+
+## Open questions
+
+- Resource shape: an OMA-native type, or a `provider` field on a generic
+  repository resource.
+- Whether to restrict pushed branches to a prefix such as `openma/` by default.
+- LFS support.
+- Relay design for hosted OMA reaching private instances.
+- Whether `max_pat_lifetime_days` should default lower than 90.
+
+## Unverified on the test instance
+
+These need a registered OAuth application, a dedicated test token, or write
+access, which the read-only check did not use:
+
+- access-token lifetime and refresh-token rotation, both documented by
+  GitLab;
+- prefilled `name` and `scopes` on the token page;
+- `DELETE /personal_access_tokens/self` with only the allowed scopes;
+- exact redirect URI matching, including loopback for desktop hosts;
+- `merge_request.*` push options and automatic label creation on 17.1.8.
