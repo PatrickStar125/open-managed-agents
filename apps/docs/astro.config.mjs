@@ -13,7 +13,7 @@ const FONT_HREF =
   'https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap';
 
 export default defineConfig({
-  site: 'https://docs.openma.dev',
+  site: 'https://docs.openma.ai',
   markdown: {
     remarkPlugins: [remarkZhDocLinks],
   },
@@ -34,6 +34,11 @@ export default defineConfig({
       },
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
+      components: {
+        // Adds a default og:image and page-aware JSON-LD on top of
+        // Starlight's canonical/OG/hreflang output.
+        Head: './src/components/Head.astro',
+      },
       head: [
         {
           tag: 'link',
@@ -151,7 +156,7 @@ export default defineConfig({
           // internal docs links.
           label: '↗ Console',
           translations: { 'zh-CN': '↗ 控制台' },
-          link: 'https://app.openma.dev',
+          link: 'https://app.openma.ai',
           attrs: { target: '_blank', rel: 'noopener' },
         },
       ],

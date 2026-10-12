@@ -5,7 +5,7 @@ description: 自托管 openma 的两条路径：跑在 Cloudflare Workers 上，
 
 import { Card, CardGrid, Aside, LinkCard } from '@astrojs/starlight/components';
 
-你可以自己运行 openma 的全部组件：API、Console、集成网关，以及 Agent 运行时。驱动 [openma.dev](https://app.openma.dev) 的代码就是公开仓库里的代码；没有另行保留的部分。
+你可以自己运行 openma 的全部组件：API、Console、集成网关，以及 Agent 运行时。驱动 [openma.ai](https://app.openma.ai) 的代码就是公开仓库里的代码；没有另行保留的部分。
 
 ## 两条路径
 
@@ -63,7 +63,7 @@ Cloudflare 部署是 **四个 Worker**，外加一组绑定：
     Durable Object 和 Containers 需要它。免费套餐无法使用。
   </Card>
   <Card title="一个域名" icon="seti:html">
-    你会把路由指向它。我们的部署用 `openma.dev`；你用自己拥有的域名。
+    你会把路由指向它。我们的部署用 `openma.ai`；你用自己拥有的域名。
   </Card>
   <Card title="一个 LLM 提供商" icon="puzzle">
     Anthropic、OpenAI、MiniMax，或任何 OpenAI 兼容端点。费用直接付给他们。

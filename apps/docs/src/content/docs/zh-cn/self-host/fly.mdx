@@ -85,7 +85,7 @@ OpenMA 在 `apps/main-fly` 提供 Fly 专用的部署适配器、一份已签入
 
 ## 安全边界
 
-安装页面永远不会收到凭据。本地安装命令把所选沙箱 provider 的凭据直接发送到 Fly secrets，并且不会打印它；`openma.dev` 看不到这个值。Console 健康之后，再添加租户范围的 Model Card，或者用 `fly secrets` 直接设置模型提供商密钥。Node 的工作范围 HTTP MCP 网关仍然可用。直接的任意 HTTPS 凭据注入仍然需要一个可到达的 `oma-vault` 部署及其 CA；Fly 不会自动加上那层网络拦截。
+安装页面永远不会收到凭据。本地安装命令把所选沙箱 provider 的凭据直接发送到 Fly secrets，并且不会打印它；`openma.ai` 看不到这个值。Console 健康之后，再添加租户范围的 Model Card，或者用 `fly secrets` 直接设置模型提供商密钥。Node 的工作范围 HTTP MCP 网关仍然可用。直接的任意 HTTPS 凭据注入仍然需要一个可到达的 `oma-vault` 部署及其 CA；Fly 不会自动加上那层网络拦截。
 
 ## 重新部署
 
