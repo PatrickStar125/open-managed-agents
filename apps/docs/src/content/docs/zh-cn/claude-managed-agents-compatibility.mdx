@@ -47,8 +47,8 @@ Anthropic SDK 会自动发送所需的 `anthropic-beta` 头。手动调用时，
 | Dream | **已实现**——`anthropic-beta: dreaming-2026-04-21` | `routes/dreams.ts` → `/v1/dreams` |
 | MCP tunnel | **已实现**——tunnel CRUD、证书、`reveal_token`、`rotate_token` | `routes/tunnels.ts`、`tunnel-certificates.ts` → `/v1/tunnels`（`anthropic-beta: mcp-tunnels-2026-06-22`） |
 | User profile | **已实现**——`anthropic-beta: user-profiles-2026-08-18` | `routes/user-profiles.ts` → `/v1/user_profiles` |
-| MCP server | **已实现**——作为 Agent 配置上的 `mcp_servers` 字段（URL/HTTP/SSE/stdio）；SDK 能力面中没有独立的 MCP-server 资源 | `contracts/agent-input-components.ts` |
-| Callable agent | **已实现**——Agent 配置上的 `callable_agents` 会派生出 `call_agent_*` 工具 | `contracts/agents.ts`；OMA 集成（GitHub/Slack/Linear/飞书）是 `/v1/oma/integrations/*` 下的扩展 |
+| MCP server | **已实现**——作为 Agent 配置上的 `mcp_servers` 字段（URL/HTTP/SSE/stdio）；SDK 能力面中没有独立的 MCP-server 资源 | `routes/agents.ts`、`contracts/agent-input-components.ts` |
+| Callable agent | **已实现**——Agent 配置上的 `callable_agents` 会派生出 `call_agent_*` 工具 | `routes/agents.ts`、`contracts/agents.ts`；OMA 集成（GitHub/Slack/Linear/飞书）是 `/v1/oma/integrations/*` 下的扩展 |
 | `/openai/v1` 适配器 | **已实现**——在同一套原生 Session 之上的 OpenAI Agents API 投影 | `packages/openai-agents-api`、`openai-agents-compat`；在 `apps/main/src/index.ts` 挂载于 `/openai` |
 
 ### 可发送的 Session 事件
@@ -90,9 +90,10 @@ Anthropic SDK 会自动发送所需的 `anthropic-beta` 头。手动调用时，
 - **事件日志是事实来源。** Work 与 webhook 负载只携带 Session ID——
   Worker 随后用其 `sessions_token` 取回被认领的 Session 并回放只追加
   日志。
-- **凭据永不进入沙箱。** 透明的 HTTPS 拦截只存在于声明了它的驱动上
-  （见下文）；在其他地方，该边界保证凭据不进入 Session，但不声明
-  网络层强制。
+- **凭据按设计不进入沙箱。** 强制的透明 HTTPS 拦截只存在于
+  `cloudflare` managed-runtime 驱动上（见下文）；在其他地方，该边界
+  保证凭据不进入 Session，但不声明网络层强制——Node/Docker 上的
+  `oma-vault` env 代理是建议性的，其余驱动报告 `unsupported`。
 - **外部 Worker 是一等通道。** `external_worker` 模式暴露不变的 Work
   API 且不启动任何 OpenMA 沙箱。仓库附带一个破坏性符合性探针
   （`pnpm test:e2e:external-worker-conformance`，
@@ -138,14 +139,16 @@ harness 监督器）：
 - **`fork`——规划中。** 不存在 session/沙箱 fork 能力面；
   [执行后端接入契约](/self-host/sandbox-backend/)将 box fork 列为
   缺口。
-- **通用 egress 允许列表代理——规划中。**
+- **通用 egress 允许列表代理——规划中**（跟踪于
+  [#297](https://github.com/openma-ai/open-managed-agents/issues/297)）。
   `Environment.config.networking` 的 `type: "limited"` 与
-  `allowed_hosts` **只在 `web_fetch` 工具的 host 检查中生效**
-  （`apps/agent/src/harness/tools.ts`，后缀匹配
-  `host === allowed || host.endsWith('.' + allowed)`，且只检查初始
-  URL）。`bash`/`curl`、`web_search`、MCP 调用，以及 `web_fetch`
-  自己在沙箱内的 `curl` 回退路径都不受它限制——存下来的允许列表
-  并不是包过滤器。
+  `allowed_hosts` **只在 `web_fetch` 工具内部强制**
+  （`apps/agent/src/harness/web-fetch-http.ts` 的
+  `assertWebFetchUrlAllowed`，后缀匹配
+  `host === allowed || host.endsWith('.' + allowed)`，并由
+  `fetchWebFetchUrl` 在每一跳重定向上重新检查）。`bash`/`curl`、
+  `web_search` 与 MCP 调用不受它限制——存下来的允许列表并不是
+  包过滤器。
 - **凭据 egress 只在一个驱动上是强制的。** 只有
   `managed-runtime-cloudflare` 声明
   `{ enforcement: "enforced", credentialMode: "live", interceptedProtocols: ["http", "https"] }`。

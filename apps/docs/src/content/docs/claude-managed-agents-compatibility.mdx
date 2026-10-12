@@ -48,8 +48,8 @@ calling endpoints by hand, send the flag listed in the matrix (for example
 | Dreams | **Implemented** — `anthropic-beta: dreaming-2026-04-21` | `routes/dreams.ts` → `/v1/dreams` |
 | MCP tunnels | **Implemented** — tunnel CRUD, certificates, `reveal_token`, `rotate_token` | `routes/tunnels.ts`, `tunnel-certificates.ts` → `/v1/tunnels` (`anthropic-beta: mcp-tunnels-2026-06-22`) |
 | User profiles | **Implemented** — `anthropic-beta: user-profiles-2026-08-18` | `routes/user-profiles.ts` → `/v1/user_profiles` |
-| MCP servers | **Implemented** — as the `mcp_servers` field on Agent config (URL/HTTP/SSE/stdio); there is no standalone MCP-server resource in the SDK surface | `contracts/agent-input-components.ts` |
-| Callable agents | **Implemented** — `callable_agents` on Agent config derives `call_agent_*` tools | `contracts/agents.ts`; OMA integrations (GitHub/Slack/Linear/Feishu) are an extension under `/v1/oma/integrations/*` |
+| MCP servers | **Implemented** — as the `mcp_servers` field on Agent config (URL/HTTP/SSE/stdio); there is no standalone MCP-server resource in the SDK surface | `routes/agents.ts`, `contracts/agent-input-components.ts` |
+| Callable agents | **Implemented** — `callable_agents` on Agent config derives `call_agent_*` tools | `routes/agents.ts`, `contracts/agents.ts`; OMA integrations (GitHub/Slack/Linear/Feishu) are an extension under `/v1/oma/integrations/*` |
 | `/openai/v1` adapter | **Implemented** — OpenAI Agents API projection over the same native sessions | `packages/openai-agents-api`, `openai-agents-compat`; mounted at `/openai` in `apps/main/src/index.ts` |
 
 ### Sendable session events
@@ -91,10 +91,12 @@ The sandbox/worker boundary follows the invariants in
 - **The event log is the source of truth.** Work and webhook payloads carry
   only the Session ID — the worker then fetches the claimed Session with its
   `sessions_token` and replays the append-only log.
-- **Credentials never enter the sandbox.** Enforced transparent HTTPS
-  interception exists only where a driver declares it (see below); elsewhere
-  the boundary keeps secrets out of the session but does not claim network
-  enforcement.
+- **Credentials are designed to stay out of the sandbox.** Enforced
+  transparent HTTPS interception exists only on the `cloudflare`
+  managed-runtime driver (see below); everywhere else the boundary keeps
+  secrets out of the session but does not claim network enforcement — the
+  `oma-vault` env proxy on Node/Docker is advisory, and other drivers report
+  `unsupported`.
 - **External workers are a first-class lane.** `external_worker` mode exposes
   the unchanged Work API and starts no OpenMA sandbox. The repo ships a
   destructive conformance probe (`pnpm test:e2e:external-worker-conformance`,
@@ -139,12 +141,14 @@ it is the machine-readable source of truth, and the
 - **`fork` — planned.** There is no session/sandbox fork surface; the
   [execution backend contract](/self-host/sandbox-backend/) lists box fork as
   a gap.
-- **General egress allowlist proxy — planned.** `Environment.config.networking`
-  `type: "limited"` with `allowed_hosts` is checked **only in the `web_fetch`
-  tool's host guard** (`apps/agent/src/harness/tools.ts`, suffix match
-  `host === allowed || host.endsWith('.' + allowed)`, on the initial URL).
-  `bash`/`curl`, `web_search`, MCP calls, and `web_fetch`'s own in-sandbox
-  `curl` fallback are not restricted by it — the stored allowlist is not a
+- **General egress allowlist proxy — planned** (tracked in
+  [#297](https://github.com/openma-ai/open-managed-agents/issues/297)).
+  `Environment.config.networking` `type: "limited"` with `allowed_hosts` is
+  enforced **only inside the `web_fetch` tool**
+  (`apps/agent/src/harness/web-fetch-http.ts` `assertWebFetchUrlAllowed`,
+  suffix match `host === allowed || host.endsWith('.' + allowed)`, re-checked
+  on every redirect hop by `fetchWebFetchUrl`). `bash`/`curl`, `web_search`,
+  and MCP calls are not restricted by it — the stored allowlist is not a
   packet filter.
 - **Credential egress is enforced on one driver.** Only
   `managed-runtime-cloudflare` declares
