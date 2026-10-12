@@ -197,7 +197,7 @@ changed (ADR 0007, "Preserve the official protocol exactly").
 {
   "type": "oma_gitlab_repository",
   "provider_id": "cp_...",
-  "project_id": 5487,
+  "project_id": 42,
   "checkout": { "type": "branch", "name": "main" },
   "operations": ["fetch", "push", "open_mr"]
 }
@@ -251,7 +251,9 @@ Per request the proxy:
    also allows `info/refs?service=git-receive-pack` and `git-receive-pack`
    when `push` is granted. LFS, archive, and every other route are denied;
 4. parses the receive-pack command list without buffering the pack. It denies
-   tag pushes and ref deletions. It denies push options other than the
+   tag pushes, ref deletions, and pushes to the project's default branch.
+   GitLab's own protection is not enough here: on the test instance, `main`
+   allows Maintainers to push, so a Maintainer's token could update it. It denies push options other than the
    `merge_request.*` options needed by `open_mr`. GitLab still enforces
    protected branches against the user's permission;
 5. never follows upstream redirects. A rename resolves through a project ID
@@ -394,19 +396,41 @@ Each step is one small PR with the evidence report required by
 
 - Resource shape: an OMA-native type, or a `provider` field on a generic
   repository resource.
-- Whether to restrict pushed branches to a prefix such as `openma/` by default.
+- Whether to restrict pushed branches further, to a prefix such as `openma/`.
 - LFS support.
 - Relay design for hosted OMA reaching private instances.
 - Whether `max_pat_lifetime_days` should default lower than 90.
 
+## Prototype results
+
+A test-only proxy prototype, kept outside this repository, ran the flow against the self-managed 17.1.8 instance
+on 2026-10-12. It used one test branch and one merge request, both cleaned
+up afterwards. All 21 checks passed:
+
+- the sandbox environment held no GitLab token, and a direct GitLab request
+  from it failed authentication;
+- clone with the original URL went through `insteadOf` to the proxy, using
+  protocol v2 fetch. The stored remote URL stayed the GitLab URL;
+- a wrong capability returned 401. An unknown resource, another Session's
+  path, push on a fetch-only resource, `/api/v4/*`, `/api/graphql`, LFS, and
+  a `..` traversal each returned 403;
+- the proxy denied pushes to the default branch, tag pushes, branch
+  deletions, `ci.skip`, and `merge_request.create` without
+  `merge_request.label=openma`. None of these reached GitLab;
+- a push with `merge_request.create`, `target`, `title`, `description`, and
+  `label=openma` created a merge request authored by the user. GitLab
+  created the missing project label `openma` automatically;
+- commits carried the user's name and `commit_email` and the `Assisted-by`
+  trailer;
+- after the capability rotated, the next fetch was rejected;
+- no token appeared in proxy logs or the work directory.
+
 ## Unverified on the test instance
 
-These need a registered OAuth application, a dedicated test token, or write
-access, which the read-only check did not use:
+These need a registered OAuth application or a dedicated narrow test token:
 
 - access-token lifetime and refresh-token rotation, both documented by
   GitLab;
-- prefilled `name` and `scopes` on the token page;
-- `DELETE /personal_access_tokens/self` with only the allowed scopes;
 - exact redirect URI matching, including loopback for desktop hosts;
-- `merge_request.*` push options and automatic label creation on 17.1.8.
+- prefilled `name` and `scopes` on the token page;
+- `DELETE /personal_access_tokens/self` with only the allowed scopes.
