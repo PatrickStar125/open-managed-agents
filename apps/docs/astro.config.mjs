@@ -122,6 +122,22 @@ export default defineConfig({
             { label: 'Managed Runtime Host', translations: { 'zh-CN': '托管运行时宿主' }, slug: 'self-host/managed-runtime-host' },
             { label: 'Sandbox & persistence', translations: { 'zh-CN': '沙箱与持久化' }, slug: 'self-host/sandbox-persistence' },
             {
+              label: 'Sandbox providers',
+              translations: { 'zh-CN': '沙箱提供商' },
+              collapsed: true,
+              items: [
+                { label: 'E2B', slug: 'self-host/sandbox/e2b' },
+                { label: 'Daytona', slug: 'self-host/sandbox/daytona' },
+                { label: 'Modal', slug: 'self-host/sandbox/modal' },
+                { label: 'Sprites', slug: 'self-host/sandbox/sprites' },
+                { label: 'Vercel', slug: 'self-host/sandbox/vercel' },
+                { label: 'Blaxel', slug: 'self-host/sandbox/blaxel' },
+                { label: 'Cloudflare', slug: 'self-host/sandbox/cloudflare' },
+                { label: 'Docker', slug: 'self-host/sandbox/docker' },
+                { label: 'GKE', slug: 'self-host/sandbox/gke' },
+              ],
+            },
+            {
               label: 'Execution backend contract',
               translations: { 'zh-CN': '执行后端接入契约' },
               slug: 'self-host/sandbox-backend',
