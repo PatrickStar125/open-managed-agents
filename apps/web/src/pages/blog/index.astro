@@ -1,11 +1,13 @@
 ---
 import Base from "../../layouts/Base.astro";
 import { getCollection } from "astro:content";
+import { ZH_PREFIX, t } from "../../lib/i18n";
 
 // English index — zh-CN posts (id prefix "zh-cn/") get their own index
 // at /blog/zh-cn/ and are excluded here.
+const ui = t("en");
 const posts = (await getCollection("blog", ({ data }) => !data.draft))
-  .filter((post) => !post.id.startsWith("zh-cn/"))
+  .filter((post) => !post.id.startsWith(ZH_PREFIX))
   .sort((a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf());
 
 function formatDate(d: Date) {
@@ -14,19 +16,24 @@ function formatDate(d: Date) {
 ---
 
 <Base
-  title="Blog"
-  description="openma blog — posts about agents, infrastructure, and the people building them."
+  title={ui.indexTitle}
+  description={ui.indexDescription}
   canonical="/blog/"
+  lang="en"
+  alternates={[
+    { hreflang: "en", href: "/blog/" },
+    { hreflang: "zh-CN", href: "/blog/zh-cn/" },
+    { hreflang: "x-default", href: "/blog/" },
+  ]}
 >
   <div class="max-w-3xl mx-auto px-4 py-12">
-    <h1 class="font-display text-4xl font-bold mb-2">Blog</h1>
+    <h1 class="font-display text-4xl font-bold mb-2">{ui.indexTitle}</h1>
     <p class="text-[var(--color-fg-muted)] mb-12">
-      Notes from building openma. Agent design, integrations, billing, the
-      occasional postmortem.
+      {ui.indexTagline}
     </p>
 
     {posts.length === 0 && (
-      <p class="text-[var(--color-fg-muted)]">No posts yet — first one's coming soon.</p>
+      <p class="text-[var(--color-fg-muted)]">{ui.indexEmpty}</p>
     )}
 
     <ul class="space-y-8">
@@ -37,9 +44,9 @@ function formatDate(d: Date) {
               {formatDate(post.data.publishedAt)}
               {post.data.tags.length > 0 && (
                 <span class="ml-2">
-                  {post.data.tags.map((t) => (
+                  {post.data.tags.map((tag) => (
                     <span class="ml-1 inline-block px-1.5 py-0.5 rounded bg-[var(--color-bg-surface)] text-[var(--color-fg-muted)] normal-case">
-                      {t}
+                      {tag}
                     </span>
                   ))}
                 </span>
@@ -53,5 +60,9 @@ function formatDate(d: Date) {
         </li>
       ))}
     </ul>
+
+    <p class="mt-12 text-sm text-[var(--color-fg-muted)]">
+      <a href={ui.indexSwitchHref} hreflang="zh-CN" class="hover:underline">{ui.indexSwitchLabel}</a>
+    </p>
   </div>
 </Base>

@@ -1,12 +1,13 @@
 ---
 import Base from "../../../layouts/Base.astro";
 import { getCollection } from "astro:content";
+import { ZH_PREFIX, t } from "../../../lib/i18n";
 
 // zh-CN index — mirrors ../index.astro but lists only posts under
-// src/content/blog/zh-cn/ (id prefix "zh-cn/"). UI strings are
-// translated inline; no i18n framework for a handful of labels.
+// src/content/blog/zh-cn/ (id prefix "zh-cn/").
+const ui = t("zh-CN");
 const posts = (await getCollection("blog", ({ data }) => !data.draft))
-  .filter((post) => post.id.startsWith("zh-cn/"))
+  .filter((post) => post.id.startsWith(ZH_PREFIX))
   .sort((a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf());
 
 function formatDate(d: Date) {
@@ -15,8 +16,8 @@ function formatDate(d: Date) {
 ---
 
 <Base
-  title="博客"
-  description="openma 博客 —— 关于智能体、基础设施以及构建它们的人。"
+  title={ui.indexTitle}
+  description={ui.indexDescription}
   canonical="/blog/zh-cn/"
   lang="zh-CN"
   alternates={[
@@ -26,13 +27,13 @@ function formatDate(d: Date) {
   ]}
 >
   <div class="max-w-3xl mx-auto px-4 py-12">
-    <h1 class="font-display text-4xl font-bold mb-2">博客</h1>
+    <h1 class="font-display text-4xl font-bold mb-2">{ui.indexTitle}</h1>
     <p class="text-[var(--color-fg-muted)] mb-12">
-      构建 openma 过程中的笔记。智能体设计、集成、计费，以及偶尔的事故复盘。
+      {ui.indexTagline}
     </p>
 
     {posts.length === 0 && (
-      <p class="text-[var(--color-fg-muted)]">还没有文章 —— 第一篇即将发布。</p>
+      <p class="text-[var(--color-fg-muted)]">{ui.indexEmpty}</p>
     )}
 
     <ul class="space-y-8">
@@ -43,9 +44,9 @@ function formatDate(d: Date) {
               {formatDate(post.data.publishedAt)}
               {post.data.tags.length > 0 && (
                 <span class="ml-2">
-                  {post.data.tags.map((t) => (
+                  {post.data.tags.map((tag) => (
                     <span class="ml-1 inline-block px-1.5 py-0.5 rounded bg-[var(--color-bg-surface)] text-[var(--color-fg-muted)] normal-case">
-                      {t}
+                      {tag}
                     </span>
                   ))}
                 </span>
@@ -61,7 +62,7 @@ function formatDate(d: Date) {
     </ul>
 
     <p class="mt-12 text-sm text-[var(--color-fg-muted)]">
-      <a href="/blog/" hreflang="en" class="hover:underline">English blog →</a>
+      <a href={ui.indexSwitchHref} hreflang="en" class="hover:underline">{ui.indexSwitchLabel}</a>
     </p>
   </div>
 </Base>

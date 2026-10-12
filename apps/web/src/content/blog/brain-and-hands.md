@@ -119,11 +119,13 @@ enter the sandbox" is only as strong as the enforcement behind it:
   that ignores proxy env vars walks around it.
 
 The environment `allowed_hosts` networking limit has an even narrower
-scope: it's a check inside the `web_fetch` tool
-(`apps/agent/src/harness/tools.ts`, suffix-matched per requested host),
-not a sandbox firewall. `bash`/`curl` inside the sandbox isn't governed
-by it. A general egress allowlist proxy is on the roadmap — filed as
-planned work, not a claim.
+scope: it's a check inside the `web_fetch` tool —
+[`assertWebFetchUrlAllowed`](https://github.com/openma-ai/open-managed-agents/blob/main/apps/agent/src/harness/web-fetch-http.ts)
+suffix-matches the requested host and re-checks it on every redirect
+hop — not a sandbox firewall. `bash`/`curl` inside the sandbox isn't
+governed by it. A general egress allowlist proxy is on the roadmap
+([issue #297](https://github.com/openma-ai/open-managed-agents/issues/297)),
+not a claim.
 
 None of that weakens the architecture. It strengthens the honest
 version of it: the *interface* puts credentials on the brain's side of
