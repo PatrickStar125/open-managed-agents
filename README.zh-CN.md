@@ -30,7 +30,7 @@ OpenMA 提供持久会话、沙箱工具、记忆、加密凭证和崩溃恢复�
 |---|---|---|
 | 跑在哪里 | 你的 VPS / Mac / Docker 主机 / fly.io / k8s | Cloudflare Workers + DO + Containers |
 | 存储 | SQLite 或 Postgres + 本地文件系统 | D1 + KV + R2 |
-| 沙箱 | Docker，或托管运行时：E2B / Daytona / Modal / Sprites / Vercel / Blaxel / BoxLite / Superserve | Cloudflare Sandbox（Containers），或经 bridge 驱动接入任意托管运行时 |
+| 沙箱 | Docker，或托管运行时：E2B / Daytona / Modal / Sprites / Vercel / Blaxel / BoxLite / Superserve | Cloudflare Sandbox（Containers），或经 `cloudflare-bridge` 驱动接入托管运行时（`ama_worker` lane） |
 | 启动时间 | `docker compose up`（约 2 分钟） | wrangler deploy（首次配置后约 10 分钟） |
 | 适合谁 | 开源用户、私有部署、不想用 CF、需要数据驻留 | 边缘规模、不想运维主机、已在 CF 上 |
 
@@ -154,7 +154,7 @@ npx wrangler secret put API_KEY               # REST API 初始引导密钥
 # npx wrangler secret put ANTHROPIC_API_KEY
 
 npm run deploy
-# → https://openma.ai（或个人部署：https://managed-agents.<your-subdomain>.workers.dev）
+# → https://app.openma.ai（或个人部署：https://managed-agents.<your-subdomain>.workers.dev）
 ```
 
 部署内容：
