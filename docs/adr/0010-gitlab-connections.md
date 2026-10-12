@@ -5,7 +5,7 @@
 **Related**: [`0006-session-execution-authority.md`](0006-session-execution-authority.md),
 [`0007-sandbox-credential-egress.md`](0007-sandbox-credential-egress.md),
 [`0009-github-connections.md`](0009-github-connections.md),
-OpenMatter [`docs/CONNECTIONS.md`](https://github.com/openma-ai/OpenMatter/blob/main/docs/CONNECTIONS.md)
+OpenMatter [`docs/BONDS.md`](https://github.com/openma-ai/OpenMatter/blob/main/docs/BONDS.md)
 and [`docs/IDENTITY_MODEL.md`](https://github.com/openma-ai/OpenMatter/blob/main/docs/IDENTITY_MODEL.md)
 
 ---
@@ -461,8 +461,8 @@ Negative:
   defaults, and OMA does not rotate them yet. An administrator replaces
   them by hand.
 - Private instances constrain where OMA can be deployed.
-- OMA depends on `@openmatter/connections` and
-  `@openmatter/connection-gitlab`, pinned by OpenMatter git tag or commit SHA
+- OMA depends on `@openmatter/bond` and
+  `@openmatter/bond-gitlab`, pinned by OpenMatter git tag or commit SHA
   like the GitHub packages in ADR 0009.
 - Personal access tokens are long-lived and are not rotated by OMA. A stolen
   one stays valid until it expires or is revoked. The lifetime cap and

@@ -8,7 +8,7 @@
 [`../secrets-design.md`](../secrets-design.md),
 [`../mcp-credential-architecture.md`](../mcp-credential-architecture.md),
 [`../github-pr-flow.md`](../github-pr-flow.md),
-OpenMatter [`docs/CONNECTIONS.md`](https://github.com/openma-ai/OpenMatter/blob/main/docs/CONNECTIONS.md)
+OpenMatter [`docs/BONDS.md`](https://github.com/openma-ai/OpenMatter/blob/main/docs/BONDS.md)
 
 ## Context
 
@@ -56,8 +56,9 @@ rather than an App bot, signed (Verified), and `Co-authored-by` the user. The 11
 user-opened Devin pull requests carry no App marker.
 
 The provider-neutral kernel, ports, principal policy, and conformance suite are
-specified in OpenMatter `docs/CONNECTIONS.md`. This ADR decides how the OMA
-control plane adopts them.
+specified in OpenMatter `docs/BONDS.md` (the Bond module). This ADR decides
+how the OMA control plane adopts them. OMA keeps "Connections" as its console
+term and the `connection_` table prefix; they hold OpenMatter Bond records.
 
 ## Decision
 
@@ -257,7 +258,7 @@ it is true, a pull request or comment may run as another user who sent input
 to the Session and holds a valid link. The creator remains the default. The
 chosen participant is recorded in the audit fact.
 
-Every resolution writes the audit fact defined in OpenMatter `CONNECTIONS.md`.
+Every resolution writes the audit fact defined in OpenMatter `BONDS.md`.
 
 ### Multi-user rules
 
@@ -332,7 +333,7 @@ deployment:
 
 - Users link once. Picking a repository replaces pasting a token, and access
   can never exceed what the user already has.
-- OMA depends on `@openmatter/connections` and `@openmatter/connection-github`.
+- OMA depends on `@openmatter/bond` and `@openmatter/bond-github`.
   These packages pull in Effect and Octokit, but not the OpenMatter runtime.
   They are pinned by OpenMatter git tag or commit SHA
   (`github:openma-ai/OpenMatter#<tag-or-sha>&path:/packages/...`), as OMA
