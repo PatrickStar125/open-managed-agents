@@ -55,9 +55,9 @@ sandbox.
 |---|---|---|
 | `modal` | Modal sandboxes | Mounts a pre-created Volume v2 session subpath at `/workspace`, syncs before detach, recreates compute over the durable volume. |
 | `sprites` | Fly Sprites | Provider-persistent ext4 filesystem, automatic pause/wake, native network policy. |
-| `vercel` | Vercel Sandbox | Persistent named sandbox with automatic snapshot restore and deny-by-default firewall. `ama_worker` lane only. |
-| `blaxel` | Blaxel | Stable Session identity, archive/unarchive retained filesystem, native proxy firewall — workspace durability is best-effort. |
-| `superserve` | Superserve | Retained pause/resume that preserves processes and files, token-rotating reconnect, provider-side secret proxy. |
+| `vercel` | Vercel Sandbox | Persistent named sandbox with automatic snapshot restore. Its deny-by-default firewall is a provider feature, not OpenMA credential egress. `ama_worker` lane only. |
+| `blaxel` | Blaxel | Stable Session identity, archive/unarchive retained filesystem. Its native proxy firewall and secret injection are provider features, not OpenMA credential egress — workspace durability is best-effort. |
+| `superserve` | Superserve | Retained pause/resume that preserves processes and files, token-rotating reconnect. Its provider-side secret proxy is a provider feature, not OpenMA credential egress. |
 
 **Pick this when** you want zero-ops, pay-per-use compute with per-sandbox
 durable storage.
