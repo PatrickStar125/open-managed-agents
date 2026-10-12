@@ -425,12 +425,54 @@ up afterwards. All 21 checks passed:
 - after the capability rotated, the next fetch was rejected;
 - no token appeared in proxy logs or the work directory.
 
+### Sandbox and OAuth run
+
+A second run on 2026-10-12 used two sandboxes from the provider's test
+template with the OMA worker image. Sandbox P stood in for the control plane:
+it ran the proxy and held a 2-hour OAuth token. Sandbox A was the agent and
+held only the Session capability. A reached P through the provider's
+per-port HTTPS host. The test merge request and branch were cleaned up
+afterwards.
+
+- Network: from the test template, the instance resolved to a VPC address and
+  answered in about 0.2 s. gitlab.com was also reachable.
+- OAuth on the instance, using an application owned by one user:
+  - authorization code with PKCE `S256` worked;
+  - a wrong `code_verifier` was refused without consuming the code;
+  - `expires_in` was 7200, and `/oauth/token/info` showed exactly the
+    requested scopes;
+  - without `api`, a REST write was refused with 403, while `read_user` and
+    the project picker worked;
+  - a refresh returned a new pair, and the old access token then failed with
+    401;
+  - reusing the rotated-out refresh token was refused. It did **not** revoke
+    the current pair, so GitLab offers no reuse detection. The refresh lease
+    is the only guard against concurrent refresh;
+  - `/oauth/revoke` invalidated both the access token and the refresh token.
+- Redirect URI: a loopback `redirect_uri` with a different port was
+  **accepted** at token exchange, and the exchange consumed the code. This
+  matches the RFC 8252 loopback rule. Hosted OMA must therefore register an
+  HTTPS redirect URI, not a loopback one. Desktop hosts must bind the state
+  and PKCE verifier to their own listener.
+- Agent sandbox, 16 checks:
+  - no GitLab token in the environment, and a direct GitLab git request
+    returned 401;
+  - clone through the proxy worked;
+  - a wrong capability returned 401, while another Session, push on a
+    fetch-only resource, REST, GraphQL, and LFS returned 403;
+  - pushes to the default branch, tags, deletions, and merge requests
+    without `label=openma` were denied;
+  - a push-option merge request was created and authored by the user, and
+    commits carried the `Assisted-by` trailer;
+  - a rotated capability was rejected;
+  - no token appeared in the proxy log or agent output.
+
+  One filesystem scan reported a match. It was the test script matching its
+  own search pattern, and the cloned repository contains no token-like
+  strings.
+
 ## Unverified on the test instance
 
-These need a registered OAuth application or a dedicated narrow test token:
-
-- access-token lifetime and refresh-token rotation, both documented by
-  GitLab;
-- exact redirect URI matching, including loopback for desktop hosts;
 - prefilled `name` and `scopes` on the token page;
-- `DELETE /personal_access_tokens/self` with only the allowed scopes.
+- `DELETE /personal_access_tokens/self` with only the allowed scopes;
+- exact matching for a non-loopback HTTPS redirect URI.
