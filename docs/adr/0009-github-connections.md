@@ -91,6 +91,17 @@ The console has one **Connect GitHub** action. The server decides the path:
 | Linked | none | — |
 | Link `refresh_failed` or revoked | user authorization only | new UserLink |
 
+An installation belongs to exactly one workspace. When the callback
+carries an `installation_id`, the server claims it only after the user's own
+token lists it in `GET /user/installations`. An installation id in a
+callback, webhook, or log is never proof by itself. An installation created
+from GitHub without an OMA callback stays `pending` until such a user claims
+it. A claim against an installation owned by another workspace fails with
+`github_installation_owned_elsewhere` and changes nothing. Moving it requires
+the owning workspace's administrator to release it, or an uninstall and
+reinstall on GitHub. Webhooks for an installation go only to its owning
+workspace.
+
 The repository picker offers this action inline when the user is not linked.
 OAuth state is signed, single-use, short-lived, and bound to the OMA user and
 workspace. Callback and webhook routes mount on the existing integrations
@@ -113,21 +124,28 @@ MySQL, and SQLite:
 
 ```text
 connection_installations
-  id, workspace_id, provider, provider_installation_id, account_login,
-  account_type, repository_selection, status, installed_by_user_id,
-  created_at, updated_at, suspended_at, revoked_at
-  unique (provider, provider_installation_id, workspace_id)
+  id, workspace_id, provider_app_id, provider_installation_id, account_login,
+  account_type, repository_selection, status, claimed_by_user_id,
+  created_at, updated_at, suspended_at, released_at, revoked_at
+  unique (provider_app_id, provider_installation_id)
 
 connection_user_links
-  id, workspace_id, user_id, installation_id, provider_user_id, login,
-  access_token_cipher, refresh_token_cipher, cipher_key_id,
+  id, workspace_id, user_id, provider_app_id, provider_user_id, login,
+  method, access_token_cipher, refresh_token_cipher, cipher_key_id,
   access_expires_at, refresh_expires_at,
   refresh_lease_owner, refresh_lease_expires_at,
   refresh_failure_reason, status, created_at, updated_at,
   revoked_at, revoked_reason
-  unique active link per (workspace_id, user_id, installation_id)
+  unique active link per (workspace_id, user_id, provider_app_id)
 ```
 
+- `provider_app_id` identifies the App. For this ADR it is the deployment
+  GitHub App. ADR 0010 adds GitLab instances.
+- A link is per App, not per installation. A GitHub user-to-server token
+  reaches every installation of the App that the user can access. The
+  resolver picks the installation per Session resource. A workspace
+  installed on two GitHub organizations therefore holds one link per user,
+  and one refresh lease guards it.
 - Ciphertext uses `secrets.cipherFor("connections.github.user_tokens")`
   (`apps/main-node/src/secrets.ts:17`), which a deployment may back with KMS.
 - Installation tokens are not persisted. They are minted per use, scoped to
@@ -157,8 +175,9 @@ Agents compatibility. OMA adds one mutually exclusive extension:
 
 At creation the resolver:
 
-1. finds the active installation covering the repository owner;
-2. applies the workspace principal policy to the creator's link;
+1. finds the active installation that covers the repository owner and is
+   owned by this workspace;
+2. applies the workspace principal policy to the creator's link for the App;
 3. for a user principal, confirms the repository appears in the user's
    intersection list;
 4. stores a sealed reference `{installationId, userLinkId?, policy}` under a
@@ -233,6 +252,11 @@ Workspace setting `github.pr_principal`:
   `fallback: true`;
 - `user_only`: fails when the user is not linked.
 
+Workspace setting `github.pr_principal_participants` (default `false`): when
+it is true, a pull request or comment may run as another user who sent input
+to the Session and holds a valid link. The creator remains the default. The
+chosen participant is recorded in the audit fact.
+
 Every resolution writes the audit fact defined in OpenMatter `CONNECTIONS.md`.
 
 ### Multi-user rules
@@ -298,6 +322,11 @@ deployment:
    resolution returns `github_link_required`.
 7. No user or installation token appears in Session events, logs, the
    sandbox environment, or API responses.
+8. A second workspace cannot claim an installation another workspace owns.
+   A callback with an `installation_id` that the user's token does not list
+   is rejected. Release, then claim, moves ownership.
+9. One user link serves two installations of the App in the same
+   workspace. Concurrent refreshes still commit one rotation.
 
 ## Consequences
 

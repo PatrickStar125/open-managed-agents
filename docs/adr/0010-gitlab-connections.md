@@ -1,4 +1,4 @@
-# ADR 0010: Self-managed GitLab connections without a bot identity
+# ADR 0010: Self-managed GitLab connections, user principal by default
 
 **Status**: Proposed (2026-10-12)
 
@@ -20,8 +20,9 @@ at a private hostname. They need the controls ADR 0009 gives GitHub:
 - no long-lived token in the sandbox;
 - execution fencing, revocation, and audit.
 
-They also require that no bot or service account is introduced. Every GitLab
-operation runs as the user who linked the account.
+By default no bot or service account is introduced: every GitLab operation
+runs as the user who linked the account. A workspace may opt in to an app
+principal backed by a bot credential that its administrator registers.
 
 OMA has no GitLab repository resource today. The resolver handles only
 `github_repository`
@@ -45,7 +46,9 @@ Enterprise (JiHu) instance on 2026-10-12:
   `write_repository` token reaches all of them.
 - **No narrower credential without a bot.** Project access tokens, group
   access tokens, and service accounts all create bot users. The instance
-  already has many `project_<id>_bot_*` users. The requirement excludes them.
+  already has many `project_<id>_bot_*` users. They are excluded by
+  default, and a workspace may register one as an optional app principal
+  ([App principal (optional)](#app-principal-optional)).
 - **Git over HTTPS** accepts the token as the password with any username
   (`oauth2`, the login, or an arbitrary string all worked).
 - **Path forms vary.**
@@ -65,15 +68,15 @@ Enterprise (JiHu) instance on 2026-10-12:
 
 | ADR 0009 control | This ADR |
 | --- | --- |
-| repository-scoped, 1 h installation token reaches the sandbox | no provider token reaches the sandbox; a control-plane git proxy uses the user token per request |
+| repository-scoped, 1 h installation token reaches the sandbox | no provider token reaches the sandbox; a control-plane git proxy uses the resolved principal's token per request |
 | App permissions | operation classes `fetch`, `push`, `open_mr`, `comment_mr` |
 | repository picker over installation ∩ user | `GET /projects?membership=true&min_access_level=30&search=` |
 | access check at Session creation | `GET /projects/:id`, highest of `project_access` and `group_access` |
 | installation and authorization webhooks | none; refresh or request failure marks the link |
-| PR opened "with App" | user-authored with content marker and audit fact |
-| `pr_principal` with explicit fallback | fixed `user_only`; no fallback exists |
+| PR opened "with App" | user-authored with content marker and audit fact; bot-authored with "Requested by" in app mode |
+| `pr_principal` with explicit fallback | `principal_policy`: `user_only` by default; `user` and `app` once a bot credential is registered |
 | one way to link (App authorization) | `link_methods` policy: OAuth, personal access token, or both |
-| app principal for automations | none; unattended GitLab work is rejected |
+| app principal for automations | none by default; an optional registered bot credential, otherwise unattended GitLab work is rejected |
 
 Enforcement sits in the application, not the network. It therefore works on
 every sandbox provider, including those that ADR 0007 rates `advisory`. A
@@ -92,14 +95,18 @@ connection_providers
   cipher_key_id, max_pat_lifetime_days (default 90),
   identity_binding ('none' | 'sso_extern_uid'), sso_provider (nullable),
   ca_bundle (nullable PEM), scopes, mr_mode ('push_options' | 'api'),
-  allow_user_principal_output (bool, default false), status,
+  allow_user_principal_output (bool, default false),
+  principal_policy ('user_only' | 'user' | 'app', default 'user_only'), status,
   created_by_user_id, created_at, updated_at
   unique (workspace_id, base_url)
 ```
 
 - gitlab.com is an instance like any other.
-- `allow_user_principal_output` must be true before any write. This is the
-  administrator opt-in required by OpenMatter IDENTITY_MODEL.
+- `allow_user_principal_output` must be true before any write by a user
+  principal. This is the administrator opt-in required by OpenMatter
+  IDENTITY_MODEL. Writes by the app principal do not need it.
+- `principal_policy` other than `user_only` requires a registered bot
+  credential ([App principal (optional)](#app-principal-optional)).
 - `ca_bundle` supports private CAs.
 
 ### Link method policy
@@ -159,7 +166,8 @@ Common to both methods:
   a user from linking someone else's or a shared account.
 - One GitLab user ID may hold only one active link per workspace.
 - The link is stored in `connection_user_links` from ADR 0009, with
-  `provider_id` and `method` set and `installation_id` NULL. Tokens use
+  `provider_app_id` set to the instance's `connection_providers.id` and
+  `method` set. Tokens use
   `secrets.cipherFor("connections.gitlab.user_tokens")`.
 - The allowed scopes are `read_user read_api write_repository`, plus `api`
   only when `mr_mode = 'api'`.
@@ -188,6 +196,64 @@ Personal access token (`method = 'pat'`):
    and the user pastes a new one.
 4. Unlink calls `DELETE /personal_access_tokens/self` and writes a tombstone.
 
+### App principal (optional)
+
+An administrator may register one bot credential per instance. It becomes
+the instance's Installation in OpenMatter terms and enables the `app` and
+`user` principal policies.
+
+| `principal_policy` | Attended Session | Unattended Session |
+| --- | --- | --- |
+| `user_only` (default) | creator's link; `gitlab_link_required` without one | rejected with `gitlab_unattended_unsupported` |
+| `user` | creator's link; the app principal, recorded as fallback, without one | app principal |
+| `app` | app principal | app principal |
+
+Credential:
+
+- A group access token is preferred. A project access token or a service
+  account's personal access token is also accepted. Creating a group access
+  token needs the group Owner role. Service accounts need an administrator.
+- It is stored in `connection_installations` from ADR 0009 with
+  `provider_app_id` set to the instance's `connection_providers.id`,
+  `provider_installation_id` set to the bot's GitLab user ID, and the token
+  in a new nullable `credential_cipher` column, sealed with
+  `secrets.cipherFor("connections.gitlab.app_tokens")`. Each instance holds
+  at most one active credential. ADR 0009's claim and release rules apply.
+- Registration calls `GET /personal_access_tokens/self` and `GET /user`. It
+  rejects the token when it is inactive, has no expiry, has a scope outside
+  `read_api write_repository` (plus `api` when `mr_mode = 'api'`), or when
+  `/user` does not report `bot: true`. A human account's token is never
+  accepted as an app principal.
+- The console warns administrators 14 days before `expires_at`. An expired
+  or rejected credential moves the Installation to `refresh_failed`, and
+  Sessions that resolve to the app principal fail with
+  `gitlab_app_not_configured`. Self-rotation is not used yet (see Open
+  questions).
+- The bot token never reaches the sandbox. The git proxy uses it in the same
+  way as a user token.
+
+Access:
+
+- The bot reaches only the group or project the token was created for, with
+  the token's role.
+- When the creator holds a link, access is the intersection of the bot's
+  access and the creator's access. The creator's token is used only for the
+  access check at Session creation and in the picker.
+- Without a creator link (unattended Sessions, `app`, or a `user` fallback),
+  access is the bot's access. The administrator accepts this by choosing the
+  policy, and controls it by choosing the token's group or project and role.
+
+Attribution with the app principal:
+
+| Artifact | Author | Marker |
+| --- | --- | --- |
+| Commits | the bot's name and email | `Assisted-by: OpenMA <Session URL>`; `Co-authored-by` for the requesting user when that user holds a link |
+| Merge request | the bot | label `openma` and a description footer with "Requested by @user" and the Session link |
+| Comments (`api` mode) | the bot | the same footer |
+
+The bot is a visible non-human GitLab identity, so app-principal output does
+not rely on the IDENTITY_MODEL exception for user-principal output.
+
 ### Session resource
 
 OMA adds an OMA-native resource. Claude Managed Agents shapes are not
@@ -205,22 +271,27 @@ changed (ADR 0007, "Preserve the official protocol exactly").
 
 At creation the resolver:
 
-1. requires an authenticated creator (`managed_sessions.created_by_user_id`,
-   ADR 0009) and that creator's active link for `provider_id`;
-2. reads `GET /projects/:id` with the creator's token and requires access
-   level 20 (Reporter) for `fetch`, or 30 (Developer) for `push`, `open_mr`,
-   and `comment_mr`;
-3. rejects write operations unless `allow_user_principal_output` is true;
-4. rejects the Session when it is unattended (schedules, webhooks, shared
-   channels, API keys without a user);
-5. stores a sealed reference `{providerId, userLinkId, projectId,
-   operations}`. The project path is display data, refreshed by ID, and never
-   an authority.
+1. resolves the principal from `principal_policy`. A user principal needs
+   an authenticated creator (`managed_sessions.created_by_user_id`, ADR 0009)
+   and that creator's active link for `provider_id`;
+2. reads `GET /projects/:id` and requires access level 20 (Reporter) for
+   `fetch`, or 30 (Developer) for `push`, `open_mr`, and `comment_mr`. It
+   checks with the creator's token when the creator holds a link, and also
+   with the bot token when the principal is the app;
+3. rejects user-principal write operations unless
+   `allow_user_principal_output` is true;
+4. rejects unattended Sessions (schedules, webhooks, shared channels, API
+   keys without a user) unless an app principal is configured and the policy
+   is `user` or `app`;
+5. stores a sealed reference `{providerId, principal, userLinkId?,
+   installationId?, projectId, operations}`. The project path is display
+   data, refreshed by ID, and never an authority.
 
 Errors: `gitlab_provider_not_configured`, `gitlab_link_required`,
 `gitlab_identity_mismatch`, `gitlab_link_method_disallowed`,
 `gitlab_project_not_accessible`, `gitlab_user_output_disabled`,
-`gitlab_unattended_unsupported`, `gitlab_refresh_failed`.
+`gitlab_unattended_unsupported`, `gitlab_app_not_configured`,
+`gitlab_refresh_failed`.
 
 `GET /v1/oma/connections/gitlab/{providerId}/projects?query=` backs the
 console picker. It uses the creator's token, pages through `x-total`, and
@@ -283,16 +354,27 @@ is out of scope.
 | Merge request | creator | label `openma` and a description footer with the Session link |
 | Comments (`api` mode) | creator | footer with the Session link |
 
-Each write emits an audit fact containing principal kind `user`, link ID,
-provider ID, project ID, operation, refs or MR IID, Session, Work, and fence
-generation.
+This table covers the user principal. App-principal attribution is in
+[App principal (optional)](#app-principal-optional).
+
+Each write emits an audit fact containing principal kind (`user` or `app`),
+link ID or installation ID, fallback flag and reason, provider ID, project
+ID, operation, refs or MR IID, Session, Work, and fence generation.
 
 ### Multi-user Sessions
 
-Writes run as the creator. In v1, follow-up instructions from other users are
-always denied for Sessions with a GitLab resource, whatever the ADR 0009
-`sessions.followups_from_others` setting is. Otherwise one user could steer
-writes that appear under another person's account.
+- App principal: follow-ups from other users follow ADR 0009's
+  `sessions.followups_from_others`. Writes appear under the bot, and the
+  footer names the requesting user.
+- User principal: writes run as the creator. Follow-ups from other users are
+  denied, whatever `sessions.followups_from_others` says. Otherwise one user
+  could steer writes that appear under another person's account.
+- Workspace setting `gitlab.mr_principal_participants` (default `false`)
+  mirrors ADR 0009's `github.pr_principal_participants`. When it is true, a
+  follow-up from another user is accepted under a user principal only if
+  `sessions.followups_from_others` allows it and that user holds an active
+  link on the instance. Pushes, merge requests, and comments prompted by
+  that input run as that user, and the audit fact records the participant.
 
 ### Network reach
 
@@ -329,8 +411,9 @@ Run against a self-managed instance in an opt-in lane:
    are rejected.
 8. Unlink revokes the grant. Parallel refreshes produce one committed
    rotation.
-9. Unattended Sessions, and follow-ups from other users, are rejected for
-   GitLab resources.
+9. With `user_only`, unattended Sessions, and follow-ups from other users
+   while `gitlab.mr_principal_participants` is false, are rejected for GitLab
+   resources.
 10. GraphQL, REST, LFS, and redirects through the proxy are denied.
 11. A personal access token with an extra scope, no expiry, or an expiry
     beyond `max_pat_lifetime_days` is rejected. An accepted token works
@@ -340,13 +423,26 @@ Run against a self-managed instance in an opt-in lane:
     refresh never turns into a token prompt on its own.
 13. With `sso_extern_uid`, linking an account whose SSO identity differs from
     the OMA user fails with `gitlab_identity_mismatch`.
+14. Registering an app credential rejects a human account's token, a token
+    without expiry, and a token with an extra scope. `principal_policy =
+    'app'` without a credential fails with `gitlab_app_not_configured`.
+15. With the app principal, an unattended Session pushes and opens a merge
+    request authored by the bot, with the "Requested by" footer and the
+    `Co-authored-by` trailer. The bot token never appears in the sandbox.
+16. With the app principal, an attended Session whose linked creator cannot
+    reach a project that the bot can reach is rejected with
+    `gitlab_project_not_accessible`.
+17. With `user`, a creator without a link resolves to the app principal, and
+    the audit fact records the fallback and its reason.
 
 ## Consequences
 
 Positive:
 
 - GitLab gets ADR 0009's per-project, per-operation, fenced, revocable,
-  audited control without a bot account.
+  audited control without a bot account by default.
+- Workspaces that need unattended work, or prefer a non-human author, can
+  register a bot credential without changing the proxy or the resource.
 - Enforcement does not depend on the sandbox provider's network features.
 - `pat_only` works without an administrator or an OAuth application, so a
   workspace can start immediately and move to OAuth later.
@@ -359,7 +455,11 @@ Negative:
   GitHub equivalent would.
 - The content marker is weaker than GitHub's "with App". It relies on the
   OpenMatter IDENTITY_MODEL exception.
-- There is no unattended GitLab work, and no in-sandbox `glab`.
+- Unattended GitLab work needs an administrator-registered bot credential.
+  Without one it is rejected. There is no in-sandbox `glab`.
+- Bot credentials expire, at most one year after creation on current GitLab
+  defaults, and OMA does not rotate them yet. An administrator replaces
+  them by hand.
 - Private instances constrain where OMA can be deployed.
 - OMA depends on `@openmatter/connections` and
   `@openmatter/connection-gitlab`, pinned by OpenMatter git tag or commit SHA
@@ -375,8 +475,8 @@ Each step is one small PR with the evidence report required by
 
 1. `docs(adr): add 0010 self-managed gitlab connections`. This lands with the
    OpenMatter IDENTITY_MODEL amendment.
-2. `feat(main-node): add connection_providers table, provider_id and method on
-   links`.
+2. `feat(main-node): add connection_providers table, provider_app_id and
+   method on links`.
    Includes migrations for PostgreSQL, MySQL, and SQLite, and the conformance
    suite.
 3. `feat(connections): register GitLab instances and link method policy`.
@@ -390,7 +490,9 @@ Each step is one small PR with the evidence report required by
 8. `feat(sandbox): configure insteadOf, the capability helper, and the commit
    hook`.
 9. `feat(connections): add push-option merge requests and opt-in api mode`.
-10. `test(connections): add self-managed GitLab live lane`.
+10. `feat(connections): add GitLab app principal from a registered bot
+    credential`.
+11. `test(connections): add self-managed GitLab live lane`.
 
 ## Open questions
 
@@ -400,6 +502,11 @@ Each step is one small PR with the evidence report required by
 - LFS support.
 - Relay design for hosted OMA reaching private instances.
 - Whether `max_pat_lifetime_days` should default lower than 90.
+- Bot credential rotation. `POST /personal_access_tokens/self/rotate` on
+  17.1 needs the `api` scope, which widens the bot beyond
+  `write_repository`. Options are manual replacement, a separate rotation
+  token held only by the control plane, or the narrower `self_rotate` scope
+  where the instance version supports it.
 
 ## Prototype results
 
@@ -475,4 +582,8 @@ afterwards.
 
 - prefilled `name` and `scopes` on the token page;
 - `DELETE /personal_access_tokens/self` with only the allowed scopes;
-- exact matching for a non-loopback HTTPS redirect URI.
+- exact matching for a non-loopback HTTPS redirect URI;
+- `GET /personal_access_tokens/self` and `bot: true` from `/user` for a
+  group access token. Creating one needs the group Owner role, which the
+  test account does not hold;
+- self-rotation of a bot credential.
