@@ -7,7 +7,13 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { applyBetterAuthSchema } from "@open-managed-agents/schema";
-import { buildBetterAuth, ensureTenantSqlite } from "@open-managed-agents/auth-config";
+import {
+  buildBetterAuth,
+  ensureTenantSqlite,
+  validateOidcSignInProviders,
+  type OidcSignInProvider,
+} from "@open-managed-agents/auth-config";
+import type { SignInProviderInfo } from "@open-managed-agents/shared";
 import type { EmailSender } from "@open-managed-agents/email";
 import type { SqlClient } from "@open-managed-agents/sql-client";
 
@@ -20,9 +26,19 @@ export interface NodeAuthSession {
   name: string | null;
 }
 
+/** Sign-in methods an auth component offers; /auth-info reports them. */
+export interface NodeSignInMethods {
+  /** Email and password sign-in and sign-up. */
+  emailPassword: boolean;
+  /** Deployment-configured OpenID Connect providers. */
+  oidc: SignInProviderInfo[];
+}
+
 export interface NodeAuth {
   /** Shown in /health as `auth`. */
   description: string;
+  /** When present, /auth-info reports these instead of the config defaults. */
+  signInMethods?: NodeSignInMethods;
   /** Serves everything under /auth/*. */
   handler(request: Request): Promise<Response> | Response;
   /** The signed-in user for a request, or null. */
@@ -38,6 +54,15 @@ export interface BetterAuthComponentOptions {
   email: EmailSender | null;
   /** Invoked when BETTER_AUTH_SECRET is unset; the default generates a per-process secret. */
   onMissingSecret?: () => void;
+  /**
+   * Deployment wire point for sign-in. `oidc` adds OpenID Connect providers,
+   * such as a company SSO; `emailPassword: false` leaves only OAuth and OIDC
+   * sign-in. Built-in Google and GitHub still follow the config.
+   */
+  signIn?: {
+    oidc?: readonly OidcSignInProvider[];
+    emailPassword?: boolean;
+  };
 }
 
 export async function createBetterAuthComponent(
@@ -45,6 +70,9 @@ export async function createBetterAuthComponent(
 ): Promise<NodeAuth> {
   const { config, database, email } = options;
   const { sql } = database;
+  const oidcProviders = options.signIn?.oidc ?? [];
+  const emailPassword = options.signIn?.emailPassword ?? true;
+  validateOidcSignInProviders(oidcProviders);
   const secret = config.auth.secret ?? randomSecret(options.onMissingSecret);
   const shared = {
     sender: email,
@@ -56,6 +84,8 @@ export async function createBetterAuthComponent(
     githubClientSecret: config.auth.github.clientSecret,
     requireEmailVerify: config.auth.requireEmailVerify,
     cookieDomain: config.auth.cookieDomain,
+    oidcProviders,
+    emailPassword,
     ensureTenant: (u: { id: string; name?: string | null; email?: string | null }) =>
       ensureTenantSqlite(sql, u.id, u.name, u.email),
   };
@@ -91,6 +121,10 @@ export async function createBetterAuthComponent(
 
   return {
     description: `better-auth-${database.dialect === "postgres" ? "pg" : database.dialect}`,
+    signInMethods: {
+      emailPassword,
+      oidc: oidcProviders.map((p) => ({ id: p.id, name: p.name })),
+    },
     handler: (request) => auth.handler(request),
     resolveSession: async (headers) => {
       const session = (await auth.api.getSession({ headers })) as
