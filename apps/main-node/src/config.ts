@@ -85,6 +85,8 @@ export interface NodeConfig {
     publicBaseUrl: string | undefined;
     gatewayOrigin: string;
     consoleDir: string | undefined;
+    /** CONSOLE_BRANDING_DIR: branding.json plus the logo, favicon, and stylesheet it names. */
+    brandingDir: string | undefined;
     metricsToken: string | undefined;
     /** Legacy static API key accepted alongside per-tenant keys. */
     apiKey: string | undefined;
@@ -293,6 +295,7 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
       publicBaseUrl: env.PUBLIC_BASE_URL,
       gatewayOrigin: env.GATEWAY_ORIGIN ?? env.PUBLIC_BASE_URL ?? "http://localhost:8787",
       consoleDir: env.CONSOLE_DIR,
+      brandingDir: env.CONSOLE_BRANDING_DIR,
       metricsToken: env.METRICS_BIND_TOKEN,
       apiKey: env.API_KEY,
     },

@@ -14,6 +14,7 @@ import { Logo } from "../components/Logo";
 import { setActiveTenantId } from "../lib/api";
 import { useApiQuery } from "../lib/useApiQuery";
 import { useI18n } from "../i18n";
+import { useBranding } from "../lib/branding";
 
 // Clear browser-cached tenant pin on every successful auth transition.
 // The pin is per-user — different login → different membership set →
@@ -60,6 +61,7 @@ function GoogleIcon() {
 
 export function Login() {
   const { isAuthenticated, isLoading } = useAuth();
+  const branding = useBranding();
   const nav = useNavigate();
   const [mode, setMode] = useState<Mode>("chooser");
   const [email, setEmail] = useState("");
@@ -382,7 +384,7 @@ export function Login() {
   const isOtpMode = mode === "verify-signup" || mode === "verify-login" || mode === "reset-otp";
 
   const titles: Record<Mode, string> = {
-    chooser: "Log in to openma",
+    chooser: branding.loginTitle ?? `Log in to ${branding.productName}`,
     login: "Log in with email",
     signup: "Create your account",
     "otp-login": "Sign in with email code",
@@ -393,9 +395,9 @@ export function Login() {
   };
 
   const subtitles: Record<Mode, string> = {
-    chooser: "",
+    chooser: branding.loginSubtitle ?? "",
     login: "Use your email and password",
-    signup: "Get started with openma",
+    signup: `Get started with ${branding.productName}`,
     "otp-login": "We'll send a 6-digit code to your email",
     "verify-signup": `We sent a code to ${email}`,
     "verify-login": `We sent a code to ${email}`,
@@ -721,7 +723,7 @@ export function Login() {
           )}
           {mode === "login" && (
             <>
-              <span>New to openma?</span>
+              <span>New to {branding.productName}?</span>
               <Button
                 type="button"
                 variant="link"
