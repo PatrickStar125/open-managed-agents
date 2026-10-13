@@ -186,17 +186,22 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     }),
   );
 
+  const signInMethods = auth?.signInMethods;
   app.get("/auth-info", (c) =>
     c.json({
       providers: authDisabled
         ? []
         : listAuthProviders({
             emailOtp: config.auth.requireEmailVerify,
+            emailPassword: signInMethods?.emailPassword ?? true,
             googleClientId: config.auth.google.clientId,
             googleClientSecret: config.auth.google.clientSecret,
             githubClientId: config.auth.github.clientId,
             githubClientSecret: config.auth.github.clientSecret,
           }),
+      // Deployment-configured OpenID Connect providers: [{ id, name }].
+      oidc: authDisabled ? [] : signInMethods?.oidc ?? [],
+      email_password: !authDisabled && (signInMethods?.emailPassword ?? true),
       turnstile_site_key: null,
     }),
   );
