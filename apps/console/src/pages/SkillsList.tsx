@@ -18,6 +18,12 @@ import { PopoverContent } from "@/components/ui/popover";
 import { DataTable, type ColumnDef } from "../components/DataTable";
 import { FacetedFilter } from "../components/FacetedFilter";
 import { FilterChip } from "../components/FilterChip";
+import {
+  InstallFromUrlModal,
+  SkillUpdatesModal,
+  sourceLabel,
+  useSkillSources,
+} from "../components/SkillSources";
 
 /* ---------- types ---------- */
 
@@ -94,8 +100,15 @@ export function SkillsList() {
     loadMore,
     refresh: refetchSkills,
   } = useInfiniteApiQuery<Skill>(SKILLS_API, { limit: 20, params: skillsParams });
+  /* skills installed from a URL (Agent Skills discovery index) */
+  const skillSources = useSkillSources();
+  const [showInstallUrl, setShowInstallUrl] = useState(false);
+  const [installUrl, setInstallUrl] = useState("");
+  const [updatesFor, setUpdatesFor] = useState<string[] | "all" | null>(null);
+
   const load = () => {
     void refetchSkills();
+    void skillSources.refresh();
   };
 
   /* create dialog */
@@ -324,16 +337,25 @@ export function SkillsList() {
         id: "source",
         accessorKey: "source",
         header: "Source",
-        cell: ({ row }) =>
-          row.original.source === "anthropic" ? (
+        cell: ({ row }) => {
+          const tracked = skillSources.locks.get(row.original.id);
+          return row.original.source === "anthropic" ? (
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-warning-subtle text-warning">
               built-in
+            </span>
+          ) : tracked ? (
+            <span
+              className="inline-flex max-w-48 items-center px-2 py-0.5 rounded-full text-xs font-medium bg-bg-surface text-fg-muted"
+              title={tracked.source_url}
+            >
+              <span className="truncate">{sourceLabel(tracked.source_url)}</span>
             </span>
           ) : (
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-bg-surface text-fg-muted">
               custom
             </span>
-          ),
+          );
+        },
       },
       {
         id: "version",
@@ -356,7 +378,7 @@ export function SkillsList() {
         ),
       },
     ],
-    [],
+    [skillSources.locks],
   );
 
   // Active-filter chip displays — kept undefined when matching the default
@@ -399,6 +421,26 @@ export function SkillsList() {
       subtitle="Manage pre-built and custom skills for your agents."
       createLabel="+ New skill"
       onCreate={() => setShowCreate(true)}
+      headerActions={
+        skillSources.available ? (
+          <>
+            {skillSources.locks.size > 0 && (
+              <Button variant="outline" onClick={() => setUpdatesFor("all")}>
+                Check for updates
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setInstallUrl("");
+                setShowInstallUrl(true);
+              }}
+            >
+              Install from URL
+            </Button>
+          </>
+        ) : undefined
+      }
       filters={filters}
       data={skills}
       loading={loading}
@@ -420,8 +462,38 @@ export function SkillsList() {
       emptyTitle="No skills yet"
       emptyKind="skill"
       emptySubtitle="Create a skill to give your agents domain expertise."
-      emptyAction={<Button onClick={() => setShowCreate(true)}>+ New skill</Button>}
+      emptyAction={
+        <div className="flex gap-2 justify-center">
+          <Button onClick={() => setShowCreate(true)}>+ New skill</Button>
+          {skillSources.available && (
+            <Button variant="outline" onClick={() => setShowInstallUrl(true)}>
+              Install from URL
+            </Button>
+          )}
+        </div>
+      }
     >
+      <InstallFromUrlModal
+        open={showInstallUrl}
+        initialUrl={installUrl}
+        onClose={() => setShowInstallUrl(false)}
+        onInstalled={load}
+      />
+      <SkillUpdatesModal
+        open={updatesFor !== null}
+        skillIds={updatesFor === "all" || updatesFor === null ? undefined : updatesFor}
+        onClose={() => setUpdatesFor(null)}
+        onUpdated={() => {
+          load();
+          if (detail) void managedApi.skills.retrieve(detail.id).then(openDetail).catch(() => {});
+        }}
+        onInstallNew={(url) => {
+          setUpdatesFor(null);
+          setInstallUrl(url);
+          setShowInstallUrl(true);
+        }}
+      />
+
       {/* ===== Create Dialog ===== */}
       <Modal
         open={showCreate}
@@ -563,6 +635,29 @@ export function SkillsList() {
                 </p>
               </div>
             </div>
+
+            {/* Source (installed from a URL) */}
+            {skillSources.locks.get(detail.id) && (() => {
+              const tracked = skillSources.locks.get(detail.id)!;
+              return (
+                <div className="border border-border rounded-lg p-3 space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label className="text-xs text-fg-muted">Installed from</Label>
+                    <Button size="sm" variant="outline" onClick={() => setUpdatesFor([detail.id])}>
+                      Check for updates
+                    </Button>
+                  </div>
+                  <p className="text-sm font-mono break-all">{tracked.source_url}</p>
+                  <p className="text-xs text-fg-subtle">
+                    <span className="font-mono">{tracked.name}</span> · digest{" "}
+                    <span className="font-mono" title={tracked.digest}>
+                      {tracked.digest.replace(/^sha256:/, "").slice(0, 12)}
+                    </span>{" "}
+                    · updated {new Date(tracked.updated_at).toLocaleString()}
+                  </p>
+                </div>
+              );
+            })()}
 
             {/* Usage hint */}
             <div>
