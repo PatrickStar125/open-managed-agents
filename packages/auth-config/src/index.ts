@@ -11,10 +11,59 @@
 // "sign up auto-creates a workspace" flow runs on either runtime.
 
 import { betterAuth } from "better-auth";
-import { emailOTP } from "better-auth/plugins";
+import { emailOTP, genericOAuth } from "better-auth/plugins";
 import type { EmailSender } from "@open-managed-agents/email";
 import { buildSocialProviders } from "@open-managed-agents/shared";
 import type { SqlClient } from "@open-managed-agents/sql-client";
+
+/**
+ * An OpenID Connect provider offered on the sign-in page, for example a
+ * company SSO, Keycloak, or Okta. Users sign in with authorization code and
+ * PKCE; the callback is `<baseURL>/auth/oauth2/callback/<id>`. The first
+ * sign-in creates the user and a workspace, like any other sign-up.
+ */
+export interface OidcSignInProvider {
+  /** Lowercase letters, digits, and dashes. Appears in the callback path. */
+  id: string;
+  /** Button label on the sign-in page, for example "Company SSO". */
+  name: string;
+  /** The provider's `/.well-known/openid-configuration` URL. */
+  discoveryUrl: string;
+  clientId: string;
+  clientSecret: string;
+  /** Defaults to `openid profile email`. */
+  scopes?: string[];
+  /** Token endpoint client authentication. Defaults to `post`. */
+  clientAuthentication?: "basic" | "post";
+}
+
+const RESERVED_PROVIDER_IDS = new Set(["email", "email-otp", "google", "github"]);
+
+/** Throws on a provider list that cannot be served safely. */
+export function validateOidcSignInProviders(providers: readonly OidcSignInProvider[]): void {
+  const seen = new Set<string>();
+  for (const p of providers) {
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(p.id) || RESERVED_PROVIDER_IDS.has(p.id)) {
+      throw new Error(`OIDC provider id "${p.id}" must be lowercase letters, digits, and dashes, and not a built-in provider`);
+    }
+    if (seen.has(p.id)) throw new Error(`OIDC provider id "${p.id}" is configured twice`);
+    seen.add(p.id);
+    if (!p.name.trim()) throw new Error(`OIDC provider "${p.id}" needs a name`);
+    if (!p.clientId || !p.clientSecret) {
+      throw new Error(`OIDC provider "${p.id}" needs a client id and a client secret`);
+    }
+    let url: URL;
+    try {
+      url = new URL(p.discoveryUrl);
+    } catch {
+      throw new Error(`OIDC provider "${p.id}" has an invalid discovery URL`);
+    }
+    const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+      throw new Error(`OIDC provider "${p.id}" must use an https discovery URL`);
+    }
+  }
+}
 
 export interface BuildBetterAuthOpts {
   /** Driver handle. better-sqlite3 Database, pg.Pool, or a drizzle adapter
@@ -55,6 +104,12 @@ export interface BuildBetterAuthOpts {
   /** Optional drizzle-adapter pre-built by CF; pass `database` instead
    *  on Node. Ignored when not provided. */
   drizzleProvider?: "sqlite" | "pg";
+  /** OpenID Connect providers offered next to the built-in ones. */
+  oidcProviders?: readonly OidcSignInProvider[];
+  /** When false, email and password sign-in, sign-up, and email codes are
+   *  all disabled, so only the OAuth and OIDC providers can sign users in.
+   *  Default: true. */
+  emailPassword?: boolean;
 }
 
 export type BetterAuth = ReturnType<typeof betterAuth>;
@@ -74,9 +129,27 @@ export function buildBetterAuth(opts: BuildBetterAuthOpts) {
 
   const sender = opts.sender;
   const requireVerify = !!opts.requireEmailVerify;
+  const emailPassword = opts.emailPassword ?? true;
+  const oidcProviders = opts.oidcProviders ?? [];
+  validateOidcSignInProviders(oidcProviders);
 
   const plugins: unknown[] = [];
-  if (sender) {
+  if (oidcProviders.length > 0) {
+    plugins.push(
+      genericOAuth({
+        config: oidcProviders.map((p) => ({
+          providerId: p.id,
+          discoveryUrl: p.discoveryUrl,
+          clientId: p.clientId,
+          clientSecret: p.clientSecret,
+          scopes: p.scopes ?? ["openid", "profile", "email"],
+          pkce: true,
+          authentication: p.clientAuthentication ?? "post",
+        })),
+      }),
+    );
+  }
+  if (sender && emailPassword) {
     plugins.push(
       emailOTP({
         otpLength: 6,
@@ -100,7 +173,7 @@ export function buildBetterAuth(opts: BuildBetterAuthOpts) {
     );
   }
 
-  const emailVerification = sender
+  const emailVerification = sender && emailPassword
     ? {
         sendVerificationEmail: async ({ user, url }: { user: { email: string }; url: string }) => {
           await sender.send({
@@ -115,7 +188,7 @@ export function buildBetterAuth(opts: BuildBetterAuthOpts) {
       }
     : undefined;
 
-  const sendResetPassword = sender
+  const sendResetPassword = sender && emailPassword
     ? async ({ user, url }: { user: { email: string }; url: string }) => {
         await sender.send({
           to: user.email,
@@ -132,7 +205,7 @@ export function buildBetterAuth(opts: BuildBetterAuthOpts) {
     baseURL: opts.baseURL,
     database: opts.database as never,
     emailAndPassword: {
-      enabled: true,
+      enabled: emailPassword,
       requireEmailVerification: requireVerify,
       ...(sendResetPassword ? { sendResetPassword } : {}),
     },

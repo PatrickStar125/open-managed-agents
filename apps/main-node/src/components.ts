@@ -27,7 +27,14 @@ import { createNodeSecrets, type NodeSecrets } from "./secrets.js";
 
 // Building blocks. Each default is an ordinary exported constructor, so a
 // composition root can call the ones it wants and hand-build the rest.
-export { createBetterAuthComponent, type NodeAuth, type NodeAuthSession } from "./auth/node-auth.js";
+export {
+  createBetterAuthComponent,
+  type BetterAuthComponentOptions,
+  type NodeAuth,
+  type NodeAuthSession,
+  type NodeSignInMethods,
+} from "./auth/node-auth.js";
+export type { OidcSignInProvider } from "@open-managed-agents/auth-config";
 export { createFilesBlobs, createMemoryBlobs, type FilesBlobs, type MemoryBlobs, type NodeBlobs } from "./blobs.js";
 export {
   migrateNodeDatabase,
