@@ -14,6 +14,7 @@ import { nanoid } from "nanoid";
 
 import { resolveNodeProcessMode, validateNodeProcessEnvironment, type NodeProcessMode } from "./process-mode.js";
 import { resolveRealtimeFanout, type RealtimeFanoutConfig } from "./realtime-fanout.js";
+import { parseAllowHosts } from "./lib/skill-sources.js";
 
 export type NodeEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -91,6 +92,14 @@ export interface NodeConfig {
     apiKey: string | undefined;
   };
   tunnels: { domainSuffix: string };
+  skillSources: {
+    /**
+     * SKILL_SOURCES_ALLOW_HOSTS: hosts the control plane may fetch skill
+     * sources from even when they resolve to private addresses (and over
+     * plain http). Entries are host names, IP literals, or `*.example.com`.
+     */
+    allowHosts: string[];
+  };
   integrationsInternalToken: string | undefined;
   email: {
     host: string;
@@ -238,6 +247,8 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
     return value && value.trim() ? value : fallback;
   };
 
+  const skillSourceAllowHosts = attempt<string[]>([], () => parseAllowHosts(env.SKILL_SOURCES_ALLOW_HOSTS));
+
   const config: NodeConfig = {
     processMode,
     database,
@@ -289,6 +300,7 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
       apiKey: env.API_KEY,
     },
     tunnels: { domainSuffix: env.TUNNEL_DOMAIN_SUFFIX ?? "tunnels.localhost" },
+    skillSources: { allowHosts: skillSourceAllowHosts },
     integrationsInternalToken: env.INTEGRATIONS_INTERNAL_TOKEN,
     email,
     feishuWsRunner: flag("FEISHU_WS_RUNNER"),

@@ -67,6 +67,8 @@ import {
 } from "../lib/console-branding.js";
 
 import { buildNodeSkillsRoutes } from "../lib/node-skills-routes.js";
+import { buildSkillSourcesRoutes, createSourceFetcher } from "../lib/skill-sources.js";
+import { SqlKvStore } from "@open-managed-agents/kv-store/adapters/sql";
 
 import { buildNodeHttpInferenceProxyRoutes } from "../lib/http-inference-proxy.js";
 import { buildNodeHttpMcpProxyRoutes } from "../lib/http-mcp-proxy.js";
@@ -192,17 +194,22 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     }),
   );
 
+  const signInMethods = auth?.signInMethods;
   app.get("/auth-info", (c) =>
     c.json({
       providers: authDisabled
         ? []
         : listAuthProviders({
             emailOtp: config.auth.requireEmailVerify,
+            emailPassword: signInMethods?.emailPassword ?? true,
             googleClientId: config.auth.google.clientId,
             googleClientSecret: config.auth.google.clientSecret,
             githubClientId: config.auth.github.clientId,
             githubClientSecret: config.auth.github.clientSecret,
           }),
+      // Deployment-configured OpenID Connect providers: [{ id, name }].
+      oidc: authDisabled ? [] : signInMethods?.oidc ?? [],
+      email_password: !authDisabled && (signInMethods?.emailPassword ?? true),
       turnstile_site_key: null,
     }),
   );
@@ -501,6 +508,17 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
 
   // OMA-only stubs used by the self-hosted console.
   v1.route("/oma/skills", buildNodeSkillsRoutes({ db: drizzleDb, blobs: filesBlob }));
+  v1.route("/oma/skill-sources", buildSkillSourcesRoutes({
+    fetcher: createSourceFetcher({ allowHosts: config.skillSources.allowHosts }),
+    kvFor: (tenantId) => new SqlKvStore({ db: drizzleDb, tenantId }),
+    skillsFor: (tenantId) => {
+      const managedApp = managedPlatform.app({ workspaceId: tenantId });
+      return {
+        skills: managedApp.port(managedAgentsPortTokens.skills),
+        versions: managedApp.port(managedAgentsPortTokens.skillVersions),
+      };
+    },
+  }));
   v1.get("/oma/runtimes", (c) => c.json({ data: [] }));
   v1.get("/oma/stats", async (c) => {
     const tenantId = c.get("tenant_id");

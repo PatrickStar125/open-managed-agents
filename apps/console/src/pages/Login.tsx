@@ -77,10 +77,17 @@ export function Login() {
   // re-mounts so a navigation between modes doesn't refetch.
   const { data: authInfo } = useApiQuery<{
     providers?: string[];
+    oidc?: { id: string; name: string }[];
+    email_password?: boolean;
     turnstile_site_key?: string | null;
   }>("/auth-info");
   const googleEnabled = !!authInfo?.providers?.includes("google");
   const githubEnabled = !!authInfo?.providers?.includes("github");
+  // Deployment-configured OpenID Connect providers, for example a company SSO.
+  const oidcProviders = authInfo?.oidc ?? [];
+  // A deployment may turn email and password off and leave only SSO. Older
+  // backends omit the field; treat that as on.
+  const emailEnabled = authInfo?.email_password !== false;
   // Whether the backend gates sign-up behind an email-OTP verification.
   // /auth-info advertises "email-otp" iff AUTH_REQUIRE_EMAIL_VERIFY=1 on
   // the server. When absent (default self-host), the sign-up flow does
@@ -357,6 +364,15 @@ export function Login() {
     });
   };
 
+  const handleOidcSignIn = async (providerId: string) => {
+    setError("");
+    const { error } = await authClient.signIn.oauth2({
+      providerId,
+      callbackURL: nextUrl,
+    });
+    if (error) setError(error.message ?? "Sign-in failed");
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-bg">
@@ -409,10 +425,32 @@ export function Login() {
 
         {mode === "chooser" && (
           <div role="group" aria-label="Sign in options" className="flex flex-col gap-3">
+            {error && (
+              <div
+                role="alert"
+                aria-live="polite"
+                className="rounded-lg border border-danger/20 bg-danger-subtle px-3 py-2.5 text-sm leading-5 text-danger"
+              >
+                {error}
+              </div>
+            )}
+            {oidcProviders.map((p, i) => (
+              <Button
+                key={p.id}
+                type="button"
+                size="lg"
+                variant={i === 0 ? "default" : "outline"}
+                onClick={() => handleOidcSignIn(p.id)}
+                className="h-11 w-full rounded-full"
+              >
+                Continue with {p.name}
+              </Button>
+            ))}
             {googleEnabled && (
               <Button
                 type="button"
                 size="lg"
+                variant={oidcProviders.length > 0 ? "outline" : "default"}
                 onClick={() => handleSocialSignIn("google")}
                 className="h-11 w-full rounded-full"
               >
@@ -432,18 +470,24 @@ export function Login() {
                 Continue with GitHub
               </Button>
             )}
-            <Button
-              type="button"
-              variant={googleEnabled || githubEnabled ? "outline" : "default"}
-              size="lg"
-              onClick={() => {
-                setMode("login");
-                setError("");
-              }}
-              className="h-11 w-full rounded-full"
-            >
-              Continue with email
-            </Button>
+            {emailEnabled && (
+              <Button
+                type="button"
+                variant={
+                  googleEnabled || githubEnabled || oidcProviders.length > 0
+                    ? "outline"
+                    : "default"
+                }
+                size="lg"
+                onClick={() => {
+                  setMode("login");
+                  setError("");
+                }}
+                className="h-11 w-full rounded-full"
+              >
+                Continue with email
+              </Button>
+            )}
           </div>
         )}
 
@@ -660,7 +704,7 @@ export function Login() {
           aria-label="Account options"
           className="flex min-h-6 items-center justify-center gap-1 text-center text-sm text-fg-muted"
         >
-          {mode === "chooser" && (
+          {mode === "chooser" && emailEnabled && (
             <>
               <span>Don't have an account?</span>
               <Button
