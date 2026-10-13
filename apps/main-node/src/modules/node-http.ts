@@ -59,6 +59,8 @@ import { ensureTenantSqlite } from "@open-managed-agents/auth-config";
 import { relative } from "node:path";
 
 import { buildNodeSkillsRoutes } from "../lib/node-skills-routes.js";
+import { buildSkillSourcesRoutes, createSourceFetcher } from "../lib/skill-sources.js";
+import { SqlKvStore } from "@open-managed-agents/kv-store/adapters/sql";
 
 import { buildNodeHttpInferenceProxyRoutes } from "../lib/http-inference-proxy.js";
 import { buildNodeHttpMcpProxyRoutes } from "../lib/http-mcp-proxy.js";
@@ -498,6 +500,17 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
 
   // OMA-only stubs used by the self-hosted console.
   v1.route("/oma/skills", buildNodeSkillsRoutes({ db: drizzleDb, blobs: filesBlob }));
+  v1.route("/oma/skill-sources", buildSkillSourcesRoutes({
+    fetcher: createSourceFetcher({ allowHosts: config.skillSources.allowHosts }),
+    kvFor: (tenantId) => new SqlKvStore({ db: drizzleDb, tenantId }),
+    skillsFor: (tenantId) => {
+      const managedApp = managedPlatform.app({ workspaceId: tenantId });
+      return {
+        skills: managedApp.port(managedAgentsPortTokens.skills),
+        versions: managedApp.port(managedAgentsPortTokens.skillVersions),
+      };
+    },
+  }));
   v1.get("/oma/runtimes", (c) => c.json({ data: [] }));
   v1.get("/oma/stats", async (c) => {
     const tenantId = c.get("tenant_id");

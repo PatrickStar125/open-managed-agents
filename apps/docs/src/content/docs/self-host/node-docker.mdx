@@ -276,6 +276,22 @@ Skip the sidecar if you don't need it: `docker compose up oma-server`.
   `no such column: turn_id`, you're on a pre-migration build — pull a
   newer image.
 
+## Skill sources on a private network
+
+**Skills → Install from URL** makes the control plane fetch the given URL
+itself. To keep that from reaching internal services, it only fetches
+`https` URLs whose host resolves to a public address, checks the address
+again at connect time, and does not follow redirects. A skill source on
+your intranet needs an explicit allowlist entry:
+
+```bash
+# Host names, IP literals, or *.example.com (subdomains only)
+SKILL_SOURCES_ALLOW_HOSTS=skills.corp.example,*.git.corp.example
+```
+
+Allowed hosts skip the private-address check and may use plain `http`.
+Archive URLs in a v2 index must stay on the index's origin.
+
 ## Migrating between backends
 
 **SQLite → Postgres** (one-way):
