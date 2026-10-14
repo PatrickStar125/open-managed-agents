@@ -1,14 +1,15 @@
 ---
 title: Self-host on Docker sandboxes
-description: Run sessions in local Docker containers on the Node host — the node-docker driver with SQL fencing, filesystem workspaces, and durable checkpoint/restore.
+description: Run sessions in local Docker containers on the Node host — the node-docker driver with SQL fencing and durable workspace checkpoint/restore (filesystem; no process-memory checkpoint).
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 The `node-docker` driver runs each Session in a Docker container on the same
 host as the Node server, driven through a Docker CLI adapter — no external
-sandbox account needed. Workspaces live on the host filesystem and are
-checkpointed/restored durably; there is no provider suspend/resume.
+sandbox account needed. Workspaces live on the host filesystem and use
+durable workspace checkpoint/restore at the filesystem level — there is no
+process-memory checkpoint and no provider suspend/resume.
 
 ## Prerequisites
 
