@@ -19,6 +19,7 @@ import type { SqlClient } from "@open-managed-agents/sql-client";
 
 import type { NodeConfig } from "../config.js";
 import type { NodeDatabase } from "../database.js";
+import { loadBetterSqlite3 } from "../lib/better-sqlite3.js";
 
 export interface NodeAuthSession {
   userId: string;
@@ -110,7 +111,7 @@ export async function createBetterAuthComponent(
     // SQLite keeps Better Auth in its own file, separate from the main database.
     const authDbPath = config.auth.databasePath;
     mkdirSync(dirname(authDbPath), { recursive: true });
-    const BetterSqlite3 = (await import("better-sqlite3")).default;
+    const BetterSqlite3 = await loadBetterSqlite3();
     const authDb = new BetterSqlite3(authDbPath);
     await applyBetterAuthSchema({ sql: betterSqliteAsSqlClient(authDb), dialect: "sqlite" });
     auth = buildBetterAuth({ ...shared, database: authDb });

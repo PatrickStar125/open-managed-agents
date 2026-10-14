@@ -111,7 +111,6 @@
     "@larksuiteoapi/node-sdk": "^1.73.0",
     "ai": "^7.0.123",
     "better-auth": "^1.6.3",
-    "better-sqlite3": "^13.0.3",
     "chokidar": "^4.0.0",
     "croner": "^9.0.0",
     "effect": "3.22.1",
@@ -126,6 +125,9 @@
     "prom-client": "^15.1.3",
     "tar": "7.5.22",
     "turndown": "^7.2.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^13.0.3"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.120.0",

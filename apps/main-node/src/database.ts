@@ -16,6 +16,7 @@ import {
 } from "@open-managed-agents/sql-client";
 
 import type { DatabaseConfig } from "./config.js";
+import { loadBetterSqlite3 } from "./lib/better-sqlite3.js";
 import { reconcilePiModelConfigMigration } from "./lib/reconcile-pi-model-config-migration.js";
 
 export type NodeDialect = "postgres" | "mysql" | "sqlite";
@@ -95,11 +96,12 @@ async function connect(config: DatabaseConfig): Promise<NodeDatabase> {
       },
     };
   }
+  // Resolve the optional driver first so a missing install fails with a clear message.
+  const BetterSqlite3 = await loadBetterSqlite3();
   const path = config.path;
   mkdirSync(dirname(path), { recursive: true });
   const sql = await createBetterSqlite3SqlClient(path);
   const { drizzle } = await import("drizzle-orm/better-sqlite3");
-  const BetterSqlite3 = (await import("better-sqlite3")).default;
   const raw = new BetterSqlite3(path);
   // Match D1's runtime default — FK enforcement off. See packages/sql-client
   // for the rationale (publication-first install + a few other paths).
