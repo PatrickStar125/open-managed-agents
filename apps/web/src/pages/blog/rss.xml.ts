@@ -1,9 +1,12 @@
 import rss from "@astrojs/rss";
 import { getCollection } from "astro:content";
 import type { APIContext } from "astro";
+import { ZH_PREFIX } from "../../lib/i18n";
 
 export async function GET(context: APIContext) {
+  // English-only feed — zh-CN posts (id prefix "zh-cn/") are excluded.
   const posts = (await getCollection("blog", ({ data }) => !data.draft))
+    .filter((post) => !post.id.startsWith(ZH_PREFIX))
     .sort((a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf());
 
   return rss({
