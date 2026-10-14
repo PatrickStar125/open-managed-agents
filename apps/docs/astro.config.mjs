@@ -87,6 +87,7 @@ export default defineConfig({
             { label: 'Welcome', translations: { 'zh-CN': '欢迎' }, link: '/' },
             { label: 'Quickstart', translations: { 'zh-CN': '快速开始' }, slug: 'quickstart' },
             { label: 'Concepts', translations: { 'zh-CN': '概念' }, slug: 'concepts' },
+            { label: 'Egress & credentials', translations: { 'zh-CN': '出站与凭据' }, slug: 'concepts/egress-and-credentials' },
           ],
         },
         {
