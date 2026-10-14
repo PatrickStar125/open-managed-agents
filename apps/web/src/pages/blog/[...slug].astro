@@ -6,6 +6,7 @@ import {
   breadcrumbSchema,
   readingTimeMinutes,
 } from "../../lib/seo";
+import { ZH_PREFIX, barePostId, langForPostId, t } from "../../lib/i18n";
 
 export async function getStaticPaths() {
   const posts = await getCollection("blog");
@@ -18,19 +19,47 @@ export async function getStaticPaths() {
 const { post } = Astro.props;
 const { Content } = await render(post);
 
+// zh-CN posts live under src/content/blog/zh-cn/<slug>.md — the glob
+// loader turns that into id "zh-cn/<slug>", which routes here as
+// /blog/zh-cn/<slug>/. The locale prefix is stripped to find the
+// translation twin (same slug, other locale).
+const lang = langForPostId(post.id);
+const isZh = lang === "zh-CN";
+const baseSlug = barePostId(post.id);
+const ui = t(lang);
+
 function formatDate(d: Date) {
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  return d.toLocaleDateString(lang, { year: "numeric", month: "long", day: "numeric" });
 }
 
 const minutes = readingTimeMinutes(post.body ?? "");
 const slug = post.id;
+const blogIndex = ui.indexPath;
 
-// Pick 3 related posts by tag overlap, falling back to recency.
+const allPosts = await getCollection("blog", ({ data }) => !data.draft);
+
+// Translation twin: same slug under the other locale. hreflang links
+// only ship when both pages actually exist — a zh post without its EN
+// twin still renders, it just doesn't advertise a dead alternate.
+const enTwinId = baseSlug;
+const zhTwinId = `${ZH_PREFIX}${baseSlug}`;
+const twinId = isZh ? enTwinId : zhTwinId;
+const hasTwin = allPosts.some((p) => p.id === twinId);
+const alternates = hasTwin
+  ? [
+      { hreflang: "en", href: `/blog/${enTwinId}/` },
+      { hreflang: "zh-CN", href: `/blog/${zhTwinId}/` },
+      { hreflang: "x-default", href: `/blog/${enTwinId}/` },
+    ]
+  : [];
+
+// Pick 3 related posts by tag overlap, falling back to recency — same
+// locale only, so a zh reader never gets steered to an English post.
 // Internal links are a real SEO signal — every post that ships should
 // link to 3 others, even if the overlap is loose.
-const allPosts = (await getCollection("blog", ({ data }) => !data.draft))
-  .filter((p) => p.id !== post.id);
-const related = allPosts
+const sameLocale = allPosts
+  .filter((p) => p.id !== post.id && p.id.startsWith(ZH_PREFIX) === isZh);
+const related = sameLocale
   .map((p) => {
     const overlap = p.data.tags.filter((t) => post.data.tags.includes(t)).length;
     return { post: p, overlap };
@@ -54,10 +83,11 @@ const schemas = [
     updatedAt: post.data.updatedAt,
     author: post.data.author,
     tags: post.data.tags,
+    inLanguage: lang,
   }),
   breadcrumbSchema([
-    { name: "Home", path: "/" },
-    { name: "Blog", path: "/blog/" },
+    { name: ui.home, path: "/" },
+    { name: ui.blog, path: blogIndex },
     { name: post.data.title, path: `/blog/${slug}/` },
   ]),
 ];
@@ -72,14 +102,16 @@ const schemas = [
   updatedAt={post.data.updatedAt}
   schemas={schemas}
   keywords={post.data.tags.join(", ")}
+  lang={lang}
+  alternates={alternates}
 >
   <article class="max-w-3xl mx-auto px-4 py-12">
     <!-- Breadcrumb (visible — supports the JSON-LD above) -->
     <nav aria-label="Breadcrumb" class="text-xs text-[var(--color-fg-subtle)] mb-6">
       <ol class="flex gap-2">
-        <li><a href="/" class="hover:underline">Home</a></li>
+        <li><a href="/" class="hover:underline">{ui.home}</a></li>
         <li aria-hidden="true">/</li>
-        <li><a href="/blog/" class="hover:underline">Blog</a></li>
+        <li><a href={blogIndex} class="hover:underline">{ui.blog}</a></li>
         <li aria-hidden="true">/</li>
         <li class="text-[var(--color-fg-muted)] truncate max-w-[12em]" aria-current="page" title={post.data.title}>
           {post.data.title}
@@ -93,20 +125,23 @@ const schemas = [
           {formatDate(post.data.publishedAt)}
         </time>
         {post.data.author && <> · {post.data.author}</>}
-        <span class="ml-2">· {minutes} min read</span>
+        <span class="ml-2">· {minutes} {ui.minRead}</span>
         {post.data.updatedAt && (
           <span class="ml-2">
-            (updated <time datetime={post.data.updatedAt.toISOString()}>{formatDate(post.data.updatedAt)}</time>)
+            ({ui.updated} <time datetime={post.data.updatedAt.toISOString()}>{formatDate(post.data.updatedAt)}</time>)
           </span>
+        )}
+        {hasTwin && (
+          <span class="ml-2">· <a href={`/blog/${twinId}/`} hreflang={isZh ? "en" : "zh-CN"} class="hover:underline">{isZh ? "English" : "中文版"}</a></span>
         )}
       </div>
       <h1 class="font-display text-4xl font-bold tracking-tight mb-3">{post.data.title}</h1>
       <p class="text-lg text-[var(--color-fg-muted)]">{post.data.description}</p>
       {post.data.tags.length > 0 && (
         <div class="mt-4 flex gap-2 flex-wrap" aria-label="Tags">
-          {post.data.tags.map((t) => (
+          {post.data.tags.map((tag) => (
             <span class="inline-block px-2 py-0.5 text-xs rounded bg-[var(--color-bg-surface)] text-[var(--color-fg-muted)]">
-              {t}
+              {tag}
             </span>
           ))}
         </div>
@@ -119,7 +154,7 @@ const schemas = [
 
     {related.length > 0 && (
       <aside class="mt-16 pt-8 border-t border-[var(--color-border)]" aria-labelledby="related-heading">
-        <h2 id="related-heading" class="font-display text-xl font-semibold mb-5">Related posts</h2>
+        <h2 id="related-heading" class="font-display text-xl font-semibold mb-5">{ui.relatedPosts}</h2>
         <div class="grid sm:grid-cols-3 gap-4">
           {related.map((r) => (
             <a
@@ -142,8 +177,8 @@ const schemas = [
     )}
 
     <footer class="mt-12 pt-6 border-t border-[var(--color-border)] text-sm text-[var(--color-fg-muted)] flex flex-wrap gap-x-6 gap-y-2 justify-between">
-      <a href="/blog/" class="hover:underline">← All posts</a>
-      <a href="/blog/rss.xml" class="hover:underline">Subscribe via RSS</a>
+      <a href={blogIndex} class="hover:underline">{ui.allPosts}</a>
+      <a href="/blog/rss.xml" class="hover:underline">{ui.rss}</a>
     </footer>
   </article>
 </Base>

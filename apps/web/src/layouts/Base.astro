@@ -19,6 +19,11 @@ export interface Props {
   schemas?: Array<Record<string, unknown>>;
   /** Comma-separated keywords for the page (used in meta keywords + JSON-LD). */
   keywords?: string;
+  /** BCP-47 language of the page — drives <html lang> and og:locale. */
+  lang?: string;
+  /** Translated versions of this page, for hreflang link tags. `href` may
+   *  be a site-relative path; it is absolutized against the canonical site. */
+  alternates?: Array<{ hreflang: string; href: string }>;
 }
 
 const {
@@ -31,6 +36,8 @@ const {
   ogImage,
   schemas = [],
   keywords,
+  lang = "en",
+  alternates = [],
 } = Astro.props;
 
 const SITE = "https://openma.ai";
@@ -48,10 +55,18 @@ const desc = description ?? "Open Managed Agents with Claude Managed Agents and 
 const url = canonical ? `${SITE}${canonical}` : Astro.url.toString();
 const finalOgImage = ogImage ?? `${SITE}/og-default.png`;
 
+// og:locale wants underscore form (en_US, zh_CN); <html lang> keeps the
+// BCP-47 hyphen. Simple `en`/`zh-CN` map covers every page we ship —
+// fall back to a mechanical transform so a future locale still emits
+// something valid.
+const ogLocale =
+  lang === "en" ? "en_US" : lang === "zh-CN" ? "zh_CN" : lang.replace("-", "_");
+const absolute = (href: string) => (href.startsWith("http") ? href : `${SITE}${href}`);
+
 const allSchemas = [organizationSchema(), websiteSchema(), ...schemas];
 ---
 <!DOCTYPE html>
-<html lang="en">
+<html lang={lang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -98,7 +113,15 @@ const allSchemas = [organizationSchema(), websiteSchema(), ...schemas];
     <meta property="og:url" content={url} />
     <meta property="og:type" content={ogType} />
     <meta property="og:site_name" content="Open Managed Agents" />
-    <meta property="og:locale" content="en_US" />
+    <meta property="og:locale" content={ogLocale} />
+    {alternates
+      .filter((a) => a.hreflang !== "x-default" && a.hreflang !== lang)
+      .map((a) => (
+        <meta property="og:locale:alternate" content={a.hreflang.replace("-", "_")} />
+      ))}
+    {alternates.map((a) => (
+      <link rel="alternate" hreflang={a.hreflang} href={absolute(a.href)} />
+    ))}
     <meta property="og:image" content={finalOgImage} />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
