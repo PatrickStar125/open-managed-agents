@@ -14,11 +14,13 @@ import { loadNodeConfig } from "../src/config.js";
 import { migrateNodeDatabase, openNodeDatabase } from "../src/database.js";
 
 const BASE = "http://localhost:8080";
+// Distinct from the default user and database names, so the description check below is meaningful.
+const PASSWORD = "pg-s3cret-7f3a";
 let container: StartedPostgreSqlContainer;
 let dir: string;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withPassword(PASSWORD).start();
   dir = mkdtempSync(join(tmpdir(), "oma-database-postgres-"));
 }, 180_000);
 
@@ -49,7 +51,7 @@ describe("Postgres database component", () => {
     const auth = await createBetterAuthComponent({ config, database, email: null });
     try {
       expect(database.dialect).toBe("postgres");
-      expect(database.description).not.toContain(container.getPassword());
+      expect(database.description).not.toContain(PASSWORD);
       await migrateNodeDatabase(database);
       expect(auth.description).toBe("better-auth-pg");
 
