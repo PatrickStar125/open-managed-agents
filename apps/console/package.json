@@ -20,7 +20,7 @@
     "@hookform/resolvers": "^5.9.1",
     "@open-managed-agents/acp-runtime": "workspace:*",
     "@open-managed-agents/api-types": "workspace:*",
-    "@openma/common": "git+https://github.com/openma-ai/openma-common.git#e196bdcac3d5f3165d6833c2531d4255a51620e9",
+    "@openma/common": "^0.9.0",
     "@openma/sdk": "workspace:*",
     "@open-managed-agents/integrations-core": "workspace:*",
     "@radix-ui/react-collapsible": "^1.1.20",
