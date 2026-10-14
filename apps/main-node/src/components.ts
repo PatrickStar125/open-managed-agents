@@ -39,8 +39,9 @@ export { createFilesBlobs, createMemoryBlobs, type FilesBlobs, type MemoryBlobs,
 export {
   migrateNodeDatabase,
   openNodeDatabase,
+  type NodeAuthDatabase,
+  type NodeAuthDatabaseOptions,
   type NodeDatabase,
-  type NodeDatabaseDriver,
   type NodeDialect,
 } from "./database.js";
 export { createNodeRealtime, type NodeRealtime } from "./realtime.js";
