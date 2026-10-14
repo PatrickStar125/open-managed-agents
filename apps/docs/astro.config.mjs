@@ -87,6 +87,7 @@ export default defineConfig({
             { label: 'Welcome', translations: { 'zh-CN': '欢迎' }, link: '/' },
             { label: 'Quickstart', translations: { 'zh-CN': '快速开始' }, slug: 'quickstart' },
             { label: 'Concepts', translations: { 'zh-CN': '概念' }, slug: 'concepts' },
+            { label: 'Sandboxes', translations: { 'zh-CN': '沙箱' }, slug: 'sandboxes' },
           ],
         },
         {
