@@ -10,7 +10,7 @@ test('prefixes docs paths and leaves everything else', () => {
   );
   assert.equal(prefixZhDocHref('/'), '/zh-cn/');
   assert.equal(prefixZhDocHref('/zh-cn/quickstart/'), '/zh-cn/quickstart/');
-  assert.equal(prefixZhDocHref('https://app.openma.dev'), 'https://app.openma.dev');
+  assert.equal(prefixZhDocHref('https://app.openma.ai'), 'https://app.openma.ai');
   assert.equal(prefixZhDocHref('#steps'), '#steps');
   assert.equal(prefixZhDocHref('/favicon.svg'), '/favicon.svg');
 });

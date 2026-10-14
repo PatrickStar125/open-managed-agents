@@ -11,7 +11,7 @@ REST 表面位于 `/v1/*`。控制台能做的一切都可以通过程序完成�
 
 | 环境 | 基址 |
 |---|---|
-| 托管（生产） | `https://app.openma.dev` |
+| 托管（生产） | `https://app.openma.ai` |
 | 托管（预发） | `https://app.staging.openma.dev` |
 | 自托管 | 你在 `apps/main/wrangler.jsonc → routes` 中设置的地址 |
 
@@ -24,7 +24,7 @@ REST 表面位于 `/v1/*`。控制台能做的一切都可以通过程序完成�
 **Session cookie** — 控制台界面使用的方式（由 better-auth 签发）。除非你要把 openma 嵌进浏览器应用，否则通常不会对着它做集成。
 
 ```bash
-export OMA_BASE_URL="https://app.openma.dev"
+export OMA_BASE_URL="https://app.openma.ai"
 export OMA_API_KEY="oma_..."
 ```
 

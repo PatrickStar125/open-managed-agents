@@ -173,10 +173,10 @@ npx wrangler secret put STORE_BACKENDS          # JSON config of backends
 
 如果部署超出单个 D1（D1 每个数据库有 10 GB / 5 万行的限制），可以扇出到 N 个 MAIN_DB 分片。分片路由器位于 `ROUTER_DB`；每个租户的数据落到 `tenant_shard` 所标明的、拥有该租户的分片上。
 
-启用只改配置——wrangler 文件带有 `env.production` 叠加层，绑定 4 个分片后的认证 D1（openma.dev 的托管生产环境在用）。要为自己的部署启用：
+启用只改配置——wrangler 文件带有 `env.production` 叠加层，绑定 4 个分片后的认证 D1（openma.ai 的托管生产环境在用）。要为自己的部署启用：
 
 1. 开通额外的 D1：`wrangler d1 create openma-router`、`wrangler d1 create openma-auth-shard-01..03`
-2. 把 ID 改进 `apps/{main,agent,integrations}/wrangler.jsonc` 的 `env.production` 块（替换 openma.dev 的 ID）
+2. 把 ID 改进 `apps/{main,agent,integrations}/wrangler.jsonc` 的 `env.production` 块（替换 openma.ai 的 ID）
 3. 对每个分片应用迁移：
    ```bash
    wrangler d1 migrations apply openma-auth-shard-01 --remote --config apps/main/wrangler.jsonc
@@ -280,7 +280,7 @@ Cloudflare 的 Bot Fight Mode 正在拒绝该请求。可以：
 - 在客户端加上一个浏览器形态的 User-Agent 头，或
 - 在仪表盘里降低受影响主机名的 Bot Fight Mode。
 
-使用 `curl` 从自动化打到 `*.openma.dev` 默认值的自托管者会碰到这个；托管用法的 User-Agent 路径记在 [项目记忆](/contribute/) 里。
+使用 `curl` 从自动化打到 `*.openma.ai` 默认值的自托管者会碰到这个；托管用法的 User-Agent 路径记在 [项目记忆](/contribute/) 里。
 
 ### 首次部署出现 “Migration failed”
 

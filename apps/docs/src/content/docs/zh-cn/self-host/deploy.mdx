@@ -1,6 +1,6 @@
 ---
 title: 部署
-description: 一条命令带你从克隆走到可用的 Cloudflare 部署，大约 5 分钟。
+description: 大约五分钟把 OpenMA 部署到 Cloudflare——一个交互式脚本完成 Worker、D1、R2 和队列的开通过程，设置密钥并运行迁移。
 ---
 
 import { Steps, Tabs, TabItem, Aside, LinkCard } from '@astrojs/starlight/components';
@@ -93,7 +93,7 @@ npx wrangler secret put LINEAR_CLIENT_SECRET --config apps/integrations/wrangler
 
 ### Staging 环境
 
-wrangler 文件包含预先对着 openma.dev 的 staging 数据库 ID 配好的 `env.staging` 叠加层。若要把它们用于**你自己的** staging 部署，需要另建一套并行的 staging 数据库，并把那些 ID 改进去。大多数自托管者不需要这一步——`--env staging` 主要给 openma.dev 自己用。
+wrangler 文件包含预先对着 openma.ai 的 staging 数据库 ID 配好的 `env.staging` 叠加层。若要把它们用于**你自己的** staging 部署，需要另建一套并行的 staging 数据库，并把那些 ID 改进去。大多数自托管者不需要这一步——`--env staging` 主要给 openma.ai 自己用。
 
 ```bash
 npx wrangler deploy --config apps/main/wrangler.jsonc --env staging
