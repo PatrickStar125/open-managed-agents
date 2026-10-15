@@ -6,7 +6,7 @@
   "exports": { ".": "./src/index.ts", "./projection": "./src/projection.ts" },
   "scripts": { "test": "vitest run --config vitest.config.ts", "typecheck": "tsc --noEmit -p tsconfig.json" },
   "dependencies": {
-    "@openma/common": "^0.9.0",
+    "@openma/common": "^0.9.1",
     "@open-managed-agents/openai-agents-api": "workspace:*",
     "@open-managed-agents/managed-agents-application": "workspace:*"
   },

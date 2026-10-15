@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@open-managed-agents/acp-runtime": "workspace:*",
-    "@openma/common": "^0.9.0"
+    "@openma/common": "^0.9.1"
   },
   "devDependencies": {
     "vitest": "^4.1.3"
