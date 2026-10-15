@@ -1,41 +1,34 @@
 <p align="center">
-  <img src="logo.svg" alt="openma" height="80" />
+  <img src="logo.svg" alt="OpenMA" height="80" />
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare Workers" />
-  <img src="https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="Apache 2.0 License" />
-  <img src="https://img.shields.io/badge/Tests-passing-brightgreen" alt="Tests" />
-  <img src="https://img.shields.io/badge/API-Anthropic%20Compatible-blueviolet" alt="Anthropic Compatible" />
-  <img src="https://img.shields.io/badge/OpenAI-Agents%20API%20%2B%20SDK-412991" alt="OpenAI Agents API 和 SDK 支持" />
-  <a href="https://discord.gg/P3EfQFm5bD"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Join OpenMA on Discord" /></a>
-</p>
+# Open Managed Agents (OpenMA)
 
-# Open Managed Agents
+**开源、可自部署的 Agent 平台，提供兼容部分 OpenAI Agents API 的接口。** 使用自己的模型和沙箱，在自己的基础设施上运行持久化 Agent 会话。采用 Apache-2.0 许可。
 
-**Claude Managed Agents 和 OpenAI Agents API 的开源、自部署替代方案。**
+[官网](https://openma.ai) · [文档](https://docs.openma.ai) · [部署向导](https://openma.ai/deploy/) · [Discord](https://discord.gg/P3EfQFm5bD) · [English README](README.md)
 
-🌐 **[openma.dev](https://openma.dev)** · 📖 **[docs.openma.dev](https://docs.openma.dev)** · 💬 **[Discord](https://discord.gg/P3EfQFm5bD)** · **[GitHub](https://github.com/openma-ai/open-managed-agents)**
+OpenMA 提供支持官方 OpenAI SDK **部分调用**的 `/openai/v1`，以及兼容 Claude Managed Agents 的 `/v1`。OpenAI Agents API 是 OpenAI 托管的服务；OpenMA 是独立的开源兼容实现，**不是** OpenAI 托管控制面，也不同于 OpenAI Agents SDK。迁移前请查看[功能和运行时限制](docs/openai-agents-compatibility-status.md)。
 
-OpenMA 提供持久会话、沙箱工具、记忆、加密凭证和崩溃恢复。Cloudflare 与 Node 支持 Claude Managed Agents API；Node 还提供 `/openai/v1` 入口，可使用官方 OpenAI SDK。你可以使用自己的模型 API key，部署到自己的基础设施上。
+| 需求 | OpenMA 提供 |
+| --- | --- |
+| 自部署 Agent 会话 | Node 或 Cloudflare 上的持久历史、流式输出、续接与故障恢复 |
+| 官方 OpenAI SDK 接入 | Node 和 Cloudflare 的 `/openai/v1`；动态子代理目前需 Node |
+| 自主掌控执行环境 | 自带模型凭证，选择受支持的隔离沙箱 |
+| 兼容现有 Claude Managed Agents 客户端 | 与 OpenAI 适配接口并行的 `/v1` |
 
----
+**从这里开始：** [试用托管 Console](https://app.openma.ai/login)、[选择自部署方案](https://openma.ai/deploy/)，或查看下面的 [OpenAI SDK 快速开始](#openai-agents-api-快速开始)。如果项目对你有帮助，欢迎点 Star 关注后续开发。
 
-## 两种运行方式
+## 部署方式概览
 
-同一套 harness、业务逻辑和事件日志模型同时支持以下两种部署方式，按你的托管偏好选一种：
+| | **自部署 Node / Docker** | **Cloudflare Workers** |
+| --- | --- | --- |
+| 状态存储 | SQLite 或 Postgres + 持久化文件 | D1、KV、R2、Durable Objects |
+| 执行环境 | 显式配置受支持的隔离沙箱 | Cloudflare Containers / 受支持的运行时适配器 |
+| 安装 | 配置密钥与沙箱后运行 `docker compose up -d` | 使用向导配置资源并部署 Workers |
+| 指南 | [Node / Docker](https://docs.openma.ai/self-host/node-docker/) | [选择部署方式](https://openma.ai/deploy/) |
 
-| | **自部署（Node）** | **Cloudflare** |
-|---|---|---|
-| 跑在哪里 | 你的 VPS / Mac / Docker 主机 / fly.io / k8s | Cloudflare Workers + DO + Containers |
-| 存储 | SQLite 或 Postgres + 本地文件系统 | D1 + KV + R2 |
-| 沙箱 | LiteBox / Daytona / E2B / BoxRun | Cloudflare Sandbox（Containers） |
-| 启动时间 | `docker compose up`（约 2 分钟） | wrangler deploy（首次配置后约 10 分钟） |
-| 适合谁 | 开源用户、私有部署、不想用 CF、需要数据驻留 | 边缘规模、不想运维主机、已在 CF 上 |
-
-两种部署都提供 Claude 兼容的 `/v1/agents`、`/v1/sessions` API 和 Console UI。
-OpenAI Agents API 适配器目前挂载在 Node 的 `/openai/v1`。
+托管版地址为 `https://app.openma.ai`。各运行时能力不完全相同，生产迁移前请核对[支持范围](docs/openai-agents-compatibility-status.md)。
 
 ---
 
@@ -71,7 +64,7 @@ console.log(session.id);
 你可以向子代理发消息、等待结果、中断、关闭或恢复它。子代理分别保存对话，
 共享父代理的文件，不能继续创建下一级子代理。
 
-OpenAI API 目前在 Node 上可用。高级环境和插件设置、部分 MCP 与模型选项
+OpenAI 兼容接口在 Node 和 Cloudflare 上可用；动态子代理目前仅由 Node 支持。高级环境和插件设置、部分 MCP 与模型选项
 尚不支持。迁移现有应用前，请查看[支持的功能与限制](docs/openai-agents-compatibility-status.md)；
 具体配置见[适配器指南](packages/openai-agents-compat/README.md)。
 
@@ -121,7 +114,7 @@ curl -s -X POST localhost:8787/v1/sessions/$SID/events -H 'content-type: applica
   -d '{"events":[{"type":"user.message","content":[{"type":"text","text":"Run: uname -a"}]}]}'
 ```
 
-完整的自部署指南（沙箱模式、Postgres、BoxRun、vault sidecar、Console UI、运维注意事项）：**[docs.openma.dev/self-host/overview](https://docs.openma.dev/self-host/overview/)**
+完整的自部署指南（沙箱模式、Postgres、BoxRun、vault sidecar、Console UI、运维注意事项）：**[docs.openma.ai/self-host/overview](https://docs.openma.ai/self-host/overview/)**
 
 ---
 
@@ -154,7 +147,7 @@ npx wrangler secret put API_KEY               # REST API 初始引导密钥
 # npx wrangler secret put ANTHROPIC_API_KEY
 
 npm run deploy
-# → https://openma.dev（或个人部署：https://managed-agents.<your-subdomain>.workers.dev）
+# → https://<your-worker>.<your-subdomain>.workers.dev（或你自己的自定义域名）
 ```
 
 部署内容：
@@ -168,7 +161,7 @@ npm run deploy
 
 ### 创建你的第一个智能体
 
-上面的冒烟测试对任意部署都适用。完整的 Console 流程（Model Card、保险库、集成）见 **[docs.openma.dev/quickstart](https://docs.openma.dev/quickstart)**。API 等价的最小版本：
+上面的冒烟测试对任意部署都适用。完整的 Console 流程（Model Card、保险库、集成）见 **[docs.openma.ai/quickstart](https://docs.openma.ai/quickstart)**。API 等价的最小版本：
 
 ```bash
 BASE=http://localhost:8787   # 或者你的部署 URL
@@ -458,7 +451,7 @@ curl -X PUT $BASE/v1/agents/$AGENT -H "x-api-key: $KEY" -H "content-type: applic
 oma connect linear --vault $VAULT_ID
 ```
 
-每个 server 的工具发现超时 15 秒；一个坏掉的 server 会日志记录后跳过，其它继续。完整设计见 [docs.openma.dev/build/vault-and-mcp](https://docs.openma.dev/build/vault-and-mcp/)。
+每个 server 的工具发现超时 15 秒；一个坏掉的 server 会日志记录后跳过，其它继续。完整设计见 [docs.openma.ai/build/vault-and-mcp](https://docs.openma.ai/build/vault-and-mcp/)。
 
 ---
 
@@ -535,7 +528,7 @@ curl -sX POST $BASE/v1/sessions -H "x-api-key: $KEY" \
 | `mcp_oauth` | 请求 host 匹配 `mcp_server_url` | 401 / 403 时用 `token_endpoint` 刷新，CAS 写回 D1 |
 | `cap_cli` | 沙箱里 CLI 调用按 `cli_id` 在 cap registry 里查（`gh`、`glab`、`aws` ……）| 按每个 CLI 处理 |
 
-每个 vault 最多 20 条凭证。每次转发会发一条结构化的 `op:"mcp_proxy.forward"` 日志。完整设计：[`docs/mcp-credential-architecture.md`](docs/mcp-credential-architecture.md)、[docs.openma.dev/build/vault-and-mcp](https://docs.openma.dev/build/vault-and-mcp/)。
+每个 vault 最多 20 条凭证。每次转发会发一条结构化的 `op:"mcp_proxy.forward"` 日志。完整设计：[`docs/mcp-credential-architecture.md`](docs/mcp-credential-architecture.md)、[docs.openma.ai/build/vault-and-mcp](https://docs.openma.ai/build/vault-and-mcp/)。
 
 ---
 
@@ -665,8 +658,8 @@ open-managed-agents/
 │   ├── integrations/      # 集成网关 —— Linear / GitHub / Slack OAuth + webhook
 │   ├── oma-vault/         # 保险库 sidecar —— 出站请求按 host 注入鉴权头
 │   ├── console/           # Web 控制台 —— React + Vite + Tailwind v4
-│   ├── docs/              # 文档站点（Astro Starlight） —— 发布到 docs.openma.dev
-│   └── web/               # 营销站点（Astro） —— 发布到 openma.dev
+│   ├── docs/              # 文档站点（Astro Starlight） —— 发布到 docs.openma.ai
+│   └── web/               # 营销站点（Astro） —— 发布到 openma.ai
 ├── packages/
 │   ├── cli/                       # `oma` CLI —— 智能体 / 会话 / 集成命令
 │   ├── sdk/                       # Harness SDK —— defineHarness、generateText 等
@@ -703,7 +696,7 @@ open-managed-agents/
 | `SANDBOX_PROVIDER` | **是**（Node/Fly） | 显式选择隔离后端：`litebox`（本机 Firecracker）、`daytona`、`e2b` 或 `boxrun`。可部署入口没有 subprocess 回退。 |
 | `TAVILY_API_KEY` | 否 | `web_search` 内置工具的后端。 |
 
-完整变量列表（集成 OAuth 凭证、Postgres URL、沙箱调参、记忆桶配置、Google 登录等）：**[docs.openma.dev/reference/configuration](https://docs.openma.dev/reference/configuration/)** 以及 `.env.example` / `.dev.vars.example`。
+完整变量列表（集成 OAuth 凭证、Postgres URL、沙箱调参、记忆桶配置、Google 登录等）：**[docs.openma.ai/reference/configuration](https://docs.openma.ai/reference/configuration/)** 以及 `.env.example` / `.dev.vars.example`。
 
 ---
 
@@ -755,7 +748,7 @@ pnpm run test:e2e:openai-agents # 官方 SDK 访问真实 Node 服务的 E2E
 
 ## 文档
 
-面向用户的文档站点位于 [`apps/docs`](apps/docs/)（Astro Starlight），发布到 **[docs.openma.dev](https://docs.openma.dev)**。
+面向用户的文档站点位于 [`apps/docs`](apps/docs/)（Astro Starlight），发布到 **[docs.openma.ai](https://docs.openma.ai)**。
 
 ```bash
 pnpm dev:docs       # 本地预览在 http://localhost:4321
