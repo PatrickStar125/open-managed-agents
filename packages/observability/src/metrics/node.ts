@@ -1,15 +1,11 @@
-// Node metrics recorder. Two backends:
+// Node metrics recorder. Application series are Prometheus pull: an
+// in-process prom-client registry exposed by `getPromText()` from /metrics.
+// prom-client is lazy-imported so tests and CF builds don't drag it in.
 //
-//   - Prometheus pull (default): in-process prom-client registry. Expose
-//     via `getPromText()` from a /metrics route. Lazy-imported so tests
-//     and CF builds don't drag prom-client in.
-//
-//   - OTLP push: when OTEL_EXPORTER_OTLP_ENDPOINT is set we hand metrics
-//     to the OpenTelemetry MeterProvider configured by the tracer
-//     (which boots the OTel SDK). MetricExporter handles the push.
-//
-// Both backends honor the same MetricsRecorder surface so call sites are
-// agnostic.
+// These series are not written to the OpenTelemetry MeterProvider. The
+// tracer starts that provider only when OTEL_METRICS_EXPORTER is set
+// (sdk-node 0.222 would otherwise default it to otlp). Call sites stay on
+// this MetricsRecorder either way.
 
 import type {
   MetricsRecorder,

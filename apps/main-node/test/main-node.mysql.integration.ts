@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { MySqlContainer, type StartedMySqlContainer } from "@testcontainers/mysql";
@@ -11,6 +12,9 @@ import {
   createSqlQueue,
   ensureSqlQueueSchema,
 } from "@open-managed-agents/queue";
+import { InMemoryBlobStore } from "@open-managed-agents/blob-store";
+import { ensureSessionExecutionClaimLockSchema, SqlSessionExecutionCoordinator } from "@open-managed-agents/session-runtime-sql";
+import { NodeManagedWorkspaceCheckpoints } from "../src/lib/node-managed-workspace-checkpoints";
 import {
   createMysql2SqlClient,
   type SqlClient,
@@ -141,6 +145,54 @@ describe.sequential("main-node MySQL composition root", () => {
       );
     } finally {
       await sql.close();
+    }
+  });
+
+  it("serializes checkpoint_restore cross-lane claims on MySQL and fences canonical publication", async () => {
+    const firstSql = await createMysql2SqlClient(mysqlContainer.getConnectionUri());
+    const secondSql = await createMysql2SqlClient(mysqlContainer.getConnectionUri());
+    const id = `checkpoint_${randomUUID()}`;
+    const workspaceId = `workspace_${randomUUID()}`;
+    const sessionId = `session_${randomUUID()}`;
+    try {
+      await ensureSessionExecutionClaimLockSchema(firstSql, "mysql");
+      const checkpoints = new NodeManagedWorkspaceCheckpoints({ sql: firstSql, blobs: new InMemoryBlobStore(), intervalMs: 60_000 });
+      await checkpoints.ensureSchema();
+      const first = new SqlSessionExecutionCoordinator(firstSql, { serializeSessionClaims: true });
+      const second = new SqlSessionExecutionCoordinator(secondSql, { serializeSessionClaims: true });
+      const admittedAt = new Date(Date.now() - 1_000).toISOString();
+      for (const [suffix, laneId] of [["primary", "sthr_primary"], ["child", "sthr_child"]] as const) {
+        await first.admit({ execution: {
+          id: `${id}_${suffix}`, workspaceId, sessionId, laneId, admittedAt,
+          events: [{ id: `${id}_${suffix}`, type: "user.message", content: [{ type: "text", text: "run" }], processedAt: admittedAt }],
+        } });
+      }
+      const claimedAt = new Date().toISOString();
+      const claims = await Promise.all([
+        first.claim({ workspaceId, sessionId, ownerId: "node_a", attemptId: `${id}_a`, claimedAt, leaseTtlMs: 30_000 }),
+        second.claim({ workspaceId, sessionId, ownerId: "node_b", attemptId: `${id}_b`, claimedAt, leaseTtlMs: 30_000 }),
+      ]);
+      expect(claims.filter((result) => result.type === "claimed")).toHaveLength(1);
+      const active = claims.find((result) => result.type === "claimed");
+      if (active?.type !== "claimed") throw new Error("No execution claimed");
+      const checkpointId = `wsc_${randomUUID()}`;
+      const candidate = { id: checkpointId, contentHash: `sha256:${"a".repeat(64)}`, revision: active.fence.generation,
+        metadata: { "openma.workspace.blob-key.v1": `managed-session-workspace-checkpoints/${workspaceId}/${sessionId}/${checkpointId}.tar` } };
+      expect(await checkpoints.publish({ fence: active.fence, candidate, expectedId: null })).toBe(true);
+      expect((await checkpoints.active({ workspaceId, sessionId }))?.candidate.id).toBe(candidate.id);
+      const stale = { ...active.fence, attemptId: "wrong_attempt" };
+      const staleId = `wsc_${randomUUID()}`;
+      const staleCandidate = { ...candidate, id: staleId, metadata: {
+        "openma.workspace.blob-key.v1": `managed-session-workspace-checkpoints/${workspaceId}/${sessionId}/${staleId}.tar`,
+      } };
+      expect(await checkpoints.publish({ fence: stale, candidate: staleCandidate, expectedId: candidate.id })).toBe(false);
+      expect((await checkpoints.active({ workspaceId, sessionId }))?.candidate.id).toBe(candidate.id);
+    } finally {
+      await firstSql.prepare("DELETE FROM managed_session_workspace_checkpoints WHERE workspace_id = ?").bind(workspaceId).run();
+      await firstSql.prepare("DELETE FROM managed_session_claim_locks WHERE workspace_id = ?").bind(workspaceId).run();
+      await firstSql.prepare("DELETE FROM managed_session_executions WHERE workspace_id = ?").bind(workspaceId).run();
+      await firstSql.close();
+      await secondSql.close();
     }
   });
 
@@ -454,6 +506,50 @@ describe.sequential("main-node MySQL composition root", () => {
     } finally {
       await db.end();
     }
+  });
+
+  it("persists session metadata on MySQL and rejects metadata list query params", async () => {
+    const client = new Anthropic({
+      apiKey: "mysql-integration-test",
+      baseURL: baseUrl,
+      maxRetries: 0,
+    });
+    const suffix = Date.now().toString(36);
+    const environment = await client.beta.environments.create({
+      name: `mysql-metadata-${suffix}`,
+      scope: "organization",
+      config: {
+        type: "cloud",
+        networking: { type: "unrestricted" },
+        packages: { type: "packages" },
+      },
+    });
+    const agent = await client.beta.agents.create({
+      name: `mysql-metadata-${suffix}`,
+      model: "mysql-test-model",
+      system: "MySQL session metadata persistence",
+    });
+    const created = await client.beta.sessions.create({
+      agent: { type: "agent", id: agent.id, version: agent.version },
+      environment_id: environment.id,
+      metadata: { project_id: "proj_a", team: "platform" },
+      title: `mysql-metadata-${suffix}`,
+    });
+    const retrieved = await client.beta.sessions.retrieve(created.id);
+    expect(retrieved.metadata).toEqual({
+      project_id: "proj_a",
+      team: "platform",
+    });
+
+    const betaHeaders = {
+      "x-api-key": "mysql-integration-test",
+      "anthropic-beta": "managed-agents-2026-04-01",
+    };
+    const listWithMetadataFilter = await fetch(
+      `${baseUrl}/v1/sessions?metadata_key=project_id&metadata_value=proj_a`,
+      { headers: betaHeaders },
+    );
+    expect(listWithMetadataFilter.status).toBe(400);
   });
 
   it("boots Better Auth on MySQL and provisions the v1 tenant boundary", async () => {

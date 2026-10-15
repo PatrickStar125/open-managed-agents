@@ -18,3 +18,21 @@ export { FileService } from "./service";
 export type { FileServiceDeps } from "./service";
 
 export { createCfFileService, createSqliteFileService, SqlFileRepo } from "./adapters";
+export { encodeOutputId, decodeOutputId, isSafeOutputFilename } from "./output-id";
+export {
+  UNIFIED_FILE_CURSOR_PREFIX,
+  compareFilename,
+  listUnifiedSessionFiles,
+  toListedFile,
+  unifiedPageErrorMessage,
+  unifiedPageHttpBody,
+} from "./unified-page";
+export type {
+  ListedFile,
+  SessionOutputObject,
+  SessionOutputPageSource,
+  UnifiedFileItem,
+  UnifiedListQuery,
+  UnifiedPageError,
+  UnifiedPageResult,
+} from "./unified-page";

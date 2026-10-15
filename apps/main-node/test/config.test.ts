@@ -21,6 +21,7 @@ describe("loadNodeConfig", () => {
     expect(config.memoryQueue).toBe("auto");
     expect(config.realtime).toEqual({ mode: "memory", pollIntervalMs: 300 });
     expect(config.execution.concurrency).toBe(8);
+    expect(config.workspace).toEqual({ strategy: "ephemeral", checkpointIntervalMs: 60_000 });
     expect(config.execution.ownerId).toMatch(/^node:\d+:/);
     expect(config.paths).toEqual({ sandboxWorkdir: "./data/sandboxes", sessionOutputs: "./data/session-outputs" });
     expect(config.http).toEqual({ host: "0.0.0.0", port: 8787, gatewayOrigin: "http://localhost:8787", publicBaseUrl: undefined, consoleDir: undefined, metricsToken: undefined, apiKey: undefined });
@@ -66,6 +67,43 @@ describe("loadNodeConfig", () => {
       pollIntervalMs: 5_000,
     });
     expect(full.blobs.files).toEqual({ kind: "s3", endpoint: "http://s3", bucket: "files", accessKey: "ak2", secretKey: "sk2", region: "eu-west-1" });
+  });
+
+  it("scopes S3 blob stores with a key prefix and virtual-host/checksum options", () => {
+    const config = loadNodeConfig({
+      ...minimal,
+      MEMORY_S3_ENDPOINT: "https://s3.example", MEMORY_S3_BUCKET: "shared", MEMORY_S3_ACCESS_KEY: "a", MEMORY_S3_SECRET_KEY: "s",
+      MEMORY_S3_PREFIX: "prod/openma/memory/", MEMORY_S3_FORCE_PATH_STYLE: "0", MEMORY_S3_REQUEST_CHECKSUM_CALCULATION: "WHEN_REQUIRED",
+      FILES_S3_ENDPOINT: "https://s3.example", FILES_S3_BUCKET: "shared", FILES_S3_ACCESS_KEY: "a", FILES_S3_SECRET_KEY: "s",
+      FILES_S3_PREFIX: "prod/openma/files/", FILES_S3_FORCE_PATH_STYLE: "0", FILES_S3_REQUEST_CHECKSUM_CALCULATION: "WHEN_REQUIRED",
+    });
+    expect(config.blobs.memory).toMatchObject({ kind: "s3", prefix: "prod/openma/memory/", forcePathStyle: false, requestChecksumCalculation: "WHEN_REQUIRED" });
+    expect(config.blobs.files).toMatchObject({ kind: "s3", prefix: "prod/openma/files/", forcePathStyle: false, requestChecksumCalculation: "WHEN_REQUIRED" });
+    expect(() => loadNodeConfig({ ...minimal, MEMORY_S3_ENDPOINT: "https://s3.example", MEMORY_S3_BUCKET: "shared", MEMORY_S3_ACCESS_KEY: "a", MEMORY_S3_SECRET_KEY: "s", MEMORY_S3_PREFIX: "/absolute" })).toThrow(/MEMORY_S3_PREFIX/);
+  });
+
+  it("selects Aliyun OSS create-only semantics for S3 blob stores", () => {
+    const s3 = (prefix: string) => ({ [`${prefix}_ENDPOINT`]: "https://oss.example", [`${prefix}_BUCKET`]: "b",
+      [`${prefix}_ACCESS_KEY`]: "a", [`${prefix}_SECRET_KEY`]: "s", [`${prefix}_CONDITIONAL_CREATE`]: "oss-forbid-overwrite" });
+    const config = loadNodeConfig({ ...minimal, ...s3("MEMORY_S3"), ...s3("FILES_S3") });
+    expect(config.blobs.files).toMatchObject({ conditionalCreate: "oss-forbid-overwrite" });
+    expect(config.blobs.memory).toMatchObject({ conditionalCreate: "oss-forbid-overwrite" });
+    expect(loadNodeConfig({ ...minimal, ...s3("FILES_S3"), FILES_S3_CONDITIONAL_CREATE: undefined as unknown as string }).blobs.files)
+      .not.toHaveProperty("conditionalCreate");
+    expect(() => loadNodeConfig({ ...minimal, ...s3("FILES_S3"), FILES_S3_CONDITIONAL_CREATE: "sometimes" }))
+      .toThrow(/FILES_S3_CONDITIONAL_CREATE/);
+  });
+
+  it("requires shared S3 blobs when checkpoint_restore is selected and parses its safe-point interval", () => {
+    const workspace = { OMA_WORKSPACE_STRATEGY: "checkpoint_restore" };
+    expect(() => loadNodeConfig({ ...minimal, ...workspace })).toThrow(/FILES_S3.*checkpoint_restore/i);
+    expect(() => loadNodeConfig({ ...minimal, ...workspace, OMA_WORKSPACE_CHECKPOINT_INTERVAL_SEC: "0" }))
+      .toThrow(/OMA_WORKSPACE_CHECKPOINT_INTERVAL_SEC/);
+    expect(() => loadNodeConfig({ ...minimal, OMA_WORKSPACE_STRATEGY: "durable_mount" })).toThrow(/OMA_WORKSPACE_STRATEGY/);
+    const configured = loadNodeConfig({ ...minimal, ...workspace, OMA_WORKSPACE_CHECKPOINT_INTERVAL_SEC: "45",
+      FILES_S3_ENDPOINT: "https://oss.example", FILES_S3_BUCKET: "files",
+      FILES_S3_ACCESS_KEY: "test-key", FILES_S3_SECRET_KEY: "test-secret" });
+    expect(configured.workspace).toEqual({ strategy: "checkpoint_restore", checkpointIntervalMs: 45_000 });
   });
 
   it("parses the string-encoded flags and numbers exactly as the assembly did", () => {

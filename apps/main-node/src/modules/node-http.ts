@@ -25,7 +25,13 @@ import { createNodeOpenAIAgentsRuntime } from "../openai-managed-runtime.js";
 
 import { requestMetrics, tracerMiddleware } from "@open-managed-agents/observability";
 
-import { toFileRecord } from "@open-managed-agents/files-store";
+import {
+  toFileRecord,
+  decodeOutputId,
+  isSafeOutputFilename,
+  unifiedPageErrorMessage,
+  unifiedPageHttpBody,
+} from "@open-managed-agents/files-store";
 
 import { listAuthProviders } from "@open-managed-agents/shared";
 
@@ -45,15 +51,28 @@ import { OmaVaultResolver } from "@open-managed-agents/oma-cap-adapter";
 import { NodeSessionRouter } from "../lib/node-session-router.js";
 import { configureFeishuAgentTools, sqlSessionMetadataReader } from "../lib/feishu-agent-tools.js";
 import { nodeOutputsAdapter } from "../lib/node-outputs-adapter.js";
+import { createFsSessionOutputSource } from "../lib/fs-session-output-source.js";
 
 import { createAuthMiddleware as buildAuthMw, type ApiKeyResolution } from "@open-managed-agents/auth";
 import { ensureTenantSqlite } from "@open-managed-agents/auth-config";
 
-import { relative } from "node:path";
+import { join, relative } from "node:path";
+import { readFileSync } from "node:fs";
+import {
+  BRANDING_PATH,
+  brandIndexHtml,
+  loadConsoleBranding,
+  safeBrandingFile,
+  staticRoot,
+} from "../lib/console-branding.js";
 
 import { buildNodeSkillsRoutes } from "../lib/node-skills-routes.js";
+import { buildSkillSourcesRoutes, createSourceFetcher } from "../lib/skill-sources.js";
+import { SqlKvStore } from "@open-managed-agents/kv-store/adapters/sql";
 
+import { buildNodeHttpInferenceProxyRoutes } from "../lib/http-inference-proxy.js";
 import { buildNodeHttpMcpProxyRoutes } from "../lib/http-mcp-proxy.js";
+import { createNodeAccessLossRuntime } from "../lib/mcp-access-loss.js";
 
 import { Disposables } from "../lifecycle.js";
 
@@ -87,6 +106,7 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     memoryBlobDescription,
     memoryService,
     outputsRoot,
+    sessionOutputs,
     filesBlob,
     filesBlobDescription,
     newEventLog,
@@ -94,6 +114,7 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     realtimeDescription,
     sessionRegistry,
     resolveNodeMcpProxyTarget,
+    resolveNodeInferenceUpstream,
     managedRuntimeRunner,
     managedRuntimeReaders,
     managedSessionRuntimeStream,
@@ -173,17 +194,22 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     }),
   );
 
+  const signInMethods = auth?.signInMethods;
   app.get("/auth-info", (c) =>
     c.json({
       providers: authDisabled
         ? []
         : listAuthProviders({
             emailOtp: config.auth.requireEmailVerify,
+            emailPassword: signInMethods?.emailPassword ?? true,
             googleClientId: config.auth.google.clientId,
             googleClientSecret: config.auth.google.clientSecret,
             githubClientId: config.auth.github.clientId,
             githubClientSecret: config.auth.github.clientSecret,
           }),
+      // Deployment-configured OpenID Connect providers: [{ id, name }].
+      oidc: authDisabled ? [] : signInMethods?.oidc ?? [],
+      email_password: !authDisabled && (signInMethods?.emailPassword ?? true),
       turnstile_site_key: null,
     }),
   );
@@ -363,7 +389,7 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     outputs: {
       workspaceId: (context) =>
         (context.var as { tenant_id: string }).tenant_id,
-      store: nodeOutputsAdapter(outputsRoot),
+      store: sessionOutputs,
     },
   }));
   v1.route("/oma/sessions", buildSessionRoutes({
@@ -385,6 +411,10 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
   }));
   v1.route("/oma/mcp-proxy", buildNodeHttpMcpProxyRoutes({
     resolveTarget: resolveNodeMcpProxyTarget,
+    accessLoss: await createNodeAccessLossRuntime(sql),
+  }));
+  v1.route("/oma/inference-proxy", buildNodeHttpInferenceProxyRoutes({
+    resolveUpstream: resolveNodeInferenceUpstream,
   }));
   v1.route("/vaults", managedVaultsRoutes);
   v1.route("/vaults", managedCredentialsRoutes);
@@ -478,6 +508,17 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
 
   // OMA-only stubs used by the self-hosted console.
   v1.route("/oma/skills", buildNodeSkillsRoutes({ db: drizzleDb, blobs: filesBlob }));
+  v1.route("/oma/skill-sources", buildSkillSourcesRoutes({
+    fetcher: createSourceFetcher({ allowHosts: config.skillSources.allowHosts }),
+    kvFor: (tenantId) => new SqlKvStore({ db: drizzleDb, tenantId }),
+    skillsFor: (tenantId) => {
+      const managedApp = managedPlatform.app({ workspaceId: tenantId });
+      return {
+        skills: managedApp.port(managedAgentsPortTokens.skills),
+        versions: managedApp.port(managedAgentsPortTokens.skillVersions),
+      };
+    },
+  }));
   v1.get("/oma/runtimes", (c) => c.json({ data: [] }));
   v1.get("/oma/stats", async (c) => {
     const tenantId = c.get("tenant_id");
@@ -713,6 +754,24 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     let requested = limitParam ? parseInt(limitParam, 10) : 100;
     if (isNaN(requested) || requested < 1) requested = 100;
     if (requested > 1000) requested = 1000;
+    if (scopeId) {
+      const page = await filesService.listUnifiedPage({
+        tenantId: t,
+        scopeId,
+        limit: requested,
+        order: c.req.query("order") === "asc" ? "asc" : "desc",
+        cursor: c.req.query("cursor"),
+        beforeId: c.req.query("before_id"),
+        afterId: c.req.query("after_id"),
+        outputs: createFsSessionOutputSource(outputsRoot),
+      });
+      if (!page.ok) return c.json({ error: unifiedPageErrorMessage(page.error) }, 400);
+      return c.json(unifiedPageHttpBody(page));
+    }
+    // Unscoped lists stay on the pre-existing Node contract: one page,
+    // `has_more: false`, and `before_id` / `after_id` / `order` / `cursor`
+    // are ignored. Cloudflare's unscoped route still honors those params;
+    // do not "align" this branch without a client that pages it.
     const rows = await filesService.list({
       tenantId: t,
       sessionId: scopeId,
@@ -723,6 +782,17 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
   v1.get("/oma/files/:id/content", async (c) => {
     const id = c.req.param("id");
     const t = c.var.tenant_id;
+    const decoded = decodeOutputId(id);
+    if (decoded) {
+      if (!isSafeOutputFilename(decoded.filename)) {
+        return c.json({ error: "File not found" }, 404);
+      }
+      const obj = await sessionOutputs.read(t, decoded.sessionId, decoded.filename);
+      if (!obj) return c.json({ error: "File content not found" }, 404);
+      return new Response(obj.body, {
+        headers: { "Content-Type": obj.contentType },
+      });
+    }
     const row = await filesService.get({ tenantId: t, fileId: id });
     if (!row) return c.json({ error: "File not found" }, 404);
     if (!row.downloadable) return c.json({ error: "This file is not downloadable" }, 403);
@@ -735,6 +805,26 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
   v1.get("/oma/files/:id", async (c) => {
     const id = c.req.param("id");
     const t = c.var.tenant_id;
+    const decoded = decodeOutputId(id);
+    if (decoded) {
+      if (!isSafeOutputFilename(decoded.filename)) {
+        return c.json({ error: "File not found" }, 404);
+      }
+      const listed = await sessionOutputs.list(t, decoded.sessionId);
+      const hit = listed?.find((entry) => entry.filename === decoded.filename);
+      if (!hit) return c.json({ error: "File not found" }, 404);
+      return c.json({
+        id,
+        type: "file",
+        filename: hit.filename,
+        media_type: hit.media_type,
+        size_bytes: hit.size_bytes,
+        created_at: hit.uploaded_at,
+        scope_id: decoded.sessionId,
+        scope: { type: "session", id: decoded.sessionId },
+        downloadable: true,
+      });
+    }
     const row = await filesService.get({ tenantId: t, fileId: id });
     if (!row) return c.json({ error: "File not found" }, 404);
     return c.json(toFileRecord(row));
@@ -873,6 +963,27 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
   });
   void _capResolver;
 
+  // ── Console branding (optional) ──
+  // Served whether or not this process serves the console, so a console on
+  // another origin (or the Vite dev server's proxy) can read it too.
+  const brandingDir = config.http.brandingDir;
+  const branding = brandingDir ? loadConsoleBranding(brandingDir) : null;
+  if (brandingDir && branding) {
+    const brandingRoot = staticRoot(brandingDir);
+    app.get(`${BRANDING_PATH}/branding.json`, (c) =>
+      c.json(branding, 200, { "cache-control": "no-cache" }),
+    );
+    app.get(`${BRANDING_PATH}/*`, async (c, next) => {
+      const name = c.req.path.slice(BRANDING_PATH.length + 1);
+      if (!safeBrandingFile(name)) return c.json({ error: "not found" }, 404);
+      return serveStatic({
+        root: brandingRoot,
+        rewriteRequestPath: (path) => path.slice(BRANDING_PATH.length),
+      })(c, next);
+    });
+    logger.info({ op: "main-node.console_branding", dir: brandingDir, product_name: branding.product_name }, "console branding served");
+  }
+
   // ── Console UI (optional) ──
   const consoleDir = config.http.consoleDir;
   if (consoleDir) {
@@ -880,6 +991,16 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     const rootRel = consoleDir.startsWith("/")
       ? relative(cwd, consoleDir)
       : consoleDir;
+    // With branding, index.html carries the title, favicon, and stylesheet
+    // so the first paint is already branded.
+    let brandedIndex: string | null = null;
+    const indexHtml = branding
+      ? () => (brandedIndex ??= brandIndexHtml(readFileSync(join(consoleDir, "index.html"), "utf8"), branding))
+      : null;
+    if (indexHtml) {
+      app.get("/", (c) => c.html(indexHtml()));
+      app.get("/index.html", (c) => c.html(indexHtml()));
+    }
     app.use("/*", serveStatic({ root: rootRel }));
     // SPA fallback for client-side routes ONLY. Never serve index.html for
     // API/auth/health paths — a missing /v1/* handler used to fall through
@@ -892,10 +1013,12 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
         p.startsWith("/v1/") ||
         p.startsWith("/auth") ||
         p.startsWith("/linear") ||
-        p.startsWith("/github")
+        p.startsWith("/github") ||
+        p.startsWith(BRANDING_PATH)
       ) {
         return next();
       }
+      if (indexHtml) return c.html(indexHtml());
       return serveStatic({ root: rootRel, path: "index.html" })(c, next);
     });
     logger.info({ op: "main-node.console_ui", dir: consoleDir, cwd_rel: rootRel }, "console UI served");

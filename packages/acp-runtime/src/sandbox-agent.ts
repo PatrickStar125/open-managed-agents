@@ -1,10 +1,16 @@
 import {
+  MODEL_PROVIDER_SECRET_ENV_KEYS,
+  projectHostedInferenceEnv,
+} from "@open-managed-agents/inference-proxy";
+
+import {
   ACP_NATIVE_STATE_PROFILES,
   bindAcpAgentState,
   type AcpAgentStateBinding,
   type AcpNativeStateAdapterId,
   type AcpStatefulAgentSpec,
 } from "./native-state.js";
+import type { InferenceConfigFile } from "./inference/types.js";
 
 /**
  * The small amount of per-agent knowledge needed before an ACP child starts.
@@ -113,9 +119,18 @@ export interface ManagedMcpProxyCapability {
   sessionsToken: string;
 }
 
+export type ManagedHostedInferenceCapability = ManagedMcpProxyCapability;
+
 /** Decode only the official self-hosted Work secret fields needed by an ACP
  * child. Invalid or absent input is a capability miss, never a reason to fall
  * back to the original upstream MCP URL. */
+export function managedHostedInferenceFromWorkEnvironment(input: {
+  ANTHROPIC_BASE_URL?: string;
+  ANTHROPIC_WORK_SECRET?: string;
+}): ManagedHostedInferenceCapability | null {
+  return managedMcpProxyFromWorkEnvironment(input);
+}
+
 export function managedMcpProxyFromWorkEnvironment(input: {
   ANTHROPIC_BASE_URL?: string;
   ANTHROPIC_WORK_SECRET?: string;
@@ -162,6 +177,49 @@ export function managedMcpProxyFromWorkEnvironment(input: {
  * an upstream credential.  It remains in an Authorization header so it cannot
  * leak through URL logs, history, redirects, or checkpoint filenames.
  */
+/** @deprecated Prefer {@link projectHostedInferenceForAcpAgent} with an injected adapter registry. */
+export function projectAcpSandboxHostedInferenceEnv(input: {
+  sessionId: string;
+  gatewayBaseUrl?: string;
+  sessionsToken?: string;
+  env: Record<string, string | undefined>;
+  enableProxy?: boolean;
+}): Record<string, string | undefined> {
+  if (
+    input.enableProxy === false
+    || input.sessionId.length === 0
+    || !input.sessionsToken
+    || !input.gatewayBaseUrl
+  ) {
+    return { ...input.env };
+  }
+  const gateway = new URL(input.gatewayBaseUrl);
+  if (gateway.protocol !== "http:" && gateway.protocol !== "https:") {
+    throw new Error("ACP sandbox inference proxy gateway must use HTTP or HTTPS");
+  }
+  const next = { ...input.env };
+  for (const key of MODEL_PROVIDER_SECRET_ENV_KEYS) {
+    delete next[key];
+  }
+  delete next.OPENAI_BASE_URL;
+  return {
+    ...next,
+    ...projectHostedInferenceEnv(input.sessionId, {
+      gatewayBaseUrl: input.gatewayBaseUrl,
+      sessionsToken: input.sessionsToken,
+    }),
+  };
+}
+
+export async function materializeHostedInferenceConfigFiles(
+  sandbox: AcpSandboxAgentStatePort,
+  files: readonly InferenceConfigFile[],
+): Promise<void> {
+  for (const file of files) {
+    await sandbox.writeFile(file.path, file.content);
+  }
+}
+
 export function projectAcpSandboxMcpServers(input: {
   sessionId: string;
   gatewayBaseUrl?: string;

@@ -59,6 +59,7 @@ interface RunnerConstructor {
       workspaceId: string;
       session: Session;
       environment: Environment;
+      signal?: AbortSignal;
     }): Promise<SandboxExecutor>;
     prepareSandbox?(input: {
       workspaceId: string;
@@ -66,6 +67,7 @@ interface RunnerConstructor {
       environment: Environment;
       sandbox: SandboxExecutor;
       runtimeGeneration: string;
+      signal?: AbortSignal;
     }): Promise<void>;
     synchronizeSandbox?(input: {
       workspaceId: string;
@@ -433,92 +435,94 @@ describe("DefaultNodeManagedSessionRunner", () => {
         id: "event_runtime_02",
         type: "agent.message",
         content: [{ type: "text", text: "Hello" }],
-        processed_at: "2026-08-26T02:00:00.000Z",
+        processed_at: "2026-08-26T02:00:00.001Z",
       },
       {
         id: "event_runtime_03",
         type: "session.status_idle",
         stop_reason: { type: "end_turn" },
-        processed_at: "2026-08-26T02:00:00.000Z",
+        processed_at: "2026-08-26T02:00:00.002Z",
       },
     ]);
     expect(lifecycle).toEqual(["run", "dispose", "synchronize", "idle", "afterExecution", "publicationReported"]);
   });
 
-  it("projects a terminal session error before returning a harness failure", async () => {
+  async function failingHarnessTurn(run: (context: { runtime: { broadcast(event: unknown): void } }) => Promise<void>) {
     const modulePath = "../src/lib/node-managed-session-runner.ts";
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
-    const sandbox = {} as SandboxExecutor;
     let nextId = 0;
+    let runs = 0;
     const runner = new runnerModule.DefaultNodeManagedSessionRunner({
       outcomes: { evaluate: async () => { throw new Error("unexpected outcome evaluation"); } },
       confirmedTools: { execute: async () => { throw new Error("unexpected confirmed tool execution"); } },
-      buildSandbox: async () => sandbox,
+      buildSandbox: async () => ({}) as SandboxExecutor,
       buildModel: async () => ({}),
       buildTools: async () => ({}),
-      buildHarness: () => ({
-        run: async () => { throw new Error("model unavailable"); },
-      }),
+      buildHarness: () => ({ run: async (context) => { runs += 1; await run(context as never); } }),
       buildHarnessContext: async (input) => input,
       clock: { now: () => new Date("2026-08-26T03:00:00.000Z") },
       ids: { nextEventId: () => `event_error_0${++nextId}` },
-    });
-    await runner.start({
-      workspaceId: "workspace_01",
-      sessionId: session.id,
-      session,
-      environment,
-      initialEvents: [],
-    });
-    const output: unknown[] = [];
+      harnessRetry: { attempts: 3, delayMs: () => 0 },
+    } as never);
+    await runner.start({ workspaceId: "workspace_01", sessionId: session.id, session, environment, initialEvents: [] });
+    const output: Array<Record<string, unknown>> = [];
     const event: NodeManagedSessionRunnerAcceptInput["events"][number] = {
-      id: "event_user_02",
-      type: "user.message",
-      content: [{ type: "text", text: "Retry" }],
-      processedAt: "2026-08-26T02:30:00.000Z",
+      id: "event_user_02", type: "user.message",
+      content: [{ type: "text", text: "Retry" }], processedAt: "2026-08-26T02:30:00.000Z",
     };
+    const result = await runner.accept({
+      workspaceId: "workspace_01", sessionId: session.id, session, environment, initialEvents: [],
+      events: [event], historyEvents: [event],
+      output: async (frame) => { output.push(frame as Record<string, unknown>); },
+    }).then(() => undefined, (error: unknown) => error);
+    const summary = output.map((frame) => frame.type === "session.error"
+      ? `error:${(frame.error as { retry_status: string }).retry_status}`
+      : frame.type === "session.status_idle"
+        ? `idle:${(frame.stop_reason as { type: string }).type}`
+        : String(frame.type));
+    return { result, runs, summary };
+  }
 
-    await expect(
-      runner.accept({
-        workspaceId: "workspace_01",
-        sessionId: session.id,
-        session,
-        environment,
-        initialEvents: [],
-        events: [event],
-        historyEvents: [event],
-        output: async (frame) => { output.push(frame); },
-      }),
-    ).rejects.toThrow("model unavailable");
+  it("reports a failed turn as exhausted without retry once the agent produced side effects", async () => {
+    const { result, runs, summary } = await failingHarnessTurn(async ({ runtime }) => {
+      runtime.broadcast({ type: "agent.tool_use", id: "tool_01", name: "bash", input: { command: "touch x" } });
+      throw new Error("model unavailable");
+    });
+    expect((result as Error).message).toBe("model unavailable");
+    expect(runs).toBe(1);
+    expect(summary).toEqual(["session.status_running", "agent.tool_use", "error:exhausted", "idle:retries_exhausted"]);
+  });
 
-    expect(output).toEqual([
-      {
-        id: "event_error_01",
-        type: "session.status_running",
-        processed_at: "2026-08-26T03:00:00.000Z",
-      },
-      {
-        id: "event_error_02",
-        type: "session.error",
-        error: {
-          type: "unknown_error",
-          message: "model unavailable",
-          retry_status: "terminal",
-        },
-        processed_at: "2026-08-26T03:00:00.000Z",
-      },
-      {
-        id: "event_error_03",
-        type: "session.status_idle",
-        stop_reason: { type: "end_turn" },
-        processed_at: "2026-08-26T03:00:00.000Z",
-      },
+  it("retries a harness failure in place while the turn has no agent side effects", async () => {
+    let failures = 2;
+    const { result, runs, summary } = await failingHarnessTurn(async () => {
+      if (failures-- > 0) throw new Error("No output generated. Check the stream for errors.");
+    });
+    expect(result).toBeUndefined();
+    expect(runs).toBe(3);
+    expect(summary).toEqual([
+      "session.status_running",
+      "error:retrying", "session.status_rescheduled",
+      "error:retrying", "session.status_rescheduled",
+      "idle:end_turn",
     ]);
   });
 
-  it("projects a terminal error and idle state when fenced final collection fails", async () => {
+  it("reports exhausted after the side-effect-free retries run out", async () => {
+    const { result, runs, summary } = await failingHarnessTurn(async () => { throw new Error("model unavailable"); });
+    expect((result as Error).message).toBe("model unavailable");
+    expect(runs).toBe(3);
+    expect(summary).toEqual([
+      "session.status_running",
+      "error:retrying", "session.status_rescheduled",
+      "error:retrying", "session.status_rescheduled",
+      "error:exhausted", "idle:retries_exhausted",
+    ]);
+  });
+
+  it("reports a failed fenced final collection as exhausted and goes idle", async () => {
     const modulePath = "../src/lib/node-managed-session-runner.ts";
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
@@ -583,15 +587,15 @@ describe("DefaultNodeManagedSessionRunner", () => {
         error: {
           type: "unknown_error",
           message: "final collect failed",
-          retry_status: "terminal",
+          retry_status: "exhausted",
         },
-        processed_at: "2026-08-26T03:15:00.000Z",
+        processed_at: "2026-08-26T03:15:00.001Z",
       },
       {
         id: "event_collect_failure_03",
         type: "session.status_idle",
-        stop_reason: { type: "end_turn" },
-        processed_at: "2026-08-26T03:15:00.000Z",
+        stop_reason: { type: "retries_exhausted" },
+        processed_at: "2026-08-26T03:15:00.002Z",
       },
     ]);
   });
@@ -679,7 +683,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
         id: "event_resume_02",
         type: "session.status_idle",
         stop_reason: { type: "end_turn" },
-        processed_at: "2026-08-26T03:30:00.000Z",
+        processed_at: "2026-08-26T03:30:00.001Z",
       },
     ]);
   });
@@ -795,13 +799,13 @@ describe("DefaultNodeManagedSessionRunner", () => {
         tool_use_id: toolUse.id,
         content: verdict.expectedContent,
         is_error: verdict.expectedIsError,
-        processed_at: "2026-08-26T03:45:00.000Z",
+        processed_at: "2026-08-26T03:45:00.001Z",
       },
       {
         id: "event_confirmation_03",
         type: "session.status_idle",
         stop_reason: { type: "end_turn" },
-        processed_at: "2026-08-26T03:45:00.000Z",
+        processed_at: "2026-08-26T03:45:00.002Z",
       },
     ]);
   });
@@ -899,14 +903,14 @@ describe("DefaultNodeManagedSessionRunner", () => {
         type: "span.outcome_evaluation_start",
         iteration: 0,
         outcome_id: "outc_01",
-        processed_at: "2026-08-26T05:30:00.000Z",
+        processed_at: "2026-08-26T05:30:00.001Z",
       },
       {
         id: "event_outcome_03",
         type: "span.outcome_evaluation_ongoing",
         iteration: 0,
         outcome_id: "outc_01",
-        processed_at: "2026-08-26T05:30:00.000Z",
+        processed_at: "2026-08-26T05:30:00.002Z",
       },
       {
         id: "event_outcome_04",
@@ -922,13 +926,13 @@ describe("DefaultNodeManagedSessionRunner", () => {
           input_tokens: 30,
           output_tokens: 4,
         },
-        processed_at: "2026-08-26T05:30:00.000Z",
+        processed_at: "2026-08-26T05:30:00.003Z",
       },
       {
         id: "event_outcome_05",
         type: "session.status_idle",
         stop_reason: { type: "end_turn" },
-        processed_at: "2026-08-26T05:30:00.000Z",
+        processed_at: "2026-08-26T05:30:00.004Z",
       },
     ]);
   });
@@ -1124,9 +1128,51 @@ describe("DefaultNodeManagedSessionRunner", () => {
         id: "event_interrupt_02",
         type: "session.status_idle",
         stop_reason: { type: "end_turn" },
-        processed_at: "2026-08-26T04:00:00.000Z",
+        processed_at: "2026-08-26T04:00:00.001Z",
       },
     ]);
+  });
+
+  it("does not report a failed turn when the execution lease was lost (another owner takes over)", async () => {
+    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const runnerModule = await import(/* @vite-ignore */ modulePath) as {
+      DefaultNodeManagedSessionRunner: RunnerConstructor;
+    };
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let nextId = 0;
+    const runner = new runnerModule.DefaultNodeManagedSessionRunner({
+      outcomes: { evaluate: async () => { throw new Error("unexpected outcome evaluation"); } },
+      confirmedTools: { execute: async () => { throw new Error("unexpected confirmed tool execution"); } },
+      buildSandbox: async () => ({}) as SandboxExecutor,
+      buildModel: async () => ({}),
+      buildTools: async () => ({}),
+      buildHarness: () => ({
+        run: async (context) => {
+          const signal = (context as { runtime: { abortSignal?: AbortSignal } }).runtime.abortSignal!;
+          markStarted?.();
+          // A model request rejects when its signal aborts.
+          await new Promise<void>((_, reject) => signal.addEventListener("abort",
+            () => reject(new Error("This operation was aborted")), { once: true }));
+        },
+      }),
+      buildHarnessContext: async (input) => input,
+      clock: { now: () => new Date("2026-08-26T04:00:00.000Z") },
+      ids: { nextEventId: () => `event_lease_0${++nextId}` },
+    });
+    await runner.start({ workspaceId: "workspace_01", sessionId: session.id, session, environment, initialEvents: [] });
+    const output: Array<{ type: string }> = [];
+    const message: NodeManagedSessionRunnerAcceptInput["events"][number] = {
+      id: "event_user_lease", type: "user.message",
+      content: [{ type: "text", text: "Long task" }], processedAt: "2026-08-26T03:30:00.000Z",
+    };
+    const turn = runner.accept({ workspaceId: "workspace_01", sessionId: session.id, session, environment,
+      initialEvents: [], events: [message], historyEvents: [message],
+      output: async (frame) => { output.push(frame as { type: string }); } });
+    await started;
+    runner.cancel({ workspaceId: "workspace_01", sessionId: session.id, reason: "lease_lost" });
+    await expect(turn).rejects.toThrow("aborted");
+    expect(output.map((frame) => frame.type)).toEqual(["session.status_running"]);
   });
 
   it("owns and destroys sandboxes by workspace and session scope", async () => {
@@ -1177,5 +1223,85 @@ describe("DefaultNodeManagedSessionRunner", () => {
       reason: "deleted",
     });
     expect(destroyed).toEqual(["workspace_a", "workspace_b"]);
+  });
+
+  it("aborts sandbox acquisition when startup is cancelled and destroys a late sandbox", async () => {
+    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const runnerModule = await import(/* @vite-ignore */ modulePath) as {
+      DefaultNodeManagedSessionRunner: RunnerConstructor;
+    };
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let finishCreate: ((sandbox: SandboxExecutor) => void) | undefined;
+    let destroyed = false;
+    const runner = new runnerModule.DefaultNodeManagedSessionRunner({
+      outcomes: { evaluate: async () => { throw new Error("unexpected outcome evaluation"); } },
+      confirmedTools: { execute: async () => { throw new Error("unexpected confirmed tool execution"); } },
+      buildSandbox: () => {
+        markStarted?.();
+        return new Promise<SandboxExecutor>((resolve) => { finishCreate = resolve; });
+      },
+      buildModel: async () => ({}),
+      buildTools: async () => ({}),
+      buildHarness: () => ({ run: async () => {} }),
+      buildHarnessContext: async (input) => input,
+      clock: { now: () => new Date("2026-08-26T04:00:00.000Z") },
+      ids: { nextEventId: () => "event_cancel_start" },
+    });
+    const controller = new AbortController();
+    const pending = runner.start({
+      workspaceId: "workspace_01",
+      sessionId: session.id,
+      session,
+      environment,
+      initialEvents: [],
+      signal: controller.signal,
+    });
+    await started;
+    const startedAt = Date.now();
+    controller.abort(Object.assign(new Error("interrupt_requested"), { name: "AbortError" }));
+    await expect(pending).rejects.toThrow("interrupt_requested");
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    finishCreate?.({
+      destroy: async () => { destroyed = true; },
+    } as SandboxExecutor);
+    await vi.waitFor(() => { expect(destroyed).toBe(true); });
+  });
+
+  it("cancels an in-flight sandbox acquisition through runner.cancel", async () => {
+    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const runnerModule = await import(/* @vite-ignore */ modulePath) as {
+      DefaultNodeManagedSessionRunner: RunnerConstructor;
+    };
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const runner = new runnerModule.DefaultNodeManagedSessionRunner({
+      outcomes: { evaluate: async () => { throw new Error("unexpected outcome evaluation"); } },
+      confirmedTools: { execute: async () => { throw new Error("unexpected confirmed tool execution"); } },
+      buildSandbox: ({ signal }) => {
+        markStarted?.();
+        return new Promise<SandboxExecutor>((_resolve, reject) => {
+          const fail = () => reject(Object.assign(new Error("session_stopped"), { name: "AbortError" }));
+          if (signal?.aborted) { fail(); return; }
+          signal?.addEventListener("abort", fail, { once: true });
+        });
+      },
+      buildModel: async () => ({}),
+      buildTools: async () => ({}),
+      buildHarness: () => ({ run: async () => {} }),
+      buildHarnessContext: async (input) => input,
+      clock: { now: () => new Date("2026-08-26T04:00:00.000Z") },
+      ids: { nextEventId: () => "event_cancel_runner" },
+    });
+    const pending = runner.start({
+      workspaceId: "workspace_01",
+      sessionId: session.id,
+      session,
+      environment,
+      initialEvents: [],
+    });
+    await started;
+    runner.cancel({ workspaceId: "workspace_01", sessionId: session.id, reason: "session_stopped" });
+    await expect(pending).rejects.toThrow("session_stopped");
   });
 });

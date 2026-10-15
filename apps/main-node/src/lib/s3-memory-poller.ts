@@ -66,7 +66,18 @@ export interface S3MemoryPollerOptions {
     accessKey: string;
     secretKey: string;
     region: string;
+    prefix?: string;
+    forcePathStyle?: boolean;
+    requestChecksumCalculation?: "WHEN_REQUIRED" | "WHEN_SUPPORTED";
   };
+}
+
+export function memoryObjectPrefix(storeId: string, namespace = ""): string {
+  return `${namespace}${storeId}/`;
+}
+
+export function memoryObjectPath(key: string, prefix: string): string | null {
+  return key.startsWith(prefix) ? "/" + key.slice(prefix.length) : null;
 }
 
 const LEASE_TTL_MS = 60_000;
@@ -84,7 +95,8 @@ export async function startS3MemoryPoller(
   const client = new sdk.S3Client({
     endpoint: opts.s3.endpoint,
     region: opts.s3.region,
-    forcePathStyle: true,
+    forcePathStyle: opts.s3.forcePathStyle ?? true,
+    ...(opts.s3.requestChecksumCalculation ? { requestChecksumCalculation: opts.s3.requestChecksumCalculation } : {}),
     credentials: {
       accessKeyId: opts.s3.accessKey,
       secretAccessKey: opts.s3.secretKey,
@@ -208,7 +220,7 @@ async function pollStore(
   storeId: string,
   lastSeenMs: number,
 ): Promise<void> {
-  const prefix = `${storeId}/`;
+  const prefix = memoryObjectPrefix(storeId, opts.s3.prefix);
   let token: string | undefined = undefined;
   let highWater = lastSeenMs;
   do {
@@ -227,7 +239,8 @@ async function pollStore(
       if (obj.Key.endsWith(".meta.json")) continue;
       const lm = obj.LastModified instanceof Date ? obj.LastModified.getTime() : 0;
       if (lm <= lastSeenMs) continue;
-      const memoryPath = "/" + obj.Key.slice(prefix.length);
+      const memoryPath = memoryObjectPath(obj.Key, prefix);
+      if (memoryPath === null) continue;
       const get: PollerGetOutput = await client.send(
         new sdk.GetObjectCommand({ Bucket: opts.s3.bucket, Key: obj.Key }),
       );

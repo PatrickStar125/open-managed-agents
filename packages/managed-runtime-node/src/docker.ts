@@ -765,6 +765,8 @@ function parseDockerSupervisorEvent(line: string): HarnessSupervisorEvent {
         || typeof event.sessionId !== "string" || event.sessionId.length === 0
         || (event.turnId !== undefined
           && (typeof event.turnId !== "string" || event.turnId.length === 0))
+        || (event.requestId !== undefined
+          && (typeof event.requestId !== "string" || event.requestId.length === 0))
       ) {
         throw new Error("Harness supervisor checkpoint request is invalid");
       }
@@ -773,7 +775,13 @@ function parseDockerSupervisorEvent(line: string): HarnessSupervisorEvent {
         checkpointId: event.checkpointId,
         sessionId: event.sessionId,
         ...(event.turnId === undefined ? {} : { turnId: event.turnId }),
+        ...(event.requestId === undefined ? {} : { requestId: event.requestId }),
       };
+    case "checkpoint.committed":
+      if (typeof event.requestId !== "string" || event.requestId.length === 0) {
+        throw new Error("Harness supervisor checkpoint acknowledgement is invalid");
+      }
+      return { type: "checkpoint.committed", requestId: event.requestId };
     case "completed":
       if (!Number.isSafeInteger(event.exitCode)) {
         throw new Error("Harness supervisor completion exitCode must be an integer");

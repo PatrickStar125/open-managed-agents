@@ -8,7 +8,7 @@ import {
 } from "../../../test/fakes/scripted-language-model";
 
 describe("DefaultHarness model span lifecycle", () => {
-  it("closes a failed model call exactly once when AI SDK invokes error and step-finish callbacks", async () => {
+  it("closes a failed model call exactly once and fails the turn with the provider error", async () => {
     const scripted = createScriptedLanguageModel([
       streamStep(
         [{ type: "stream-start", warnings: [] }],
@@ -57,7 +57,9 @@ describe("DefaultHarness model span lifecycle", () => {
       runtime,
     } as unknown as HarnessContext;
 
-    await new DefaultHarness().run(context);
+    // A failed model call fails the turn with the provider's own error (e.g. a
+    // 429), instead of ending silently or as AI SDK's "No output generated".
+    await expect(new DefaultHarness().run(context)).rejects.toThrow("provider stream failed");
 
     const starts = events.filter(
       (event) => event.type === "span.model_request_start",

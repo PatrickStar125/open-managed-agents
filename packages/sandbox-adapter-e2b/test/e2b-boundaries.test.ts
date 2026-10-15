@@ -412,3 +412,39 @@ describe("E2BSandboxExecutor boundaries", () => {
     vi.doUnmock("e2b");
   });
 });
+
+describe("E2B sandbox readiness after create", () => {
+  // The previous test unmocks the optional SDK.
+  beforeEach(() => { vi.doMock("e2b", () => ({ Sandbox: { create: sdk.create, connect: sdk.connect } })); });
+
+  it("retries transient envd auth errors (Haven) until the sandbox accepts commands", async () => {
+    const sandbox = remote();
+    sandbox.commands.run
+      .mockRejectedValueOnce(new Error("[unauthenticated] invalid username: 'user'"))
+      .mockRejectedValueOnce(new Error("[unavailable] connection refused"))
+      .mockResolvedValue({ stdout: "", stderr: "", exitCode: 0 });
+    sdk.create.mockResolvedValueOnce(sandbox);
+    const executor = await createE2BSandbox({ apiKey: "k", readiness: { attempts: 5, delayMs: 0 } });
+    expect(executor).toBeDefined();
+    expect(sandbox.commands.run).toHaveBeenCalledTimes(3);
+    expect(sandbox.kill).not.toHaveBeenCalled();
+  });
+
+  it("kills the sandbox and fails on a non-transient probe error", async () => {
+    const sandbox = remote();
+    sandbox.commands.run.mockRejectedValueOnce(new Error("template image pull failed"));
+    sdk.create.mockResolvedValueOnce(sandbox);
+    await expect(createE2BSandbox({ apiKey: "k", readiness: { attempts: 5, delayMs: 0 } })).rejects.toThrow(/image pull/);
+    expect(sandbox.commands.run).toHaveBeenCalledTimes(1);
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+  });
+
+  it("kills the sandbox when it never becomes ready", async () => {
+    const sandbox = remote();
+    sandbox.commands.run.mockRejectedValue(new Error("[unauthenticated] invalid username: 'user'"));
+    sdk.create.mockResolvedValueOnce(sandbox);
+    await expect(createE2BSandbox({ apiKey: "k", readiness: { attempts: 3, delayMs: 0 } })).rejects.toThrow(/not ready/i);
+    expect(sandbox.commands.run).toHaveBeenCalledTimes(3);
+    expect(sandbox.kill).toHaveBeenCalledOnce();
+  });
+});

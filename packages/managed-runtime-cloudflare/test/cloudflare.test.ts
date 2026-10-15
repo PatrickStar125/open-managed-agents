@@ -43,6 +43,7 @@ class FakeSandbox implements CloudflareManagedRuntimeSandbox {
   readonly revokeOutboundContext = vi.fn(async () => {});
   readonly sessionOutputMountCapabilities = () => ({ durability: "durable" as const });
   readonly mountSessionOutputs = vi.fn(async () => {});
+  readonly mountDurableWorkspace = vi.fn(async () => {});
 }
 
 const env = { MAIN_DB: {}, SANDBOX: {} } as unknown as Env;
@@ -217,6 +218,58 @@ describe("isolated Cloudflare managed runtime package", () => {
     await expect(collectOnly.outputs.capabilities({ workspaceId: "w", environmentId: "e", sessionId: "s", workId: "x" })).resolves.toEqual({ strategies: [{ strategy: "final_collect", durability: "durable" }] });
   });
 
+  it("requires explicit opt-in and real R2 mount configuration for workspace durable_mount", async () => {
+    const options = { createSandbox: () => new FakeSandbox(), workspaceDurableMount: true };
+    const missingCredentials = { ...env, WORKSPACE_BUCKET: {}, WORKSPACE_BUCKET_NAME: "workspace-bucket" } as unknown as Env;
+    expect(() => createCloudflareManagedRuntime(missingCredentials, options)).toThrow(/workspace.*R2/i);
+    expect(() => createCloudflareManagedRuntimeDriver(missingCredentials, options).descriptor()).toThrow(/workspace.*R2/i);
+    const configured = {
+      ...missingCredentials,
+      R2_ENDPOINT: "https://example.r2.cloudflarestorage.com",
+      R2_ACCESS_KEY_ID: "access", R2_SECRET_ACCESS_KEY: "secret",
+    } as never;
+    expect(createCloudflareManagedRuntimeDriver(configured, { createSandbox: options.createSandbox })
+      .descriptor().capabilities.workspace.strategies).toEqual(["checkpoint_restore"]);
+    expect(createCloudflareManagedRuntimeDriver(configured, options)
+      .descriptor().capabilities.workspace.strategies).toEqual(["checkpoint_restore", "durable_mount"]);
+  });
+
+  it("attaches a session-scoped workspace mount without taking a filesystem checkpoint", async () => {
+    const sandbox = new FakeSandbox();
+    const configured = {
+      ...env, WORKSPACE_BUCKET: {}, WORKSPACE_BUCKET_NAME: "workspace-bucket",
+      R2_ENDPOINT: "https://example.r2.cloudflarestorage.com",
+      R2_ACCESS_KEY_ID: "access", R2_SECRET_ACCESS_KEY: "secret",
+    } as never;
+    const runtime = createCloudflareManagedRuntime(configured, {
+      createSandbox: () => sandbox, workspaceDurableMount: true,
+    });
+    const scope = { workspaceId: "tenant", environmentId: "environment", sessionId: "session", workId: "work" };
+    const fence = { ...scope, ownerId: "owner", generation: 1, token: "fence", expiresAt: "2026-09-07T12:00:00.000Z" };
+    const signal = new AbortController().signal;
+    const binding = await runtime.workspace.materialize({
+      scope, fence, strategy: "durable_mount", activeCheckpoint: null, idempotencyKey: "workspace", signal,
+    });
+    const lease = await runtime.sandbox.acquire({
+      scope, fence,
+      plan: { workspaceStrategy: "durable_mount", outputStrategy: null, runtimeCheckpoint: null, driver: { type: "ama_worker", process: { command: "worker" } } },
+      workspace: binding, outputs: null, signal,
+    });
+    await runtime.workspace.attach({ scope, fence, strategy: "durable_mount", binding, sandbox: lease, signal });
+    expect(sandbox.mountDurableWorkspace).toHaveBeenCalledWith({ workspaceId: "tenant", sessionId: "session" });
+    const reference = await runtime.workspace.checkpoint({
+      scope, fence, strategy: "durable_mount", binding, sandbox: lease,
+      idempotencyKey: "publish-mount-reference", signal,
+    });
+    expect(reference.metadata).toEqual({
+      "openma.workspace.durable-mount.v1": "r2://workspace-bucket/openma-workspaces/tenant/session/",
+    });
+    expect(sandbox.checkpoint).not.toHaveBeenCalled();
+    sandbox.mountDurableWorkspace.mockRejectedValueOnce(new Error("R2 mount failed"));
+    await expect(runtime.workspace.attach({ scope, fence, strategy: "durable_mount", binding, sandbox: lease, signal }))
+      .rejects.toThrow("R2 mount failed");
+  });
+
   it("validates placement and preserves an explicit Session input materializer", async () => {
     const sessionInputs = {
       materialize: vi.fn(async () => {}),
@@ -237,6 +290,9 @@ describe("isolated Cloudflare managed runtime package", () => {
     const host = createCloudflareManagedRuntimeHost(env, { ownerId: "owner", createSandbox, leaseTtlMs: 1000, heartbeatIntervalMs: 200, runtimeCheckpoint, sessionInputs });
     expect(host).toMatchObject({ fences: expect.any(Object), orphans: expect.any(Object), host: expect.any(Object), orphanReconciler: expect.any(Object), sessionInputs });
     expect(createCloudflareManagedRuntimeHost(env, { ownerId: "owner-defaults", createSandbox })).toMatchObject({ host: expect.any(Object) });
+    expect(() => createCloudflareManagedRuntimeHost(env, {
+      ownerId: "owner-interval", createSandbox, checkpointIntervalMs: 0,
+    })).toThrow(/checkpointIntervalMs/);
 
     const client: Record<string, unknown> = { baseURL: "https://client" };
     client.withOptions = vi.fn(() => client);

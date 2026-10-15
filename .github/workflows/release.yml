@@ -80,6 +80,11 @@ jobs:
       - name: Storage integration tests
         run: pnpm test:integration:storage
 
+      # Same Litebox setup as CI. The two-owner MySQL test aborts the host
+      # process on Linux when /dev/kvm is not readable and writable.
+      - name: Enable KVM for Litebox
+        uses: ./.github/actions/enable-kvm
+
       - name: MySQL integration tests
         run: pnpm test:integration:mysql
 
@@ -111,6 +116,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Setup pnpm
         # No version pin — reads `packageManager` from root package.json.
@@ -124,6 +130,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
           registry-url: 'https://registry.npmjs.org'
+
+      # Refuses to publish when CHANGELOG does not cover pull requests merged
+      # since the previous @openma/<pkg>@* tag, or when the version and
+      # .changeset/pre.json disagree about the npm dist-tag. Does not bump,
+      # tag, or publish; `pnpm release` below is unchanged.
+      - name: Check release notes before publish
+        run: node scripts/release-check.mjs --publish
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

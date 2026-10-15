@@ -65,7 +65,7 @@ describe("official /v1 namespace", () => {
   });
 
   it("keeps every production caller off removed bare OMA aliases", () => {
-    const bareOmaPath = /\/v1\/(?:oauth|cap-cli|model_cards|models\/list|clawhub|api_keys|me|tenants|evals|cost_report|integrations|runtimes|stats|mcp-proxy|internal)(?=\/|[?'"`]|$)/u;
+    const bareOmaPath = /\/v1\/(?:oauth|cap-cli|model_cards|models\/list|clawhub|api_keys|me|tenants|evals|cost_report|integrations|runtimes|stats|mcp-proxy|inference-proxy|internal)(?=\/|[?'"`]|$)/u;
     for (const [path, source] of Object.entries(productionSources)) {
       expect(source, path).not.toMatch(bareOmaPath);
     }

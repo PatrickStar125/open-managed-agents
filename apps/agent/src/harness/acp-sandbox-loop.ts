@@ -20,12 +20,15 @@ import {
   hasRequiredAcpSandboxAgentState,
   managedMcpProxyFromWorkEnvironment,
   materializeAcpSandboxAgentState,
+  materializeHostedInferenceConfigFiles,
   prepareAcpSandboxAgent,
   projectAcpSandboxMcpServers,
   releaseAcpSandboxAgentState,
   restoreAcpSandboxAgentState,
   type AcpSandboxAgentPreparation,
 } from "@open-managed-agents/acp-runtime/sandbox-agent";
+import { InferenceEndpointsMissingError } from "@open-managed-agents/acp-runtime/inference-config";
+import { wireHostedInferenceForAcpLaunch } from "@open-managed-agents/harness-inference-adapters";
 import {
   buildAcpSemanticRecoveryPrompt,
   type AcpSemanticRecoveryReason,
@@ -143,6 +146,42 @@ export class AcpSandboxHarness implements HarnessInterface {
         });
         const managedMcpProxy = ctx.env.mcpProxy
           ?? managedMcpProxyFromWorkEnvironment(ctx.env);
+        const modelHandle = typeof ctx.agent.model === "string"
+          ? ctx.agent.model
+          : ctx.agent.model.id;
+        let launchEnv = preparation.launch.env;
+        const hostedInference = ctx.env.hostedInference;
+        if (hostedInference) {
+          const inferenceModel = hostedInference.model;
+          if (!inferenceModel?.providerId) {
+            throw new InferenceEndpointsMissingError();
+          }
+          const capability = {
+            gatewayBaseUrl: hostedInference.gatewayBaseUrl
+              ?? managedMcpProxy?.gatewayBaseUrl,
+            sessionsToken: hostedInference.sessionsToken
+              ?? managedMcpProxy?.sessionsToken,
+          };
+          if (!capability.gatewayBaseUrl || !capability.sessionsToken) {
+            throw new InferenceEndpointsMissingError();
+          }
+          const hosted = wireHostedInferenceForAcpLaunch({
+            sessionId: ctx.session_id,
+            gatewayBaseUrl: capability.gatewayBaseUrl,
+            sessionsToken: capability.sessionsToken,
+            env: preparation.launch.env,
+            agent: preparation.binding.agent,
+            nativePath: preparation.binding.nativePath,
+            model: {
+              wireModel: modelHandle,
+              providerId: inferenceModel.providerId,
+              baseUrl: inferenceModel.baseUrl,
+              protocolEndpoints: inferenceModel.protocolEndpoints,
+            },
+          });
+          await materializeHostedInferenceConfigFiles(runtime.sandbox, hosted.files);
+          launchEnv = hosted.env;
+        }
         const mcpServers = projectAcpSandboxMcpServers({
           sessionId: ctx.session_id,
           ...(managedMcpProxy === null ? {} : {
@@ -152,7 +191,10 @@ export class AcpSandboxHarness implements HarnessInterface {
           servers: ctx.agent.mcp_servers ?? [],
         });
         this.#session = await acpRuntime.start({
-          agent: preparation.launch,
+          agent: {
+            ...preparation.launch,
+            env: launchEnv,
+          },
           restart: config.restart
             ? {
                 mode: config.restart.mode,

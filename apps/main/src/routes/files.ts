@@ -1,9 +1,16 @@
 import { Hono } from "hono";
 import type { Env } from "@open-managed-agents/shared";
-import { generateFileId, fileR2Key, sessionOutputsPrefix } from "@open-managed-agents/shared";
-import { toFileRecord, FileNotFoundError } from "@open-managed-agents/files-store";
+import { generateFileId, fileR2Key, guessSessionOutputMime, sessionOutputsPrefix } from "@open-managed-agents/shared";
+import {
+  toFileRecord,
+  FileNotFoundError,
+  decodeOutputId,
+  unifiedPageErrorMessage,
+  unifiedPageHttpBody,
+} from "@open-managed-agents/files-store";
 import type { Services } from "@open-managed-agents/services";
 import { checkUploadFreq, checkUploadSize } from "../quotas";
+import { createR2SessionOutputSource } from "../lib/r2-session-output-source";
 
 const app = new Hono<{
   Bindings: Env;
@@ -19,52 +26,17 @@ const app = new Hono<{
 // file rows on the fly:
 //
 //   - LIST /v1/files?scope_id=<sessionId> includes both real D1-backed
-//     files AND R2 objects under the session-outputs prefix.
+//     files AND R2 objects under the session-outputs prefix. Pages walk
+//     D1 (created_at, id) then R2 filenames. `next_cursor` resumes across
+//     that boundary; `before_id` accepts either a file id or that cursor.
 //   - GET /v1/files/:id and /content recognize ids matching `out:<sessionId>:
 //     <base64url(filename)>` and read R2 directly with no D1 round-trip.
 //
 // Wire id format is opaque to the SDK; format is stable and self-describing
 // so we never need a backing index. base64url encoding so filenames with
 // special chars (spaces, slashes — though slashes shouldn't reach here)
-// don't break URL routing.
-
-function encodeOutputId(sessionId: string, filename: string): string {
-  // base64url; strip padding so the id stays URL-friendly
-  const b64 = btoa(filename).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return `out:${sessionId}:${b64}`;
-}
-
-function decodeOutputId(
-  id: string,
-): { sessionId: string; filename: string } | null {
-  if (!id.startsWith("out:")) return null;
-  const rest = id.slice(4);
-  const sep = rest.indexOf(":");
-  if (sep < 0) return null;
-  const sessionId = rest.slice(0, sep);
-  const b64 = rest.slice(sep + 1);
-  try {
-    const padded = b64.replace(/-/g, "+").replace(/_/g, "/")
-      + "===".slice((b64.length + 3) % 4);
-    return { sessionId, filename: atob(padded) };
-  } catch {
-    return null;
-  }
-}
-
-const OUTPUT_MIME_GUESS: Record<string, string> = {
-  pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-  gif: "image/gif", webp: "image/webp", txt: "text/plain", md: "text/markdown",
-  csv: "text/csv", json: "application/json", html: "text/html", htm: "text/html",
-  mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
-  mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
-  zip: "application/zip", tar: "application/x-tar", gz: "application/gzip",
-};
-
-function guessOutputMime(filename: string): string {
-  const ext = filename.toLowerCase().split(".").pop() || "";
-  return OUTPUT_MIME_GUESS[ext] || "application/octet-stream";
-}
+// don't break URL routing. The codec lives in files-store so Node and
+// Cloudflare mint the same ids.
 
 interface ApiFileRecord {
   id: string;
@@ -75,28 +47,6 @@ interface ApiFileRecord {
   created_at: string;
   scope?: { type: "session"; id: string };
   downloadable?: boolean;
-}
-
-async function listSessionOutputAsFiles(
-  bucket: R2Bucket,
-  tenantId: string,
-  sessionId: string,
-): Promise<ApiFileRecord[]> {
-  const prefix = sessionOutputsPrefix(tenantId, sessionId);
-  const list = await bucket.list({ prefix, limit: 1000 });
-  return list.objects.map((o: R2Object) => {
-    const filename = o.key.slice(prefix.length);
-    return {
-      id: encodeOutputId(sessionId, filename),
-      type: "file" as const,
-      filename,
-      media_type: o.httpMetadata?.contentType || guessOutputMime(filename),
-      size_bytes: o.size,
-      created_at: o.uploaded.toISOString(),
-      scope: { type: "session" as const, id: sessionId },
-      downloadable: true,
-    };
-  });
 }
 
 // POST /v1/files — upload file (multipart form or JSON body)
@@ -188,13 +138,33 @@ app.get("/", async (c) => {
   const t = c.get("tenant_id");
   const scopeId = c.req.query("scope_id");
   const limitParam = c.req.query("limit");
-  const beforeId = c.req.query("before_id"); // returns files with id < before_id
-  const afterId = c.req.query("after_id");   // returns files with id > after_id
+  const beforeId = c.req.query("before_id");
+  const afterId = c.req.query("after_id");
+  const cursor = c.req.query("cursor");
   const order = c.req.query("order") === "asc" ? "asc" : "desc";
 
   let requested = limitParam ? parseInt(limitParam, 10) : 100;
   if (isNaN(requested) || requested < 1) requested = 100;
   if (requested > 1000) requested = 1000;
+
+  // Session scope merges the files table with the R2 session-outputs
+  // prefix. `cursor` (also accepted as a `fcur1.` before_id) resumes
+  // across that boundary. Unscoped lists stay on the files table only.
+  if (scopeId) {
+    const bucket = c.env.FILES_BUCKET;
+    const page = await c.var.services.files.listUnifiedPage({
+      tenantId: t,
+      scopeId,
+      limit: requested,
+      order,
+      cursor,
+      beforeId,
+      afterId,
+      outputs: bucket ? createR2SessionOutputSource(bucket) : null,
+    });
+    if (!page.ok) return c.json({ error: unifiedPageErrorMessage(page.error) }, 400);
+    return c.json(unifiedPageHttpBody(page));
+  }
 
   // Ask for one extra row so we can derive `has_more` without a count query.
   const rows = await c.var.services.files.list({
@@ -208,23 +178,7 @@ app.get("/", async (c) => {
 
   const slice = rows.slice(0, requested);
   const data: ApiFileRecord[] = slice.map(toFileRecord) as ApiFileRecord[];
-  let hasMore = rows.length > requested;
-
-  // When the caller scopes to a session, also list the R2 session-outputs
-  // prefix and fold those in as synthesized rows. Pagination here is
-  // best-effort: we don't honor before_id/after_id across the synthesized
-  // set (they'd need a unified cursor scheme over D1 + R2). For typical
-  // usage — list session artifacts after the agent finishes — this returns
-  // everything in one page.
-  if (scopeId && c.env.FILES_BUCKET) {
-    const synthesized = await listSessionOutputAsFiles(
-      c.env.FILES_BUCKET,
-      t,
-      scopeId,
-    );
-    data.push(...synthesized);
-    if (synthesized.length >= 1000) hasMore = true;
-  }
+  const hasMore = rows.length > requested;
 
   return c.json({
     data,
@@ -252,7 +206,7 @@ app.get("/:id", async (c) => {
       id,
       type: "file",
       filename: decoded.filename,
-      media_type: head.httpMetadata?.contentType || guessOutputMime(decoded.filename),
+      media_type: head.httpMetadata?.contentType || guessSessionOutputMime(decoded.filename),
       size_bytes: head.size,
       created_at: head.uploaded.toISOString(),
       scope: { type: "session", id: decoded.sessionId },
@@ -287,7 +241,7 @@ app.get("/:id/content", async (c) => {
     if (!obj) return c.json({ error: "File content not found" }, 404);
     return new Response(obj.body, {
       headers: {
-        "Content-Type": obj.httpMetadata?.contentType || guessOutputMime(decoded.filename),
+        "Content-Type": obj.httpMetadata?.contentType || guessSessionOutputMime(decoded.filename),
       },
     });
   }

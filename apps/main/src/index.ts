@@ -6,6 +6,10 @@ import { Hono } from "hono";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "@open-managed-agents/shared";
 import {
+  bindAccessLossHooks,
+  mcpRequestBodyText,
+} from "@open-managed-agents/mcp-access-loss";
+import {
   buildCfTenantDbProvider,
   servicesMiddleware,
   tenantDbMiddleware,
@@ -147,7 +151,7 @@ import {
   EnvironmentAwareSessionLifecycleRouter,
   ingestEnvironmentWorkRuntimeEvents,
   TimerEnvironmentWorkAvailabilityWaiter,
-  IndeterminateCredentialValidationProbe,
+  McpOAuthCredentialValidationProbe,
   inProcessDreamExecutionSchedulerModule,
   LocalTunnelProvisioner,
   ManagedMemorySnapshotMaterializer,
@@ -183,6 +187,8 @@ import internalRoutes from "./routes/internal";
 import integrationsRoutes from "./routes/integrations";
 import { runtimesRoutes, runtimeDaemonRoutes, authenticateRuntimeToken } from "./routes/runtimes";
 import statsRoutes from "./routes/stats";
+import inferenceProxyRoutes from "./routes/inference-proxy";
+import { createCloudflareAccessLossRuntime } from "./lib/mcp-access-loss";
 import mcpProxyRoutes, {
   createManagedMcpProxyCredentialSource,
   resolveProxyTargetByTenant,
@@ -564,7 +570,7 @@ function managedVaultsPortFor(context: AppCtx) {
 
 const managedVaultsRoutes = buildManagedVaultRoutes(context => managedVaultsPortFor(context as AppCtx));
 
-const managedCredentialValidation = new IndeterminateCredentialValidationProbe();
+const managedCredentialValidation = new McpOAuthCredentialValidationProbe();
 function managedCredentialsPortFor(context: AppCtx) {
   const request = context.var as {
     tenant_id: string;
@@ -1422,6 +1428,7 @@ app.all("/billing-api/*", async (c) => {
 // current Work-scoped sessions_token. authMiddleware resolves both; the route
 // then validates that the requested server belongs to the same Session.
 app.route("/v1/oma/mcp-proxy", mcpProxyRoutes);
+app.route("/v1/oma/inference-proxy", inferenceProxyRoutes);
 
 // /v1/oma/* aliases — OMA-only namespaces re-mounted under an `oma/` prefix
 // so the public surface can grow into a clean two-tier API:
@@ -1885,6 +1892,16 @@ export class McpProxyRpc extends WorkerEntrypoint<Env> {
       };
     }
     const inboundHeaders = new Headers(opts.headers);
+    const tenantDb = await buildCfTenantDbProvider(this.env).resolve(opts.tenantId);
+    const accessLossHooks = await bindAccessLossHooks(
+      createCloudflareAccessLossRuntime(this.env, tenantDb),
+      {
+        workspaceId: opts.tenantId,
+        sessionId: opts.sessionId,
+        serverName: opts.serverName,
+        requestBody: opts.body,
+      },
+    );
     const res = await forwardWithRefresh(
       services,
       opts.tenantId,
@@ -1893,6 +1910,7 @@ export class McpProxyRpc extends WorkerEntrypoint<Env> {
       inboundHeaders,
       opts.body,
       { sessionId: opts.sessionId, serverName: opts.serverName, callerKind: "rpc-mcp" },
+      accessLossHooks,
     );
     const respHeaders: Record<string, string> = {};
     res.headers.forEach((v, k) => {
@@ -1979,6 +1997,16 @@ export class McpProxyRpc extends WorkerEntrypoint<Env> {
     const body = ["GET", "HEAD"].includes(request.method)
       ? null
       : await request.arrayBuffer();
+    const tenantDb = await buildCfTenantDbProvider(this.env).resolve(tenantId);
+    const accessLossHooks = await bindAccessLossHooks(
+      createCloudflareAccessLossRuntime(this.env, tenantDb),
+      {
+        workspaceId: tenantId,
+        sessionId,
+        serverName,
+        requestBody: mcpRequestBodyText(body),
+      },
+    );
     return forwardWithRefresh(
       services,
       tenantId,
@@ -1987,6 +2015,7 @@ export class McpProxyRpc extends WorkerEntrypoint<Env> {
       inboundHeaders,
       body,
       { sessionId, serverName, callerKind: "rpc-mcp" },
+      accessLossHooks,
     );
   }
 

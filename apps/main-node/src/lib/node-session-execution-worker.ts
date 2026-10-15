@@ -15,6 +15,12 @@ import type {
   SessionExecutionContext,
   SessionExecutionContextSourcePort,
 } from "@open-managed-agents/session-runtime-contract/context";
+import {
+  emitDbBoundaryLog,
+  withDbBoundary,
+} from "@open-managed-agents/sql-client";
+import { Effect, Fiber } from "effect";
+import { interruptFiber, runSupervised } from "./supervised-fiber.js";
 
 export interface RunNodeSessionExecution extends AcceptedSessionEvents {
   executionId: string;
@@ -61,26 +67,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function withHeartbeatDeadline<T>(
-  operation: Promise<T>,
-  timeoutMs: number,
-): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`Session execution renewal timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
-  }
-}
-
 /**
  * Durable Node execution scheduler. Only in-flight cancellation handles live
  * in this process; admission, ordering, ownership and recovery live behind the
@@ -93,7 +79,7 @@ export class NodeSessionExecutionWorker implements SessionEventDispatchPort {
   readonly #maxConcurrent: number;
   readonly #active = new Map<string, ActiveExecution>();
   #polling: Promise<void> | null = null;
-  #pollTimer: ReturnType<typeof setInterval> | null = null;
+  #pollFiber: Fiber.RuntimeFiber<void, never> | null = null;
 
   constructor(
     private readonly dependencies: NodeSessionExecutionWorkerDependencies,
@@ -111,19 +97,28 @@ export class NodeSessionExecutionWorker implements SessionEventDispatchPort {
   }
 
   start(): void {
-    if (this.#pollTimer !== null) return;
-    this.#pollTimer = setInterval(
-      () => this.#pollInBackground(),
-      this.#pollIntervalMs,
+    if (this.#pollFiber !== null) return;
+    this.#pollFiber = runSupervised(
+      Effect.gen(this, function* () {
+        while (true) {
+          yield* Effect.tryPromise({
+            try: () => this.poll(),
+            catch: (error: unknown) => error,
+          }).pipe(Effect.catchAll((error) => Effect.sync(() => {
+            this.#reportError(error);
+          })));
+          yield* Effect.sleep(this.#pollIntervalMs);
+        }
+      }),
+      (error) => this.#reportError(error),
     );
-    this.#pollTimer.unref?.();
-    this.#pollInBackground();
   }
 
   stop(): void {
-    if (this.#pollTimer === null) return;
-    clearInterval(this.#pollTimer);
-    this.#pollTimer = null;
+    const fiber = this.#pollFiber;
+    if (fiber === null) return;
+    this.#pollFiber = null;
+    void interruptFiber(fiber);
   }
 
   async sessionEventsAccepted(input: AcceptedSessionEvents): Promise<void> {
@@ -240,21 +235,49 @@ export class NodeSessionExecutionWorker implements SessionEventDispatchPort {
         promise: Promise.resolve(),
       };
       this.#active.set(key, active);
-      active.promise = this.#run(active).finally(() => {
-        if (this.#active.get(key) === active) this.#active.delete(key);
-        this.#pollInBackground();
-      });
+      const fiber = runSupervised(
+        Effect.tryPromise({
+          try: () => this.#run(active),
+          catch: (error: unknown) => error,
+        }).pipe(
+          Effect.ensuring(Effect.sync(() => {
+            if (this.#active.get(key) === active) this.#active.delete(key);
+            this.#pollInBackground();
+          })),
+          Effect.catchAll((error) => Effect.sync(() => {
+            this.#reportError(error);
+          })),
+        ),
+        (error) => this.#reportError(error),
+      );
+      active.promise = Effect.runPromise(Fiber.join(fiber)).then(
+        () => undefined,
+        (error: unknown) => {
+          this.#reportError(error);
+        },
+      );
     }
   }
 
   async #run(active: ActiveExecution): Promise<void> {
-    let heartbeatChain = Promise.resolve();
-    const heartbeat = setInterval(() => {
-      heartbeatChain = heartbeatChain
-        .then(() => this.#heartbeat(active))
-        .catch((error) => this.#loseLease(active, error));
-    }, this.#heartbeatIntervalMs);
-    heartbeat.unref?.();
+    const heartbeat = runSupervised(
+      Effect.gen(this, function* () {
+        while (!active.leaseLost) {
+          yield* Effect.sleep(this.#heartbeatIntervalMs);
+          if (active.leaseLost) return;
+          yield* Effect.tryPromise({
+            try: () => this.#heartbeat(active),
+            catch: (error: unknown) => error,
+          }).pipe(Effect.catchAll((error) => Effect.tryPromise({
+            try: () => this.#loseLease(active, error),
+            catch: (cancelError: unknown) => cancelError,
+          }).pipe(Effect.catchAll((cancelError) => Effect.sync(() => {
+            this.#reportError(cancelError);
+          })))));
+        }
+      }),
+      (error) => this.#reportError(error),
+    );
     let outcome: "completed" | "failed" | "cancelled" = "completed";
     let failure: string | undefined;
     try {
@@ -280,34 +303,52 @@ export class NodeSessionExecutionWorker implements SessionEventDispatchPort {
       outcome = active.cancelled ? "cancelled" : "failed";
       failure = errorMessage(error);
     } finally {
-      clearInterval(heartbeat);
-      await heartbeatChain;
+      await interruptFiber(heartbeat);
     }
     if (active.leaseLost) return;
-    const settled = await this.dependencies.coordinator.settle({
-      fence: active.fence,
-      settledAt: this.dependencies.clock.now().toISOString(),
-      outcome,
-      ...(failure !== undefined && { failure }),
-    });
-    if (settled.type === "lost") {
-      active.leaseLost = true;
-      await this.#cancel(active, "lease_lost");
+    try {
+      const settled = await this.dependencies.coordinator.settle({
+        fence: active.fence,
+        settledAt: this.dependencies.clock.now().toISOString(),
+        outcome,
+        ...(failure !== undefined && { failure }),
+      });
+      if (settled.type === "lost") {
+        active.leaseLost = true;
+        this.#logLeaseLost(active);
+        await this.#cancel(active, "lease_lost");
+      }
+    } catch (error) {
+      // The settle transaction rolled back. Leave the row running so the
+      // lease can expire and another replica can recover it. Do not crash.
+      this.#reportError(error);
     }
   }
 
   async #heartbeat(active: ActiveExecution): Promise<void> {
     if (active.leaseLost) return;
-    const renewed = await withHeartbeatDeadline(
-      this.dependencies.coordinator.renew({
+    let renewed: Awaited<ReturnType<NodeSessionExecutionWorkerDependencies["coordinator"]["renew"]>>;
+    try {
+      renewed = await withDbBoundary({
+        op: "session_execution.heartbeat",
+        sessionId: active.execution.sessionId,
+        timeoutMs: this.#heartbeatIntervalMs,
+      }, () => this.dependencies.coordinator.renew({
         fence: active.fence,
         renewedAt: this.dependencies.clock.now().toISOString(),
         leaseTtlMs: this.#leaseTtlMs,
-      }),
-      this.#heartbeatIntervalMs,
-    );
+      }));
+    } catch (error) {
+      if (this.#leaseDeadlinePassed(active)) {
+        await this.#loseLease(active, error);
+      } else {
+        this.#reportError(error);
+      }
+      return;
+    }
     if (renewed.type === "lost") {
       active.leaseLost = true;
+      this.#logLeaseLost(active);
       await this.#cancel(active, "lease_lost");
       return;
     }
@@ -320,8 +361,26 @@ export class NodeSessionExecutionWorker implements SessionEventDispatchPort {
     }
   }
 
+  #leaseDeadlinePassed(active: ActiveExecution): boolean {
+    return Date.parse(active.fence.expiresAt) <= this.dependencies.clock.now().getTime();
+  }
+
+  #logLeaseLost(active: ActiveExecution): void {
+    emitDbBoundaryLog({
+      op: "session_execution.lease",
+      sessionId: active.execution.sessionId,
+      durationMs: 0,
+      retryCount: 0,
+      outcome: "error",
+      errorTag: "LeaseLost",
+    });
+  }
+
   async #loseLease(active: ActiveExecution, error: unknown): Promise<void> {
     this.#reportError(error);
+    // A thrown renew/heartbeat error is not a confirmed CAS miss. Keep the
+    // turn until the lease deadline actually passes.
+    if (!this.#leaseDeadlinePassed(active)) return;
     active.leaseLost = true;
     try {
       await this.#cancel(active, "lease_lost");
@@ -331,7 +390,16 @@ export class NodeSessionExecutionWorker implements SessionEventDispatchPort {
   }
 
   #pollInBackground(): void {
-    void this.poll().catch((error) => this.#reportError(error));
+    const polling = this.poll();
+    runSupervised(
+      Effect.tryPromise({
+        try: () => polling,
+        catch: (error: unknown) => error,
+      }).pipe(Effect.catchAll((error) => Effect.sync(() => {
+        this.#reportError(error);
+      }))),
+      (error) => this.#reportError(error),
+    );
   }
 
   #reportError(error: unknown): void {

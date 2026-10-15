@@ -25,6 +25,7 @@ import { buildTools, disposeTools } from "@open-managed-agents/agent/harness/too
 
 import { generateText } from "ai";
 import { composeSystemPrompt } from "@open-managed-agents/agent/harness/platform-guidance";
+import { agentUsesAssemblySkillMount } from "@open-managed-agents/agent/harness/assembly/skill-config";
 import type { HarnessContext } from "@open-managed-agents/agent/harness/interface";
 
 import { buildCredentialRoutes as buildManagedCredentialRoutes, buildDeploymentRoutes as buildManagedDeploymentRoutes, buildDeploymentRunRoutes as buildManagedDeploymentRunRoutes, buildDreamRoutes as buildManagedDreamRoutes, buildEnvironmentRoutes as buildManagedEnvironmentRoutes, buildEnvironmentWorkRoutes as buildManagedEnvironmentWorkRoutes, buildFileRoutes as buildManagedFileRoutes, buildMemoryStoreRoutes as buildManagedMemoryStoreRoutes, buildMemoryRoutes as buildManagedMemoryRoutes, buildMemoryVersionRoutes as buildManagedMemoryVersionRoutes, buildModelRoutes as buildManagedModelRoutes, buildSkillRoutes as buildManagedSkillRoutes, buildSkillVersionRoutes as buildManagedSkillVersionRoutes, buildTunnelCertificateRoutes as buildManagedTunnelCertificateRoutes, buildTunnelRoutes as buildManagedTunnelRoutes, buildVaultRoutes as buildManagedVaultRoutes, buildUserProfileRoutes as buildManagedUserProfileRoutes } from "@open-managed-agents/managed-agents-api";
@@ -53,15 +54,15 @@ import { SqlTunnelStore } from "@open-managed-agents/tunnel-store-sql";
 import { SqlUserProfileStore } from "@open-managed-agents/user-profile-store-sql";
 import { SqlEnvironmentWorkStore, type EnvironmentWorkSecretCipher } from "@open-managed-agents/environment-work-store-sql";
 import { SqlDeploymentAgentSource, SqlDeploymentVaultSource, SqlEnvironmentPersistence, SqlFileMetadataPersistence, SqlMemoryStoreSource, SqlManagedSessionsComposition, SqlPersistedSessionEventStream, SqlReplicatedSessionEventStream, SqlSessionEnvironmentSource, SqlSessionSource, SqlSessionRuntimeProjectionPersistence } from "@open-managed-agents/managed-agents-adapters-sql";
-import { createSqlSessionRuntimeReaders, SqlSessionExecutionCoordinator } from "@open-managed-agents/session-runtime-sql";
+import { createSqlSessionRuntimeReaders, ensureSessionExecutionClaimLockSchema, SqlSessionExecutionCoordinator } from "@open-managed-agents/session-runtime-sql";
 import { MemorySessionRealtimeHub } from "@open-managed-agents/session-realtime-memory";
-import { AnthropicMessagesDreamCurator, ApplicationDreamMemoryWorkspace, ModelCardCatalogSource, CronDeploymentSchedulePlanner, EnvironmentAwareSessionEventDispatchRouter, EnvironmentAwareSessionEventStreamRouter, EnvironmentAwareSessionLifecycleRouter, TimerEnvironmentWorkAvailabilityWaiter, IndeterminateCredentialValidationProbe, inProcessDreamExecutionSchedulerModule, LocalTunnelProvisioner, SealedEnvironmentWorkSessionCredentialIssuer, StandardWebhookEnvironmentWorkWakeup, DeduplicatingDreamCurator, WebCryptoTunnelCertificateAuthority, WebCryptoTunnelTokenManager, WebCryptoMemoryContentDescriptor, ZipSkillPackageCompiler, synchronizeManagedSessionMemoryWorkspaces } from "@open-managed-agents/managed-agents-adapters-runtime";
+import { AnthropicMessagesDreamCurator, ApplicationDreamMemoryWorkspace, ModelCardCatalogSource, CronDeploymentSchedulePlanner, EnvironmentAwareSessionEventDispatchRouter, EnvironmentAwareSessionEventStreamRouter, EnvironmentAwareSessionLifecycleRouter, TimerEnvironmentWorkAvailabilityWaiter, McpOAuthCredentialValidationProbe, inProcessDreamExecutionSchedulerModule, LocalTunnelProvisioner, SealedEnvironmentWorkSessionCredentialIssuer, StandardWebhookEnvironmentWorkWakeup, DeduplicatingDreamCurator, WebCryptoTunnelCertificateAuthority, WebCryptoTunnelTokenManager, WebCryptoMemoryContentDescriptor, ZipSkillPackageCompiler, synchronizeManagedSessionMemoryWorkspaces } from "@open-managed-agents/managed-agents-adapters-runtime";
 
 import { BlobFileContentStore } from "@open-managed-agents/managed-agents-adapters-blob";
 
 import { resolveFeishuAgentTools } from "../lib/feishu-agent-tools.js";
-import { nodeOutputsAdapter } from "../lib/node-outputs-adapter.js";
 import { NodeManagedSessionOutputCollector } from "../lib/node-managed-session-outputs.js";
+import { NodeManagedWorkspaceCheckpoints } from "../lib/node-managed-workspace-checkpoints.js";
 import { nodeSessionLifecycle } from "../lib/node-session-lifecycle.js";
 import { SqlSessionResourceSecretSource } from "@open-managed-agents/session-resource-store-sql";
 
@@ -69,16 +70,24 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { nanoid } from "nanoid";
 
-import { ManagedNodeDefaultHarness } from "../lib/node-managed-default-harness.js";
+import { readHarnessAgentModelSettings } from "@open-managed-agents/agent/harness/agent-model-settings";
+import { createPiModelRuntime } from "@open-managed-agents/agent/harness/pi-provider";
+import { resolveHarness } from "@open-managed-agents/agent/harness/registry";
 import { allowAllLegacyHarnessTools, toLegacyHarnessAgentConfig, toLegacyHarnessEnvironmentConfig, resolveNodeManagedAuxiliaryToolModel } from "../lib/node-managed-agent-codec.js";
 import { NodeManagedConfirmedToolExecutor } from "../lib/node-managed-confirmed-tool-executor.js";
 import { NodeManagedOutcomeEvaluator } from "../lib/node-managed-outcome-evaluator.js";
 import { ApplicationBackedNodeManagedSessionRuntimeEngine, DefaultNodeManagedSessionRuntimeDriver, NodeManagedSessionRuntimeAdapter } from "../lib/node-managed-session-runtime.js";
 import { DefaultNodeManagedSessionRunner } from "../lib/node-managed-session-runner.js";
-import { buildNodeManagedSkillReminders, buildNodeManagedAppendablePromptReminders, NodeManagedSessionInputPreparer } from "../lib/node-managed-session-inputs.js";
+import {
+  buildNodeManagedSkillReminders,
+  resolveNodeManagedSkillMounts,
+  buildNodeManagedAppendablePromptReminders,
+  NodeManagedSessionInputPreparer,
+} from "../lib/node-managed-session-inputs.js";
 import { NodeManagedMemorySnapshotMaterializer } from "../lib/node-managed-memory-snapshots.js";
 import { NodeSessionExecutionWorker } from "../lib/node-session-execution-worker.js";
 import { createNodeMcpProxyBinding, type NodeMcpProxyTarget } from "../lib/http-mcp-proxy.js";
+import { createNodeAccessLossRuntime } from "../lib/mcp-access-loss.js";
 
 import { Disposables } from "../lifecycle.js";
 import type { NodeComponents } from "../components.js";
@@ -106,6 +115,8 @@ export async function createManagedNodeRuntime(
     modelCardsService,
     memoryBlobs,
     outputsRoot,
+    sessionOutputs,
+    sharedSessionOutputs,
     filesBlob,
     buildSandbox,
     resolveNodeModelCreds,
@@ -260,8 +271,43 @@ export async function createManagedNodeRuntime(
     return null;
   }
 
+  async function resolveNodeInferenceUpstream(input: {
+    tenantId: string;
+    sessionId: string;
+  }): Promise<{
+    wireModel: string;
+    apiKey: string;
+    baseURL?: string;
+    provider?: string;
+    customHeaders?: Record<string, string>;
+  } | null> {
+    const managedContext = await managedRuntimeReaders.executionContext.find({
+      workspaceId: input.tenantId,
+      sessionId: input.sessionId,
+    });
+    const agentModel = managedContext?.session.agent.model
+      ?? (await sessionsService.get({
+        tenantId: input.tenantId,
+        sessionId: input.sessionId,
+      }).catch(() => null))?.agent_snapshot?.model;
+    if (!agentModel) return null;
+    try {
+      const creds = await resolveNodeModelCreds(input.tenantId, agentModel);
+      return {
+        wireModel: creds.wireModel,
+        apiKey: creds.apiKey,
+        baseURL: creds.baseURL,
+        provider: creds.provider,
+        customHeaders: creds.customHeaders,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   const nodeMcpProxyBinding = createNodeMcpProxyBinding({
     resolveTarget: resolveNodeMcpProxyTarget,
+    accessLoss: await createNodeAccessLossRuntime(sql),
   });
 
   const managedSessionResourceSecrets = new SqlSessionResourceSecretSource(sql, {
@@ -275,7 +321,17 @@ export async function createManagedNodeRuntime(
     },
   });
 
-  const managedSessionExecutionCoordinator = new SqlSessionExecutionCoordinator(sql);
+  if (config.workspace.strategy === "checkpoint_restore") {
+    await ensureSessionExecutionClaimLockSchema(sql, foundation.dialect);
+  }
+  const managedSessionExecutionCoordinator = new SqlSessionExecutionCoordinator(sql, {
+    serializeSessionClaims: config.workspace.strategy === "checkpoint_restore",
+    sweepIntervalMs: 5_000,
+    onError: (error, op) => logger.error(
+      { err: error, op },
+      "session execution sweep failed",
+    ),
+  });
 
   async function isManagedSessionExecutionFenceActive(fence: {
     workspaceId: string;
@@ -302,9 +358,17 @@ export async function createManagedNodeRuntime(
   const managedSessionOutputCollector = new NodeManagedSessionOutputCollector({
     outputsRoot,
     isFenceActive: isManagedSessionExecutionFenceActive,
+    ...(sharedSessionOutputs === undefined ? {} : { shared: sharedSessionOutputs }),
   });
+  const workspaceCheckpoints = config.workspace.strategy === "checkpoint_restore"
+    ? new NodeManagedWorkspaceCheckpoints({
+        sql, blobs: filesBlob, intervalMs: config.workspace.checkpointIntervalMs,
+      })
+    : undefined;
+  await workspaceCheckpoints?.ensureSchema();
 
   const managedRuntimeRunner = new DefaultNodeManagedSessionRunner({
+    ...(workspaceCheckpoints === undefined ? {} : { workspaceCheckpoints }),
     subagentThreads: new SqlSessionThreadStore(sql),
     subagentPolicy: ({ session }) => nodeOpenAISubagentPolicy(session, openAIAgentsSecrets),
     resolveSubagentSession: async ({ workspaceId, session, request }) => {
@@ -364,6 +428,10 @@ export async function createManagedNodeRuntime(
         session.id,
         join(config.paths.sandboxWorkdir, session.id),
       ),
+    ...(sharedSessionOutputs === undefined ? {} : {
+      isSandboxCurrent: ({ workspaceId, session, runtimeGeneration }: { workspaceId: string; session: { id: string }; runtimeGeneration: string }) =>
+        sharedSessionOutputs.isSandboxCurrent(workspaceId, session.id, runtimeGeneration),
+    }),
     prepareSandbox: async ({
       workspaceId,
       session,
@@ -371,6 +439,7 @@ export async function createManagedNodeRuntime(
       runtimeGeneration,
     }) => {
       const preparer = new NodeManagedSessionInputPreparer({
+        sharedOutputs: sharedSessionOutputs !== undefined,
         files: managedPlatform
           .app({ workspaceId })
           .port(managedAgentsPortTokens.files),
@@ -387,6 +456,10 @@ export async function createManagedNodeRuntime(
           },
         ),
       });
+      // Shared outputs are not a live mount: hydrate canonical files into a
+      // fresh sandbox before inputs are staged, so input mounts under the
+      // outputs directory win and the next turn can read prior outputs.
+      await sharedSessionOutputs?.restoreToSandbox(workspaceId, session.id, sandbox, runtimeGeneration);
       await preparer.prepare({
         workspaceId,
         session,
@@ -447,6 +520,7 @@ export async function createManagedNodeRuntime(
         sessionId: session.id,
         sandbox,
         executionFence,
+        runtimeGeneration,
       });
     },
     afterExecution: withReportedArtifactPublication(createNodeOpenAIArtifactPublisher({
@@ -496,13 +570,45 @@ export async function createManagedNodeRuntime(
       return tools;
     },
     disposeTools,
-    buildHarness: () => new ManagedNodeDefaultHarness(),
+    buildHarness: () => ({
+      run: async (ctx) => {
+        await resolveHarness(ctx.agent.harness).run(ctx);
+      },
+    }),
     buildHarnessContext: async (input) => {
       const agent = toLegacyHarnessAgentConfig(input.session);
       const creds = await resolveNodeModelCreds(input.workspaceId, agent.model);
+      const modelSettings = readHarnessAgentModelSettings(agent.model);
+      const pi = createPiModelRuntime({
+        model: creds.wireModel,
+        apiKey: creds.apiKey,
+        provider: creds.provider,
+        baseURL: creds.baseURL,
+        customHeaders: creds.customHeaders,
+        piConfig: creds.piConfig,
+        modelMaxTokens: modelSettings?.maxTokens,
+        providerOptions:
+          typeof agent.model !== "string" &&
+          agent.model.provider_options?.pi &&
+          typeof agent.model.provider_options.pi === "object" &&
+          !Array.isArray(agent.model.provider_options.pi)
+            ? agent.model.provider_options.pi as Record<string, unknown>
+            : undefined,
+        thinkingLevel: typeof agent.model === "string" ? undefined : agent.model.effort,
+        speed: typeof agent.model === "string" ? undefined : agent.model.speed === "fast" ? "fast" : "standard",
+      });
       const rawSystemPrompt = input.session.agent.system ?? "";
+      const assemblySkills = agentUsesAssemblySkillMount(agent);
+      const skillMounts = assemblySkills
+        ? await resolveNodeManagedSkillMounts(
+          input.session,
+          managedPlatform
+            .app({ workspaceId: input.workspaceId })
+            .port(managedAgentsPortTokens.skillVersions),
+        )
+        : undefined;
       const platformReminders = [
-        ...buildNodeManagedSkillReminders(input.session),
+        ...(assemblySkills ? [] : buildNodeManagedSkillReminders(input.session)),
         ...buildNodeManagedAppendablePromptReminders(input.session),
       ];
       const feishuTools = await resolveFeishuAgentTools(input.session.id);
@@ -513,9 +619,11 @@ export async function createManagedNodeRuntime(
         tenant_id: input.workspaceId,
         tools: { ...input.tools, ...feishuTools },
         model: input.model,
+        pi,
         systemPrompt: composeSystemPrompt(rawSystemPrompt, platformReminders),
         rawSystemPrompt,
         platformReminders,
+        ...(skillMounts?.length ? { skillMounts } : {}),
         env: {
           ANTHROPIC_API_KEY: creds.apiKey,
           ANTHROPIC_BASE_URL: creds.baseURL,
@@ -554,7 +662,8 @@ export async function createManagedNodeRuntime(
         await managedRuntimeDriver.accept({ ...input, executionFence: fence });
       },
       cancel: async (input) => {
-        managedRuntimeRunner.cancel(input);
+        managedRuntimeDriver.cancel({ workspaceId: input.workspaceId, sessionId: input.sessionId, reason: input.reason });
+        managedRuntimeRunner.cancel({ workspaceId: input.workspaceId, sessionId: input.sessionId, reason: input.reason });
       },
     },
     ownerId: config.execution.ownerId,
@@ -608,7 +717,7 @@ export async function createManagedNodeRuntime(
   const nodeSessionLifecycleHooks = nodeSessionLifecycle({
     files: filesService,
     filesBlob,
-    outputs: nodeOutputsAdapter(outputsRoot),
+    outputs: sessionOutputs,
   });
   const managedSessionLifecycle = new EnvironmentAwareSessionLifecycleRouter({
     environments: nodeManagedEnvironments,
@@ -953,7 +1062,7 @@ export async function createManagedNodeRuntime(
       return { plaintext: await managedCredentialCrypto.decrypt(ciphertext) };
     },
   };
-  const managedCredentialValidation = new IndeterminateCredentialValidationProbe();
+  const managedCredentialValidation = new McpOAuthCredentialValidationProbe();
   const managedCredentialStore = new SqlCredentialStore(sql, managedCredentialCipher);
   // One managed platform graph per process. Every official application
   // module is installed on the same workspace App, so a workspace has one
@@ -1102,6 +1211,7 @@ export async function createManagedNodeRuntime(
 
   return {
     resolveNodeMcpProxyTarget,
+    resolveNodeInferenceUpstream,
     managedRuntimeRunner,
     managedRuntimeReaders,
     managedSessionExecutionWorker,

@@ -587,6 +587,82 @@ describe("provider managed runtime adapter", () => {
     expect(created.checkpoint).not.toHaveBeenCalled();
   });
 
+  it("keeps a durable mount distinct from portable checkpoints across runtimes", async () => {
+    const first = runtime("mounted-first");
+    const second = runtime("mounted-second");
+    first.runtimeHandle = () => ({ provider: "mount-provider", runtimeId: "mounted-first" });
+    second.runtimeHandle = () => ({ provider: "mount-provider", runtimeId: "mounted-second" });
+    const create = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const restore = vi.fn();
+    const attach = vi.fn(async () => {});
+    let mountIdentity = "r2:workspace-bucket:tenant/session";
+    const composed = createProviderManagedRuntime({
+      providerName: "mount-provider",
+      provider: { create, resume: vi.fn(), restore },
+      context: (inputScope) => ({ sessionId: inputScope.sessionId, workdir: "/workspace" }),
+      environment: () => ({}),
+      leaseTtlMs: 90_000,
+      sandboxCapabilities: { suspendResume: "unsupported", hardTerminate: "supported", runtimeCheckpoints: [] },
+      workspace: {
+        strategies: ["checkpoint_restore"],
+        portableCheckpointKind: "memory",
+        durableMount: { identity: () => mountIdentity, attach },
+      },
+      drivers: ["ama_worker"],
+    });
+    const signal = new AbortController().signal;
+    await expect(composed.workspace.capabilities(scope)).resolves.toEqual({
+      strategies: ["checkpoint_restore", "durable_mount"],
+    });
+    const binding = await composed.workspace.materialize({
+      scope, fence, strategy: "durable_mount", activeCheckpoint: null,
+      idempotencyKey: "mount-1", signal,
+    });
+    const plan = {
+      workspaceStrategy: "durable_mount" as const,
+      outputStrategy: null,
+      runtimeCheckpoint: null,
+      driver: { type: "ama_worker" as const, process: { command: "worker" } },
+    };
+    const lease = await composed.sandbox.acquire({ scope, fence, plan, workspace: binding, outputs: null, signal });
+    await composed.workspace.attach({ scope, fence, strategy: "durable_mount", binding, sandbox: lease, signal });
+    expect(attach).toHaveBeenCalledWith({ runtime: first, scope, binding, signal });
+    const candidate = await composed.workspace.checkpoint({
+      scope, fence, strategy: "durable_mount", binding, sandbox: lease,
+      idempotencyKey: "mount-reference", signal,
+    });
+    expect(candidate).toMatchObject({
+      revision: 1,
+      metadata: { "openma.workspace.durable-mount.v1": mountIdentity },
+    });
+    expect(first.checkpoint).not.toHaveBeenCalled();
+    const nextFence = { ...fence, generation: 2 };
+    const nextBinding = await composed.workspace.materialize({
+      scope, fence: nextFence, strategy: "durable_mount",
+      activeCheckpoint: candidate, idempotencyKey: "mount-2", signal,
+    });
+    const nextLease = await composed.sandbox.acquire({ scope, fence: nextFence, plan, workspace: nextBinding, outputs: null, signal });
+    await composed.workspace.attach({ scope, fence: nextFence, strategy: "durable_mount", binding: nextBinding, sandbox: nextLease, signal });
+    expect(attach).toHaveBeenCalledWith({ runtime: second, scope, binding: nextBinding, signal });
+    expect(restore).not.toHaveBeenCalled();
+    mountIdentity = "r2:different-bucket:tenant/session";
+    await expect(composed.workspace.materialize({
+      scope, fence, strategy: "durable_mount", activeCheckpoint: candidate,
+      idempotencyKey: "wrong-storage", signal,
+    })).rejects.toThrow(/mount identity/i);
+  });
+
+  it("does not advertise or materialize a workspace durable mount without a native attach", async () => {
+    const composed = composition({ create: vi.fn(), resume: vi.fn(), restore: vi.fn() });
+    await expect(composed.workspace.capabilities(scope)).resolves.toEqual({
+      strategies: ["retained_runtime", "checkpoint_restore"],
+    });
+    await expect(composed.workspace.materialize({
+      scope, fence, strategy: "durable_mount", activeCheckpoint: null,
+      idempotencyKey: "unsupported", signal: new AbortController().signal,
+    })).rejects.toThrow(/does not support durable_mount/i);
+  });
+
   it("does not invent provider lease renewal for runtimes that only expose liveness", async () => {
     const created = runtime("liveness-only");
     created.runtimeCapabilities = () => ({

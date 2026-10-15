@@ -24,9 +24,9 @@
  * the top of every turn without keeping its own "first turn" state.
  *
  * OMA-specific:
- *   - On session.start we fetch the spawn-cwd bundle (AGENTS.md + skills)
- *     from main's `/v1/oma/internal/runtime-session-bundle?sid=&agent_id=` and
- *     materialize files into the session cwd before issuing session/new.
+ *   - On session.start we fetch the bundle (AGENTS.md + skills) from
+ *     main and materialize it into the scratch dir before issuing
+ *     session/new. A platform `cwd` changes only the ACP process cwd.
  *   - The OMA `oma_*` PAT is passed to the ACP child as `mcpServers[].
  *     authorization_token` for each remote MCP server in the agent config.
  *     URLs in the bundle are already rewritten to point at OMA's mcp-proxy.
@@ -51,7 +51,14 @@ import {
   type SessionHostEvent,
   type SessionStartCommand,
 } from "@openma/common/session-kernel";
-import { ensureSessionCwd, removeSessionCwd, writeBundle } from "./session-cwd.js";
+import {
+  acpProcessCwd,
+  acpSessionReadyOut,
+  ensureSessionCwd,
+  removeSessionCwd,
+  sessionScratchDirPath,
+  writeBundle,
+} from "./session-cwd.js";
 import { setupClaudeConfigDir } from "./claude-config-dir.js";
 
 export interface SessionStartParams {
@@ -78,7 +85,14 @@ export interface SessionPromptParams {
 }
 
 export type ManagerOut =
-  | { type: "session.ready"; session_id: string; tenant_id: string; acp_session_id: string }
+  | {
+      type: "session.ready";
+      session_id: string;
+      tenant_id: string;
+      acp_session_id: string;
+      bundle_dir?: string;
+      fresh?: boolean;
+    }
   | { type: "session.event"; session_id: string; tenant_id: string; turn_id: string; event: unknown }
   | { type: "session.complete"; session_id: string; tenant_id: string; turn_id: string }
   | { type: "session.error"; session_id: string; tenant_id?: string; turn_id?: string; message: string }
@@ -175,6 +189,8 @@ export class SessionManager {
    *  doesn't hit "session not ready" mid-stream just because the daemon
    *  is on its way out. */
   #draining = false;
+  /** Sessions awaiting their first session.ready on the managed runtime path. */
+  #freshSpawnPending = new Set<string>();
 
   constructor(send: Sender, runtimeDependencies?: SessionManagerRuntimeDependencies) {
     this.#send = send;
@@ -210,11 +226,25 @@ export class SessionManager {
 
   #publishManagedRuntimeEvent(event: SessionHostEvent): void {
     const scope = this.#runtimeScopes.get(event.sessionId);
-    this.#send(encodeSessionHostEvent(event, {
-      tenantId: scope?.id,
-    }) as ManagerOut);
+    if (event.type === "session.ready" && this.#freshSpawnPending.delete(event.sessionId)) {
+      this.#send(acpSessionReadyOut({
+        session_id: event.sessionId,
+        tenant_id: scope?.id ?? "",
+        acp_session_id: event.acpSessionId,
+        scratchDir: sessionScratchDirPath(event.sessionId),
+        freshSpawn: true,
+      }));
+    } else {
+      this.#send(encodeSessionHostEvent(event, {
+        tenantId: scope?.id,
+      }) as ManagerOut);
+    }
     if (event.type === "session.disposed") {
       this.#runtimeScopes.delete(event.sessionId);
+      this.#freshSpawnPending.delete(event.sessionId);
+    }
+    if (event.type === "session.error") {
+      this.#freshSpawnPending.delete(event.sessionId);
     }
   }
 
@@ -271,7 +301,11 @@ export class SessionManager {
       return;
     }
     for (const [session_id, sess] of this.#sessions) {
-      this.#send({ type: "session.ready", session_id, tenant_id: sess.tenantId, acp_session_id: sess.acpSessionId });
+      this.#send(acpSessionReadyOut({
+        session_id,
+        tenant_id: sess.tenantId,
+        acp_session_id: sess.acpSessionId,
+      }));
     }
   }
 
@@ -332,6 +366,7 @@ export class SessionManager {
           id: tenantId,
           agentApiKey: tenantKey,
         });
+        this.#freshSpawnPending.add(p.session_id);
       }
       await this.#managedRuntime.dispatch({
         type: "session.start",
@@ -348,12 +383,11 @@ export class SessionManager {
     // Idempotent: if we already have this session, just re-ack ready.
     const existing = this.#sessions.get(p.session_id);
     if (existing) {
-      this.#send({
-        type: "session.ready",
+      this.#send(acpSessionReadyOut({
         session_id: p.session_id,
         tenant_id: existing.tenantId,
         acp_session_id: existing.acpSessionId,
-      });
+      }));
       return;
     }
 
@@ -401,11 +435,13 @@ export class SessionManager {
       return;
     }
 
-    const sessionCwd = await ensureSessionCwd(p.session_id);
+    const scratchDir = await ensureSessionCwd(p.session_id);
+    const processCwd = acpProcessCwd(scratchDir, p.cwd);
 
-    // Fetch spawn-cwd bundle (AGENTS.md + .claude/skills/...) from main and
-    // materialize before starting the ACP child. Bundle errors are non-fatal
-    // — we still spawn; the agent just won't see OMA's prompt/skills.
+    // Fetch the bundle (AGENTS.md + .claude/skills/...) from main and
+    // materialize it into the scratch dir before starting the ACP child.
+    // A platform cwd does not receive those files. Bundle errors are
+    // non-fatal — we still spawn; the agent just won't see OMA's prompt/skills.
     let blocklist: string[] = [];
     let bundleMcpServers: BundleMcpServer[] = [];
     let bundleEnv: BundleEnvVar[] = [];
@@ -415,7 +451,7 @@ export class SessionManager {
       // inline) regardless of which alias the AgentConfig row stores.
       const bundle = await this.#fetchBundle(p.session_id, agent.id);
       if (bundle) {
-        await writeBundle(sessionCwd, bundle.files);
+        await writeBundle(scratchDir, bundle.files);
         blocklist = bundle.local_skill_blocklist ?? [];
         bundleMcpServers = bundle.mcp_servers ?? [];
         bundleEnv = bundle.env ?? [];
@@ -424,15 +460,16 @@ export class SessionManager {
       process.stderr.write(`  ! bundle fetch failed (non-fatal): ${(e as Error).message}\n`);
     }
 
-    // For Claude Code we redirect ~/.claude → <cwd>/.claude-config so
+    // For Claude Code we redirect ~/.claude → <scratch>/.claude-config so
     // the user's per-agent local-skill blocklist actually filters what
-    // the child sees. Other ACP agents don't share Claude Code's
-    // filesystem layout — leave their env untouched. Match by canonical
-    // id so the legacy alias still gets the CLAUDE_CONFIG_DIR treatment.
+    // the child sees, without writing that tree into a project cwd.
+    // Other ACP agents don't share Claude Code's filesystem layout —
+    // leave their env untouched. Match by canonical id so the legacy
+    // alias still gets the CLAUDE_CONFIG_DIR treatment.
     const extraEnv: Record<string, string | undefined> = {};
     if (agent.id === "claude-acp") {
       try {
-        const cfgDir = await setupClaudeConfigDir(sessionCwd, new Set(blocklist));
+        const cfgDir = await setupClaudeConfigDir(scratchDir, new Set(blocklist));
         extraEnv.CLAUDE_CONFIG_DIR = cfgDir;
       } catch (e) {
         process.stderr.write(
@@ -466,7 +503,8 @@ export class SessionManager {
     }));
 
     process.stderr.write(
-      `  → SessionManager.start ${agent.spec.command} cwd=${sessionCwd}` +
+      `  → SessionManager.start ${agent.spec.command} cwd=${processCwd}` +
+        (processCwd === scratchDir ? "" : ` scratch=${scratchDir}`) +
         (extraEnv.CLAUDE_CONFIG_DIR ? ` cfg=${extraEnv.CLAUDE_CONFIG_DIR}` : "") +
         (blocklist.length ? ` blocklist=${blocklist.length}` : "") +
         (mcpServersForAcp.length ? ` mcp=${mcpServersForAcp.length}` : "") +
@@ -481,7 +519,7 @@ export class SessionManager {
       const session = await this.#runtime.start({
         agent: {
           ...agent.spec,
-          cwd: sessionCwd,
+          cwd: processCwd,
           env: scrubAcpSpawnEnv({ ...(agent.spec.env ?? {}), ...envFromBundle, ...extraEnv }),
         },
         mcpServers: mcpServersForAcp,
@@ -493,12 +531,13 @@ export class SessionManager {
         tenantId,
         turns: new Map(),
       });
-      this.#send({
-        type: "session.ready",
+      this.#send(acpSessionReadyOut({
         session_id: p.session_id,
         tenant_id: tenantId,
         acp_session_id: session.acpSessionId,
-      });
+        scratchDir,
+        freshSpawn: true,
+      }));
     } catch (e) {
       this.#send({
         type: "session.error",

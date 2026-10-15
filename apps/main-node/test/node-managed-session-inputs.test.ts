@@ -92,6 +92,32 @@ describe("NodeManagedSessionInputPreparer", () => {
     ]);
   });
 
+  it("prepares local provider outputs without calling a FUSE mount when shared OSS publication is selected", async () => {
+    const session = managedSession();
+    session.resources = [];
+    session.agent.skills = [];
+    const commands: string[] = [];
+    let mounted = false;
+    let executed = false;
+    const preparer = new NodeManagedSessionInputPreparer({
+      sharedOutputs: true,
+      files: {} as never, skillVersions: {} as never,
+      repositoryCredentials: {} as never, memorySnapshots: {} as never,
+    });
+    const sandbox = {
+      sessionOutputMountCapabilities: () => ({ durability: "durable" as const }),
+      mountSessionOutputs: async () => { mounted = true; throw new Error("FUSE unavailable"); },
+      exec: async (command: string) => { executed = true; commands.push(command); return ""; },
+      setEnvVars: async (env: Record<string, string>) => {
+        expect(executed).toBe(false);
+        expect(env).toEqual({ OMA_OUTPUTS_DIR: "/mnt/session/outputs" });
+      },
+    } as unknown as SandboxExecutor;
+    await preparer.prepare({ workspaceId: "default", session, sandbox, runtimeGeneration: "runtime_1" });
+    expect(mounted).toBe(false);
+    expect(commands).toEqual(["mkdir -p /mnt/session/outputs"]);
+  });
+
   it("materializes file, pinned repository revision, and custom skill before execution", async () => {
     const writeFileBytes = vi.fn(async () => "written");
     const gitCheckout = vi.fn(async () => undefined);

@@ -4,6 +4,7 @@
 
 import type {
   Clock,
+  FileKeysetOptions,
   FileListOptions,
   FileRepo,
   Logger,
@@ -62,6 +63,25 @@ export class InMemoryFileRepo implements FileRepo {
     if (opts.afterId) rows = rows.filter((f) => f.id > opts.afterId!);
     rows.sort((a, b) => {
       const cmp = a.created_at - b.created_at;
+      return opts.order === "asc" ? cmp : -cmp;
+    });
+    return rows.slice(0, opts.limit).map(toRow);
+  }
+
+  async listKeyset(tenantId: string, opts: FileKeysetOptions): Promise<FileRow[]> {
+    let rows = Array.from(this.byId.values()).filter((row) => row.tenant_id === tenantId);
+    if (opts.sessionId !== undefined) {
+      rows = rows.filter((row) => row.session_id === opts.sessionId);
+    }
+    if (opts.after) {
+      const bound = { created_at: opts.after.createdAtMs, id: opts.after.id };
+      rows = rows.filter((row) => {
+        const cmp = compareStoredKey(row, bound);
+        return opts.order === "asc" ? cmp > 0 : cmp < 0;
+      });
+    }
+    rows.sort((a, b) => {
+      const cmp = compareStoredKey(a, b);
       return opts.order === "asc" ? cmp : -cmp;
     });
     return rows.slice(0, opts.limit).map(toRow);
@@ -142,4 +162,14 @@ function toRow(f: InMemFile): FileRow {
 
 function msToIso(ms: number): string {
   return new Date(ms).toISOString();
+}
+
+function compareStoredKey(
+  a: { created_at: number; id: string },
+  b: { created_at: number; id: string },
+): number {
+  if (a.created_at !== b.created_at) return a.created_at - b.created_at;
+  if (a.id < b.id) return -1;
+  if (a.id > b.id) return 1;
+  return 0;
 }

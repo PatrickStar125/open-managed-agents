@@ -11,6 +11,7 @@ import { SqlSessionRuntimeHistorySource } from "./history";
 
 export {
   ensureSessionExecutionCoordinatorSchema,
+  ensureSessionExecutionClaimLockSchema,
   sessionExecutionCoordinatorSqlSchema,
   SqlSessionExecutionStore,
   SqlSessionExecutionCoordinator,

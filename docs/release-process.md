@@ -60,6 +60,53 @@ That's it. Once the PR is merged, the release bot does the rest.
   but pick the most informative one. We're past the point where we can
   break the CLI without warning anyone.
 
+## Release check
+
+`scripts/release-check.mjs` is the changesets form of the release gate used
+in openma-common and pi-acp. It does not bump versions, publish, or create
+tags. CI runs it as the `release-check` job, in parallel with `verify`,
+with no `pnpm install`.
+
+On every pull request it prints a non-blocking notice listing pull requests
+already merged to the base branch, since each package's previous
+`@openma/<name>@*` tag, that changed files shipped by that package (`src/`,
+`README.md`, or runtime dependency fields). Test files and devDependency
+bumps are not listed and do not need a changeset.
+
+It fails the pull request when:
+
+- Those shipped files change and the PR adds neither a changeset for the
+  package nor an empty changeset (`pnpm changeset --empty`).
+- A changeset, or the resulting `package.json` bump, is `minor` or `major`
+  and the PR does not have the `release:minor` or `release:major` label.
+  A patch bump, and a prerelease increment that does not change
+  major.minor.patch, needs no label. Promoting `x.y.z-beta.N` to a stable
+  version uses the bump from the previous stable tag (or from `0.0.0` when
+  the package has no stable tag yet).
+- The PR changes a published version and `CHANGELOG.md` does not cover every
+  such pull request since the previous tag. Coverage is a `(#N)` mention or
+  the commit sha recorded by `@changesets/changelog-git`, or the changeset
+  file being consumed into that changelog. `#100` does not count as `#10`.
+- The new version's changelog heading is missing, or `.changeset/pre.json`
+  disagrees with the dist-tag changesets will publish (`latest` when not in
+  pre mode, otherwise the `pre.json` tag, which must match the version's
+  prerelease id).
+
+Package READMEs in this repo do not pin a version, and `dist/` is built at
+publish time and gitignored, so those openma-common checks are not repeated.
+The tag changesets will create is `@openma/<name>@<version>`.
+
+The `publish` job in `release.yml` runs `node scripts/release-check.mjs
+--publish` before `pnpm release`. On a push that is not publishing a new
+version it only prints the unreleased notices and exits 0. `version-pr` is
+unchanged.
+
+`node scripts/release-check.mjs --audit` prints the same checks against
+existing tags and lists CHANGELOG versions that have no git tag. It exits 0.
+`--registry` also compares npm dist-tags. The history test
+`scripts/release-check.history.test.mjs` needs a full clone with tags; the
+`release-check` job fetches them. `pnpm test` runs the fixture tests only.
+
 ## Beta / prerelease workflow
 
 To start a beta cycle for the next release:

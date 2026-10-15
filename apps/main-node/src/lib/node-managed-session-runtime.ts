@@ -35,9 +35,16 @@ import type {
   SessionRealtimeWriter,
 } from "@open-managed-agents/session-realtime";
 import { randomUUID } from "node:crypto";
+import { createStrictlyIncreasingEventStamp } from "./node-managed-harness-runtime.js";
 import { ScopedSessionMap } from "./scoped-session-map.js";
 
-export type StartNodeManagedSessionRuntime = StartSessionExecution;
+export type StartNodeManagedSessionRuntime = StartSessionExecution & {
+  executionFence?: SessionExecutionFence;
+  /** Aborted when the user interrupts, the session stops, or the lease is lost.
+   * Startup (sandbox acquisition, checkpoint restore, input staging) must stop
+   * instead of continuing a retry. */
+  signal?: AbortSignal;
+};
 
 export type StopNodeManagedSessionRuntime = StopSessionExecution;
 
@@ -92,6 +99,13 @@ export interface DefaultNodeManagedSessionRuntimeDriverDependencies {
   ): SessionRuntimeProjectionApplicationPort;
   clock?: { now(): Date };
   ids?: { nextEventId(): string };
+  /** Like Claude Managed Agents, startup failures (sandbox acquisition,
+   * workspace restore, input staging) are retried by the server while the
+   * execution lease is held: `session.error` with retry_status `retrying`
+   * plus `session.status_rescheduled`, then `exhausted` and an idle session
+   * with `retries_exhausted`. Startup has produced no agent side effects.
+   * `cancel` aborts the backoff and the in-flight attempt. */
+  startRetry?: { attempts: number; delayMs(attempt: number): number };
 }
 
 export interface NodeManagedSessionRunnerAcceptInput
@@ -224,6 +238,8 @@ export class DefaultNodeManagedSessionRuntimeDriver
   private readonly outputChains = new ScopedSessionMap<Promise<void>>();
   private readonly starts = new ScopedSessionMap<Promise<void>>();
   private readonly executionFences = new ScopedSessionMap<SessionExecutionFence>();
+  private readonly startAborts = new ScopedSessionMap<AbortController>();
+  private readonly eventStamps = new ScopedSessionMap<() => string>();
   private readonly realtime: SessionRealtimeHub;
 
   constructor(
@@ -254,12 +270,25 @@ export class DefaultNodeManagedSessionRuntimeDriver
     }
   }
 
+  /** Stops an in-flight startup retry. `lease_lost` stays silent: another
+   * owner re-runs the execution. A user interrupt that already announced
+   * `retrying` returns the session to idle so it does not stay rescheduling. */
+  cancel(input: { workspaceId: string; sessionId: string; reason?: string }): void {
+    this.startAborts.get(input)?.abort(cancellationError(input.reason ?? "cancelled"));
+  }
+
   async stop(input: StopNodeManagedSessionRuntime): Promise<void> {
+    this.cancel({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      reason: `session_${input.reason}`,
+    });
     try {
       await this.dependencies.engine.stop(input);
       await this.outputChains.get(input);
     } finally {
       this.starts.delete(input);
+      this.eventStamps.delete(input);
       this.closeSession(input);
     }
   }
@@ -274,18 +303,56 @@ export class DefaultNodeManagedSessionRuntimeDriver
       throw new Error("Session execution fence scope does not match runtime input");
     }
     if (fence !== undefined) this.executionFences.set(input, fence);
+    const abortController = new AbortController();
+    this.startAborts.set(input, abortController);
+    const signal = abortController.signal;
     try {
-      try {
-        await this.start({
-          workspaceId: input.workspaceId,
-          sessionId: input.sessionId,
-          session: input.session,
-          environment: input.environment,
-          initialEvents: [],
-        });
-      } catch (error) {
-        await this.projectTerminalStartFailure(input, error);
-        throw error;
+      const retry = this.dependencies.startRetry ?? {
+        attempts: 3,
+        delayMs: (attempt: number) => Math.min(30_000, 2_000 * 2 ** (attempt - 1)),
+      };
+      let announcedRetry = false;
+      for (let attempt = 1; ; attempt++) {
+        if (signal.aborted) {
+          await this.finishCancelledStart(input, signal, announcedRetry);
+          throw abortedError(signal);
+        }
+        try {
+          await this.start({
+            workspaceId: input.workspaceId,
+            sessionId: input.sessionId,
+            session: input.session,
+            environment: input.environment,
+            initialEvents: [],
+            ...(fence !== undefined && { executionFence: fence }),
+            signal,
+          });
+          break;
+        } catch (error) {
+          if (signal.aborted || isAbortError(error)) {
+            await this.finishCancelledStart(input, signal, announcedRetry);
+            throw signal.aborted ? abortedError(signal) : error;
+          }
+          if (attempt >= Math.max(1, retry.attempts)) {
+            await this.projectStartFailure(input, error, "exhausted");
+            throw error;
+          }
+          await this.projectStartFailure(input, error, "retrying");
+          announcedRetry = true;
+          if (signal.aborted) {
+            await this.finishCancelledStart(input, signal, announcedRetry);
+            throw abortedError(signal);
+          }
+          await abortableDelay(retry.delayMs(attempt), signal);
+          if (signal.aborted) {
+            await this.finishCancelledStart(input, signal, announcedRetry);
+            throw abortedError(signal);
+          }
+        }
+      }
+      if (signal.aborted) {
+        await this.finishCancelledStart(input, signal, announcedRetry);
+        throw abortedError(signal);
       }
       const { executionFence: _executionFence, ...accepted } = input;
       await this.dependencies.engine.accept({
@@ -294,17 +361,45 @@ export class DefaultNodeManagedSessionRuntimeDriver
       });
       await this.outputChains.get(input);
     } finally {
+      if (this.startAborts.get(input) === abortController) {
+        this.startAborts.delete(input);
+      }
       if (fence !== undefined && this.executionFences.get(input) === fence) {
         this.executionFences.delete(input);
       }
     }
   }
 
-  private async projectTerminalStartFailure(
+  private async finishCancelledStart(
+    input: ExecuteNodeManagedSessionEvents,
+    signal: AbortSignal,
+    announcedRetry: boolean,
+  ): Promise<void> {
+    const reason = cancellationReason(signal);
+    // lease_lost: the new owner re-runs the turn. session_*: the session is
+    // going away. Either way a trailing idle from this attempt would race
+    // the owner that still holds the session.
+    if (!announcedRetry || reason === "lease_lost" || reason?.startsWith("session_")) return;
+    const nextEventId = () => this.dependencies.ids?.nextEventId()
+      ?? `event_${randomUUID()}`;
+    await this.enqueueOutput(
+      input.workspaceId,
+      input.sessionId,
+      {
+        id: nextEventId(),
+        type: "session.status_idle",
+        stop_reason: { type: "end_turn" },
+        processed_at: this.nextEventStamp(input),
+      },
+      input.executionFence,
+    );
+  }
+
+  private async projectStartFailure(
     input: ExecuteNodeManagedSessionEvents,
     error: unknown,
+    retryStatus: "retrying" | "exhausted",
   ): Promise<void> {
-    const processedAt = (this.dependencies.clock?.now() ?? new Date()).toISOString();
     const nextEventId = () => this.dependencies.ids?.nextEventId()
       ?? `event_${randomUUID()}`;
     await this.enqueueOutput(
@@ -316,24 +411,42 @@ export class DefaultNodeManagedSessionRuntimeDriver
         error: {
           type: "unknown_error",
           message: error instanceof Error ? error.message : String(error),
-          retry_status: "terminal",
+          retry_status: retryStatus,
         },
-        processed_at: processedAt,
+        processed_at: this.nextEventStamp(input),
       },
       input.executionFence,
     );
     await this.enqueueOutput(
       input.workspaceId,
       input.sessionId,
-      {
-        id: nextEventId(),
-        type: "session.status_idle",
-        stop_reason: { type: "end_turn" },
-        processed_at: processedAt,
-      },
+      retryStatus === "retrying"
+        ? {
+            id: nextEventId(),
+            type: "session.status_rescheduled",
+            processed_at: this.nextEventStamp(input),
+          }
+        : {
+            id: nextEventId(),
+            type: "session.status_idle",
+            stop_reason: { type: "retries_exhausted" },
+            processed_at: this.nextEventStamp(input),
+          },
       input.executionFence,
     );
   }
+
+  private nextEventStamp(scope: { workspaceId: string; sessionId: string }): string {
+    let stamp = this.eventStamps.get(scope);
+    if (stamp === undefined) {
+      stamp = createStrictlyIncreasingEventStamp(
+        this.dependencies.clock ?? { now: () => new Date() },
+      );
+      this.eventStamps.set(scope, stamp);
+    }
+    return stamp();
+  }
+
 
   archiveThread(input: ArchiveNodeManagedSessionThread): Promise<void> {
     return this.dependencies.engine.archiveThread(input);
@@ -529,4 +642,101 @@ export class NodeManagedSessionRuntimeAdapter
       for (const event of decoder.decode(raw)) yield event;
     }
   }
+}
+
+export function cancellationError(reason?: string): Error {
+  const error = new Error(reason && reason.length > 0 ? reason : "The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+export function abortedError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason;
+  return cancellationError(typeof reason === "string" ? reason : undefined);
+}
+
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function cancellationReason(signal: AbortSignal): string | undefined {
+  const reason = signal.reason;
+  if (reason instanceof Error && reason.message.length > 0) return reason.message;
+  if (typeof reason === "string" && reason.length > 0) return reason;
+  return undefined;
+}
+
+export function linkAbort(parent: AbortSignal | undefined, child: AbortController): () => void {
+  if (parent === undefined) return () => {};
+  if (parent.aborted) {
+    child.abort(parent.reason);
+    return () => {};
+  }
+  const onAbort = () => child.abort(parent.reason);
+  parent.addEventListener("abort", onAbort, { once: true });
+  return () => parent.removeEventListener("abort", onAbort);
+}
+
+export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** Rejects when `signal` aborts without waiting out `operation`. A value that
+ * arrives afterwards is passed to `abandon` so a sandbox is not leaked. */
+export function untilAborted<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+  abandon?: (value: T) => Promise<void>,
+): Promise<T> {
+  const leave = (value: T) => {
+    if (abandon === undefined) return;
+    void abandon(value).catch(() => undefined);
+  };
+  if (signal.aborted) {
+    void operation.then(leave, () => undefined);
+    return Promise.reject(abortedError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      settle();
+    };
+    const onAbort = () => {
+      finish(() => {
+        void operation.then(leave, () => undefined);
+        reject(abortedError(signal));
+      });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        finish(() => {
+          if (signal.aborted) {
+            leave(value);
+            reject(abortedError(signal));
+            return;
+          }
+          resolve(value);
+        });
+      },
+      (error) => {
+        finish(() => {
+          reject(signal.aborted ? abortedError(signal) : error);
+        });
+      },
+    );
+  });
 }

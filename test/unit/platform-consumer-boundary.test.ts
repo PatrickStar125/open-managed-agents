@@ -28,6 +28,8 @@ describe("platform SDK consumer boundary", () => {
     expect(nodeComposition).toContain("managedAgentsPortTokens.tunnels");
     expect(nodeComposition).toContain("managedAgentsPortTokens.tunnelCertificates");
     expect(nodeComposition).toContain("managedAgentsPortTokens.userProfiles");
+    expect(nodeComposition).toContain("new McpOAuthCredentialValidationProbe()");
+    expect(nodeComposition).not.toContain("IndeterminateCredentialValidationProbe");
     expect(nodeComposition).not.toContain("agentsModule");
     expect(nodeComposition).not.toContain("new ModelsApplicationService({");
     expect(nodeComposition).not.toContain("new AgentsApplicationService({");
@@ -70,6 +72,8 @@ describe("platform SDK consumer boundary", () => {
     expect(cloudflareComposition).toContain("managedAgentsPortTokens.tunnels");
     expect(cloudflareComposition).toContain("managedAgentsPortTokens.tunnelCertificates");
     expect(cloudflareComposition).toContain("managedAgentsPortTokens.userProfiles");
+    expect(cloudflareComposition).toContain("new McpOAuthCredentialValidationProbe()");
+    expect(cloudflareComposition).not.toContain("IndeterminateCredentialValidationProbe");
     expect(cloudflareComposition).not.toContain("createCloudflarePlatform");
     expect(cloudflareComposition).not.toContain("agentsModule");
     expect(cloudflareComposition).not.toContain("new ModelsApplicationService({");

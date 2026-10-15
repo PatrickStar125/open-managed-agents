@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, or } from "drizzle-orm";
 import {
   asBuilder,
   getAll,
@@ -9,6 +9,7 @@ import {
 } from "@open-managed-agents/db-schema";
 import { files } from "@open-managed-agents/db-schema/cf-auth";
 import type {
+  FileKeysetOptions,
   FileListOptions,
   FileRepo,
   NewFileInput,
@@ -82,6 +83,34 @@ export class SqlFileRepo implements FileRepo {
         .from(files)
         .where(and(...conds))
         .orderBy(order)
+        .limit(opts.limit),
+    );
+    return rows.map(toRow);
+  }
+
+  async listKeyset(tenantId: string, opts: FileKeysetOptions): Promise<FileRow[]> {
+    const conds = [eq(files.tenant_id, tenantId)];
+    if (opts.sessionId !== undefined) {
+      conds.push(eq(files.session_id, opts.sessionId));
+    }
+    if (opts.after) {
+      const created = opts.after.createdAtMs;
+      const id = opts.after.id;
+      const cursorCond = opts.order === "asc"
+        ? or(gt(files.created_at, created), and(eq(files.created_at, created), gt(files.id, id)))
+        : or(lt(files.created_at, created), and(eq(files.created_at, created), lt(files.id, id)));
+      if (!cursorCond) throw new Error("file keyset cursor comparison was empty");
+      conds.push(cursorCond);
+    }
+    const orderBy = opts.order === "asc"
+      ? [asc(files.created_at), asc(files.id)]
+      : [desc(files.created_at), desc(files.id)];
+    const rows = await getAll<typeof files.$inferSelect>(
+      this.db
+        .select()
+        .from(files)
+        .where(and(...conds))
+        .orderBy(...orderBy)
         .limit(opts.limit),
     );
     return rows.map(toRow);

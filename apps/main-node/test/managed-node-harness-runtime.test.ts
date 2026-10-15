@@ -96,6 +96,34 @@ describe("ManagedNodeHarnessRuntime", () => {
     expect(runtime.history.getEvents()).toHaveLength(3);
   });
 
+  it("reportUsage emits session.usage for managed projection", async () => {
+    const { ManagedNodeHarnessRuntime } = await import(
+      "../src/lib/node-managed-harness-runtime.ts"
+    ) as { ManagedNodeHarnessRuntime: ManagedHarnessRuntimeConstructor };
+    const output: unknown[] = [];
+    const runtime = new ManagedNodeHarnessRuntime({
+      initialEvents: [],
+      events: [],
+      sandbox: {} as SandboxExecutor,
+      output: async (frame) => { output.push(frame); },
+      clock: { now: () => new Date("2026-10-09T00:00:00.000Z") },
+      ids: { nextEventId: () => "event_usage_01" },
+    });
+    await runtime.reportUsage(120, 15);
+    await runtime.drain();
+    expect(output).toEqual([
+      expect.objectContaining({
+        id: "event_usage_01",
+        type: "session.usage",
+        usage: {
+          input_tokens: 120,
+          output_tokens: 15,
+        },
+        processed_at: "2026-10-09T00:00:00.000Z",
+      }),
+    ]);
+  });
+
   it.each([
     {
       type: "user.custom_tool_result" as const,
@@ -158,6 +186,26 @@ describe("ManagedNodeHarnessRuntime", () => {
       },
     ]);
     expect(runtime.history.getEvents()).toHaveLength(2);
+  });
+
+  it("stamps events strictly increasing so same-millisecond events replay in order", async () => {
+    const { ManagedNodeHarnessRuntime } = await import("../src/lib/node-managed-harness-runtime.ts") as unknown as
+      { ManagedNodeHarnessRuntime: ManagedHarnessRuntimeConstructor };
+    const output: Array<{ type: string; processed_at: string }> = [];
+    let next = 0;
+    const runtime = new ManagedNodeHarnessRuntime({
+      initialEvents: [], events: [], sandbox: {} as SandboxExecutor,
+      output: async (frame) => { output.push(frame as { type: string; processed_at: string }); },
+      clock: { now: () => new Date("2026-08-26T01:00:00.000Z") },
+      ids: { nextEventId: () => `event_${++next}` },
+    });
+    runtime.broadcast({ type: "agent.tool_use", id: "toolu_1", name: "bash", input: {} } as SessionEvent);
+    runtime.broadcast({ type: "agent.tool_result", tool_use_id: "toolu_1", content: [] } as unknown as SessionEvent);
+    await runtime.drain();
+    expect(output.map((frame) => [frame.type, frame.processed_at])).toEqual([
+      ["agent.tool_use", "2026-08-26T01:00:00.000Z"],
+      ["agent.tool_result", "2026-08-26T01:00:00.001Z"],
+    ]);
   });
 
   it("keeps a final system.message as mid-conversation system context", async () => {

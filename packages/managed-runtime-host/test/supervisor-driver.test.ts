@@ -165,6 +165,78 @@ describe("SupervisedSandboxHarnessDriver", () => {
     });
   });
 
+  it("queues a host request, waits for the matching safe-point checkpoint, and serializes requests", async () => {
+    let requested!: () => void;
+    const requestSent = new Promise<void>((resolve) => { requested = resolve; });
+    const commands: Array<{ type: string; requestId?: string }> = [];
+    const channel = {
+      send: vi.fn(async (command: { type: string; requestId?: string }) => {
+        commands.push(command);
+        if (command.type === "checkpoint.request") requested();
+      }),
+      events: vi.fn(async function* () {
+        yield { type: "ready", protocol: "openma-harness-supervisor-v1" };
+        await requestSent;
+        yield { type: "checkpoint", checkpointId: "checkpoint_1", sessionId: scope.sessionId,
+          requestId: "periodic_1" };
+        yield { type: "checkpoint.committed", requestId: "periodic_1" };
+        yield { type: "completed", exitCode: 0 };
+        yield { type: "drained" };
+      }),
+      close: vi.fn(async () => {}),
+    };
+    let ask!: () => Promise<void>;
+    const checkpoint = vi.fn(async () => {});
+    const driver = new (SupervisorDriver())({ transport: { open: vi.fn(async () => channel) } });
+    const running = driver.run({
+      scope, fence, sandbox: { provider: "fake", runtimeId: "runtime_1" },
+      workspacePath: "/workspace", outputPath: null, driver: declaration,
+      checkpoint, onCheckpointRequester: (request: () => Promise<void>) => { ask = request; },
+      signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => expect(ask).toBeTypeOf("function"));
+    const first = ask();
+    const duplicate = ask();
+    expect(duplicate).toBe(first);
+    await first;
+    await expect(running).resolves.toEqual({ type: "completed" });
+    expect(commands.filter((command) => command.type === "checkpoint.request")).toEqual([
+      { type: "checkpoint.request", requestId: "periodic_1" },
+    ]);
+    expect(checkpoint).toHaveBeenCalledTimes(1);
+    expect(commands).toContainEqual({ type: "checkpoint.commit", checkpointId: "checkpoint_1" });
+  });
+
+  it("settles a queued request when the harness completes without another safe point", async () => {
+    let requested!: () => void;
+    const sent = new Promise<void>((resolve) => { requested = resolve; });
+    const channel = {
+      send: vi.fn(async (command: { type: string }) => {
+        if (command.type === "checkpoint.request") requested();
+      }),
+      events: vi.fn(async function* () {
+        yield { type: "ready", protocol: "openma-harness-supervisor-v1" };
+        await sent;
+        yield { type: "completed", exitCode: 0 };
+        yield { type: "drained" };
+      }),
+      close: vi.fn(async () => {}),
+    };
+    let ask!: () => Promise<void>;
+    const checkpoint = vi.fn();
+    const driver = new (SupervisorDriver())({ transport: { open: vi.fn(async () => channel) } });
+    const running = driver.run({
+      scope, fence, sandbox: { provider: "fake", runtimeId: "runtime_1" },
+      workspacePath: "/workspace", outputPath: null, driver: declaration,
+      checkpoint, onCheckpointRequester: (request: () => Promise<void>) => { ask = request; },
+      signal: new AbortController().signal,
+    });
+    await vi.waitFor(() => expect(ask).toBeTypeOf("function"));
+    await ask();
+    await expect(running).resolves.toEqual({ type: "completed" });
+    expect(checkpoint).not.toHaveBeenCalled();
+  });
+
   it("rejects and stops the supervisor when a live checkpoint cannot be committed", async () => {
     const failure = new Error("workspace fence lost");
     const commands: unknown[] = [];

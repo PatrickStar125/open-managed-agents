@@ -35,6 +35,8 @@ export interface CreateNodeManagedRuntimeOptions {
   ownerId: string;
   leaseTtlMs: number;
   heartbeatIntervalMs: number;
+  /** Optional safe-point checkpoint target for supervised checkpoint_restore sessions. */
+  checkpointIntervalMs?: number;
   image: string;
   network?: string;
   docker?: DockerCommandPort;
@@ -97,6 +99,7 @@ export async function createNodeManagedRuntime(
     ownerId: options.ownerId,
     leaseTtlMs: options.leaseTtlMs,
     heartbeatIntervalMs: options.heartbeatIntervalMs,
+    ...(options.checkpointIntervalMs === undefined ? {} : { checkpointIntervalMs: options.checkpointIntervalMs }),
     fences,
     sandbox,
     workspace,

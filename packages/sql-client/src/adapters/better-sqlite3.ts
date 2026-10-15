@@ -19,12 +19,16 @@
 //     `db.transaction(...)` invocation — same semantics (atomic, rollback on
 //     any failure), different mechanism.
 
+import { driverRetry } from "../db-errors";
 import type {
   SqlClient,
   SqlRunResult,
   SqlSelectResult,
   SqlStatement,
 } from "../ports";
+import { translateBetterSqlite3Error } from "./better-sqlite3-errors";
+
+const retrySqlite = driverRetry(translateBetterSqlite3Error);
 
 // Minimal structural types so this file compiles without `better-sqlite3`
 // installed. The actual driver is dynamic-imported from createBetterSqlite3SqlClient.
@@ -33,6 +37,8 @@ interface BS3RunResult {
   lastInsertRowid: number | bigint;
 }
 interface BS3Statement {
+  /** Better-sqlite3 marks DML ... RETURNING statements as readers. */
+  reader?: boolean;
   run(...params: unknown[]): BS3RunResult;
   get(...params: unknown[]): unknown;
   all(...params: unknown[]): unknown[];
@@ -58,33 +64,43 @@ class BetterSqlite3SqlStatement implements SqlStatement {
   }
 
   async run<T = unknown>(): Promise<SqlRunResult<T>> {
-    const r = this.stmt.run(...this.params);
-    return {
-      meta: {
-        changes: r.changes,
-        last_row_id: typeof r.lastInsertRowid === "bigint"
-          ? Number(r.lastInsertRowid)
-          : r.lastInsertRowid,
-      },
-      success: true,
-    };
+    return retrySqlite(async () => {
+      const r = this.stmt.run(...this.params);
+      return {
+        meta: {
+          changes: r.changes,
+          last_row_id: typeof r.lastInsertRowid === "bigint"
+            ? Number(r.lastInsertRowid)
+            : r.lastInsertRowid,
+        },
+        success: true,
+      };
+    });
   }
 
   async first<T = unknown>(): Promise<T | null> {
-    const r = this.stmt.get(...this.params);
-    return (r ?? null) as T | null;
+    return retrySqlite(async () => {
+      const r = this.stmt.get(...this.params);
+      return (r ?? null) as T | null;
+    });
   }
 
   async all<T = unknown>(): Promise<SqlSelectResult<T>> {
-    const r = this.stmt.all(...this.params);
-    return {
-      results: r as T[],
-      meta: { changes: 0 },
-    };
+    return retrySqlite(async () => {
+      const r = this.stmt.all(...this.params);
+      return {
+        results: r as T[],
+        meta: { changes: 0 },
+      };
+    });
   }
 
   /** Internal — used by BetterSqlite3SqlClient.batch to execute under tx. */
   executeRun(): SqlRunResult<unknown> {
+    if (this.stmt.reader) {
+      const rows = this.stmt.all(...this.params);
+      return { meta: { changes: rows.length }, results: rows, success: true };
+    }
     const r = this.stmt.run(...this.params);
     return {
       meta: {
@@ -106,23 +122,29 @@ export class BetterSqlite3SqlClient implements SqlClient {
   }
 
   async batch<T = unknown>(stmts: SqlStatement[]): Promise<Array<SqlRunResult<T>>> {
-    const txn = this.db.transaction(() => {
-      const out: SqlRunResult<T>[] = [];
-      for (const s of stmts) {
-        if (!(s instanceof BetterSqlite3SqlStatement)) {
-          throw new Error(
-            "BetterSqlite3SqlClient.batch: foreign SqlStatement (not from this client's prepare)",
-          );
+    // better-sqlite3 transactions are synchronous. Retry the whole
+    // transaction function; a failure rolls it back before the next attempt.
+    return retrySqlite(async () => {
+      const txn = this.db.transaction(() => {
+        const out: SqlRunResult<T>[] = [];
+        for (const s of stmts) {
+          if (!(s instanceof BetterSqlite3SqlStatement)) {
+            throw new Error(
+              "BetterSqlite3SqlClient.batch: foreign SqlStatement (not from this client's prepare)",
+            );
+          }
+          out.push(s.executeRun() as SqlRunResult<T>);
         }
-        out.push(s.executeRun() as SqlRunResult<T>);
-      }
-      return out;
+        return out;
+      });
+      return txn() as SqlRunResult<T>[];
     });
-    return txn() as SqlRunResult<T>[];
   }
 
   async exec(sql: string): Promise<void> {
-    this.db.exec(sql);
+    await retrySqlite(async () => {
+      this.db.exec(sql);
+    });
   }
 }
 

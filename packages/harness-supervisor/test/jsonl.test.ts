@@ -170,6 +170,48 @@ describe("harness supervisor JSONL protocol", () => {
     await serving;
   });
 
+  it("round-trips a host request without capturing until the harness reaches a safe point", async () => {
+    let checkpoint!: () => Promise<void>;
+    const input = new TransformStream<Uint8Array, Uint8Array>();
+    const output = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = input.writable.getWriter();
+    const reader = output.readable.getReader();
+    const encoder = new TextEncoder();
+    const state = { buffer: "" };
+    const serving = jsonlServer()({
+      input: input.readable,
+      output: output.writable,
+      heartbeatIntervalMs: 60_000,
+      resolveHarness: vi.fn(async () => ({
+        start: vi.fn(async (options) => {
+          checkpoint = () => options.checkpoint({ sessionId: start.scope.sessionId });
+          return {
+            completed: new Promise<{ exitCode: number }>(() => {}),
+            drain: vi.fn(async () => {}),
+            stop: vi.fn(async () => {}),
+          };
+        }),
+      })),
+    });
+    await writer.write(encoder.encode(`${JSON.stringify(start)}\n`));
+    await expect(nextLine(reader, state)).resolves.toMatchObject({ type: "ready" });
+    await writer.write(encoder.encode(`${JSON.stringify({ type: "checkpoint.request", requestId: "periodic_1" })}\n`));
+    const pending = checkpoint();
+    await expect(nextLine(reader, state)).resolves.toEqual({
+      type: "checkpoint", checkpointId: "checkpoint_1",
+      sessionId: start.scope.sessionId, requestId: "periodic_1",
+    });
+    await writer.write(encoder.encode(`${JSON.stringify({
+      type: "checkpoint.commit", checkpointId: "checkpoint_1",
+    })}\n`));
+    await expect(nextLine(reader, state)).resolves.toEqual({
+      type: "checkpoint.committed", requestId: "periodic_1",
+    });
+    await pending;
+    await writer.close();
+    await serving;
+  });
+
   it("round-trips a checkpoint rejection over JSONL", async () => {
     let checkpoint!: () => Promise<void>;
     const input = new TransformStream<Uint8Array, Uint8Array>();
@@ -319,6 +361,7 @@ describe("harness supervisor JSONL protocol", () => {
     ["missing type", "{}", /object with a type/],
     ["unknown command", '{"type":"wat"}', /Unknown harness supervisor command/],
     ["bad stop reason", '{"type":"stop","reason":"done"}', /stop reason/],
+    ["bad checkpoint request", '{"type":"checkpoint.request","requestId":""}', /checkpoint request/],
     ["bad checkpoint commit", '{"type":"checkpoint.commit","checkpointId":""}', /checkpoint id/],
     ["bad checkpoint rejection id", '{"type":"checkpoint.reject","checkpointId":"","message":"failed"}', /checkpoint rejection/],
     ["bad checkpoint rejection", '{"type":"checkpoint.reject","checkpointId":"x","message":""}', /checkpoint rejection/],

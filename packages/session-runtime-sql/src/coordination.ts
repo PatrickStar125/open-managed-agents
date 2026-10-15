@@ -9,7 +9,24 @@ import type {
   SessionExecutionFence,
   SettleSessionExecutionResult,
 } from "@open-managed-agents/session-runtime-contract/coordination";
+import {
+  annotateDbBoundary,
+  CasConflict,
+  isCasConflict,
+  withDbBoundary,
+} from "@open-managed-agents/sql-client/db-errors";
 import type { SqlClient } from "@open-managed-agents/sql-client";
+import { Cause, Effect, Exit, Option } from "effect";
+
+/** Promise port over an Effect program. FiberFailure stays inside. */
+function runCoordinatorPort<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
+  return Effect.runPromiseExit(effect).then((exit) => {
+    if (Exit.isSuccess(exit)) return exit.value;
+    const failure = Cause.failureOption(exit.cause);
+    if (Option.isSome(failure)) throw failure.value;
+    throw Cause.squash(exit.cause);
+  });
+}
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS managed_session_executions (
@@ -41,10 +58,96 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS managed_session_executions_session_idx
     ON managed_session_executions
       (workspace_id, session_id, lane_id, admitted_at_ms, id)`,
+  `CREATE TABLE IF NOT EXISTS managed_session_claim_locks (
+    workspace_id VARCHAR(191) NOT NULL, session_id VARCHAR(191) NOT NULL,
+    claim_token VARCHAR(191) NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0,
+    holder_execution_id VARCHAR(191),
+    PRIMARY KEY (workspace_id, session_id)
+  )`,
 ] as const;
 
 export const sessionExecutionCoordinatorSqlSchema =
   `${schemaStatements.join(";\n")};`;
+
+/** Node migrations already created the execution table. This additive lock
+ * table is needed only when checkpoint_restore selects cross-lane serial mode. */
+export async function ensureSessionExecutionClaimLockSchema(
+  sql: SqlClient,
+  dialect?: "sqlite" | "mysql" | "postgres",
+): Promise<void> {
+  // Node's consolidated MySQL baseline uses utf8mb4_unicode_ci even when
+  // the database default differs. Cross-table lock comparisons must use the
+  // same collation as managed_session_executions.
+  await sql.exec(schemaStatements[3] + (dialect === "mysql"
+    ? " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    : ""));
+  await upgradeSessionClaimLockColumns(sql, dialect);
+}
+
+/**
+ * Additive columns for the per-session CAS mutex. Old replicas ignore them
+ * (`claim_token` stays NOT NULL). New replicas compare `version`.
+ */
+export async function upgradeSessionClaimLockColumns(
+  sql: SqlClient,
+  dialect?: "sqlite" | "mysql" | "postgres",
+): Promise<void> {
+  const names = await claimLockColumnNames(sql, dialect);
+  if (names === null || names.size === 0) return;
+  if (!names.has("version")) {
+    await sql.exec(
+      "ALTER TABLE managed_session_claim_locks ADD COLUMN version BIGINT NOT NULL DEFAULT 0",
+    );
+  }
+  if (!names.has("holder_execution_id")) {
+    await sql.exec(
+      "ALTER TABLE managed_session_claim_locks ADD COLUMN holder_execution_id VARCHAR(191)",
+    );
+  }
+}
+
+async function claimLockColumnNames(
+  sql: SqlClient,
+  dialect?: "sqlite" | "mysql" | "postgres",
+): Promise<Set<string> | null> {
+  const collect = (rows: Array<{ name?: string }> | undefined) =>
+    new Set(
+      (rows ?? [])
+        .map((row) => row.name?.toLowerCase())
+        .filter((name): name is string => typeof name === "string"),
+    );
+  if (dialect === "postgres") {
+    const rows = await sql.prepare(
+      `SELECT column_name AS name FROM information_schema.columns
+        WHERE table_name = 'managed_session_claim_locks'`,
+    ).all<{ name?: string }>();
+    return collect(rows.results);
+  }
+  if (dialect === "mysql") {
+    const rows = await sql.prepare(
+      `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_session_claim_locks'`,
+    ).all<{ name?: string }>();
+    return collect(rows.results);
+  }
+  try {
+    const rows = await sql.prepare(
+      "PRAGMA table_info(managed_session_claim_locks)",
+    ).all<{ name?: string }>();
+    return collect(rows.results);
+  } catch {
+    try {
+      const rows = await sql.prepare(
+        `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'managed_session_claim_locks'`,
+      ).all<{ name?: string }>();
+      return collect(rows.results);
+    } catch {
+      return null;
+    }
+  }
+}
 
 export async function ensureSessionExecutionCoordinatorSchema(
   sql: SqlClient,
@@ -97,6 +200,7 @@ export async function ensureSessionExecutionCoordinatorSchema(
     }
   }
   for (const statement of schemaStatements.slice(1)) await sql.exec(statement);
+  await upgradeSessionClaimLockColumns(sql);
 }
 
 interface ExecutionRow {
@@ -228,10 +332,24 @@ function validateTtl(ttlMs: number): void {
   }
 }
 
+export interface SqlSessionExecutionStoreOptions {
+  /** Only checkpoint_restore enables this: all lanes of a Session share /workspace. */
+  serializeSessionClaims?: boolean;
+  /**
+   * Minimum gap between expiry sweeps, measured on the caller clock.
+   * `0` (tests, default) sweeps on every claim and renew. Production uses
+   * 5s plus up to 10s of jitter so replicas do not scan in lockstep.
+   */
+  sweepIntervalMs?: number;
+  onError?(error: unknown, op: string): void;
+}
+
 export class SqlSessionExecutionStore
   implements SessionExecutionStorePort
 {
-  constructor(private readonly sql: SqlClient) {}
+  #nextSweepAt = Number.NEGATIVE_INFINITY;
+
+  constructor(private readonly sql: SqlClient, private readonly options: SqlSessionExecutionStoreOptions = {}) {}
 
   async admit(
     input: AdmitSessionExecution,
@@ -288,178 +406,347 @@ export class SqlSessionExecutionStore
       : { type: "conflict", execution };
   }
 
-  async claim(
+  claim(
     input: ClaimSessionExecution,
   ): Promise<ClaimSessionExecutionResult> {
+    return runCoordinatorPort(Effect.tryPromise({
+      try: () => withDbBoundary({
+        op: "session_execution.claim",
+        ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      }, () => this.claimWithCasRetries(input)),
+      catch: (error: unknown) => error,
+    }));
+  }
+
+  /**
+   * Optimistic retries when another replica won the same candidate.
+   * Transient driver failures are already tagged and retried inside the
+   * SQL adapter. This loop only repeats a CasConflict.
+   * A per-execution CAS is not enough for serial mode: the versioned
+   * session lock row is the mutex, so two lanes cannot both commit.
+   */
+  private async claimWithCasRetries(
+    input: ClaimSessionExecution,
+  ): Promise<ClaimSessionExecutionResult> {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      try {
+        return await this.claimOnce(input);
+      } catch (error) {
+        if (!isCasConflict(error)) throw error;
+      }
+    }
+    const already = await this.findOwnedAttempt(input.ownerId, input.attemptId);
+    return already ?? { type: "empty" };
+  }
+
+  private async claimOnce(input: ClaimSessionExecution): Promise<ClaimSessionExecutionResult> {
     validateTtl(input.leaseTtlMs);
     const claimedAt = timestamp(input.claimedAt, "claim");
-    await this.terminalizeExpired(claimedAt);
-    const row = await this.sql.prepare(`
+    await this.sweepExpired(claimedAt);
+    const serial = this.options.serializeSessionClaims === true;
+    const candidate = await this.selectCandidate(input, claimedAt, serial);
+    if (candidate === null) return { type: "empty" };
+    annotateDbBoundary({ sessionId: candidate.session_id });
+    const claimed = serial
+      ? await this.claimSerial(input, claimedAt, candidate)
+      : await this.claimByRevision(input, claimedAt, candidate);
+    if (claimed !== null) return claimed;
+    const already = await this.findOwnedAttempt(input.ownerId, input.attemptId);
+    if (already !== null) return already;
+    throw new CasConflict({
+      op: "session_execution.claim",
+      sessionId: candidate.session_id,
+      cause: "conditional update matched no row",
+    });
+  }
+
+  private async selectCandidate(
+    input: ClaimSessionExecution,
+    claimedAt: number,
+    serial: boolean,
+  ): Promise<{
+    workspace_id: string;
+    session_id: string;
+    id: string;
+    revision: number | string;
+  } | null> {
+    return this.sql.prepare(`
+      SELECT candidate.workspace_id, candidate.session_id, candidate.id, candidate.revision
+        FROM managed_session_executions AS candidate
+       WHERE (? IS NULL OR candidate.workspace_id = ?)
+         AND (? IS NULL OR candidate.session_id = ?)
+         AND (? IS NULL OR candidate.lane_id = ?)
+         AND (candidate.state = 'queued' OR (candidate.state = 'running'
+           AND candidate.lease_expires_at_ms <= ? AND candidate.owner_id <> ?))
+         AND candidate.attempt_count < candidate.max_attempts
+         AND candidate.deadline_at_ms > ?
+         AND NOT EXISTS (
+           SELECT 1 FROM managed_session_executions AS earlier
+            WHERE earlier.workspace_id = candidate.workspace_id
+              AND earlier.session_id = candidate.session_id
+              AND earlier.lane_id = candidate.lane_id
+              AND earlier.state IN ('queued', 'running')
+              AND (earlier.admitted_at_ms < candidate.admitted_at_ms
+                OR (earlier.admitted_at_ms = candidate.admitted_at_ms AND earlier.id < candidate.id))
+         )
+         ${serial ? `AND NOT EXISTS (
+           SELECT 1 FROM managed_session_executions AS active
+            WHERE active.workspace_id = candidate.workspace_id
+              AND active.session_id = candidate.session_id
+              AND active.id <> candidate.id AND active.state = 'running'
+              AND active.lease_expires_at_ms > ?
+         )` : ""}
+       ORDER BY candidate.admitted_at_ms ASC, candidate.id ASC
+       LIMIT 1
+    `).bind(
+      input.workspaceId ?? null, input.workspaceId ?? null,
+      input.sessionId ?? null, input.sessionId ?? null,
+      input.laneId ?? null, input.laneId ?? null,
+      claimedAt, input.ownerId, claimedAt,
+      ...(serial ? [claimedAt] : []),
+    ).first<{
+      workspace_id: string;
+      session_id: string;
+      id: string;
+      revision: number | string;
+    }>();
+  }
+
+  /**
+   * Lock order inside the short transaction: session claim-lock row, then
+   * the execution primary key. No claim_idx range scan.
+   */
+  private async claimSerial(
+    input: ClaimSessionExecution,
+    claimedAt: number,
+    candidate: { workspace_id: string; session_id: string; id: string; revision: number | string },
+  ): Promise<ClaimSessionExecutionResult | null> {
+    const claimToken = crypto.randomUUID();
+    await this.sql.prepare(`
+      INSERT INTO managed_session_claim_locks (
+        workspace_id, session_id, claim_token, version
+      ) VALUES (?, ?, ?, 0)
+      ON CONFLICT (workspace_id, session_id) DO NOTHING
+    `).bind(candidate.workspace_id, candidate.session_id, claimToken).run();
+    const lock = await this.sql.prepare(`
+      SELECT version FROM managed_session_claim_locks
+       WHERE workspace_id = ? AND session_id = ?
+    `).bind(candidate.workspace_id, candidate.session_id).first<{ version: number | string }>();
+    if (lock === null) {
+      throw new Error("Session claim lock row vanished");
+    }
+    const version = safeInteger(lock.version, "claim lock version");
+    const nextVersion = version + 1;
+    const revision = safeInteger(candidate.revision, "execution revision");
+    const results = await this.sql.batch<ExecutionRow>([
+      this.sql.prepare(`
+        UPDATE managed_session_claim_locks
+           SET version = version + 1, holder_execution_id = ?, claim_token = ?
+         WHERE workspace_id = ? AND session_id = ? AND version = ?
+      `).bind(
+        candidate.id,
+        claimToken,
+        candidate.workspace_id,
+        candidate.session_id,
+        version,
+      ),
+      this.executionClaimStatement(input, claimedAt, candidate, revision, {
+        workspaceId: candidate.workspace_id,
+        sessionId: candidate.session_id,
+        version: nextVersion,
+        holderId: candidate.id,
+      }),
+    ]);
+    if ((results[0]?.meta.changes ?? 0) !== 1) return null;
+    const row = results[1]?.results?.[0] ?? null;
+    return row === null ? null : this.claimedResult(row);
+  }
+
+  private async claimByRevision(
+    input: ClaimSessionExecution,
+    claimedAt: number,
+    candidate: { workspace_id: string; session_id: string; id: string; revision: number | string },
+  ): Promise<ClaimSessionExecutionResult | null> {
+    const revision = safeInteger(candidate.revision, "execution revision");
+    const row = await this.executionClaimStatement(
+      input, claimedAt, candidate, revision,
+    ).first<ExecutionRow>();
+    return row === null ? null : this.claimedResult(row);
+  }
+
+  private executionClaimStatement(
+    input: ClaimSessionExecution,
+    claimedAt: number,
+    candidate: { workspace_id: string; id: string },
+    revision: number,
+    lock?: {
+      workspaceId: string;
+      sessionId: string;
+      version: number;
+      holderId: string;
+    },
+  ) {
+    const leaseEnd = claimedAt + input.leaseTtlMs;
+    return this.sql.prepare(`
       UPDATE managed_session_executions
-       SET state = 'running', attempt_id = ?, owner_id = ?,
+         SET state = 'running', attempt_id = ?, owner_id = ?,
              generation = generation + 1, attempt_count = attempt_count + 1,
              claimed_at_ms = ?,
              lease_expires_at_ms = CASE
                WHEN ? < deadline_at_ms THEN ? ELSE deadline_at_ms END,
              settled_at_ms = NULL, failure = NULL, revision = revision + 1
-       WHERE (workspace_id, id) = (
-         SELECT candidate.workspace_id, candidate.id
-          FROM managed_session_executions AS candidate
-          WHERE (? IS NULL OR candidate.workspace_id = ?)
-            AND (? IS NULL OR candidate.session_id = ?)
-            AND (? IS NULL OR candidate.lane_id = ?)
-            AND (
-            candidate.state = 'queued'
-            OR (
-              candidate.state = 'running'
-              AND candidate.lease_expires_at_ms <= ?
-              AND candidate.owner_id <> ?
-            )
-          )
-            AND candidate.attempt_count < candidate.max_attempts
-            AND candidate.deadline_at_ms > ?
-            AND NOT EXISTS (
-              SELECT 1
-                FROM managed_session_executions AS earlier
-               WHERE earlier.workspace_id = candidate.workspace_id
-                 AND earlier.session_id = candidate.session_id
-                 AND earlier.lane_id = candidate.lane_id
-                 AND earlier.state IN ('queued', 'running')
-                 AND (
-                   earlier.admitted_at_ms < candidate.admitted_at_ms
-                   OR (
-                     earlier.admitted_at_ms = candidate.admitted_at_ms
-                     AND earlier.id < candidate.id
-                   )
-                 )
-            )
-          ORDER BY candidate.admitted_at_ms ASC, candidate.id ASC
-          LIMIT 1
-       )
-         AND (? IS NULL OR workspace_id = ?)
-         AND (? IS NULL OR session_id = ?)
-         AND (? IS NULL OR lane_id = ?)
-         AND (
-           state = 'queued'
-           OR (
-             state = 'running' AND lease_expires_at_ms <= ?
-             AND owner_id <> ?
-           )
-         )
+       WHERE workspace_id = ? AND id = ? AND revision = ?
+         AND (state = 'queued' OR (state = 'running'
+           AND lease_expires_at_ms <= ? AND owner_id <> ?))
          AND attempt_count < max_attempts
          AND deadline_at_ms > ?
+         ${lock ? `AND EXISTS (
+           SELECT 1 FROM managed_session_claim_locks AS session_lock
+            WHERE session_lock.workspace_id = ?
+              AND session_lock.session_id = ?
+              AND session_lock.version = ?
+              AND session_lock.holder_execution_id = ?
+         )` : ""}
       RETURNING ${columns()}
     `).bind(
       input.attemptId,
       input.ownerId,
       claimedAt,
-      claimedAt + input.leaseTtlMs,
-      claimedAt + input.leaseTtlMs,
-      input.workspaceId ?? null,
-      input.workspaceId ?? null,
-      input.sessionId ?? null,
-      input.sessionId ?? null,
-      input.laneId ?? null,
-      input.laneId ?? null,
+      leaseEnd,
+      leaseEnd,
+      candidate.workspace_id,
+      candidate.id,
+      revision,
       claimedAt,
       input.ownerId,
       claimedAt,
-      input.workspaceId ?? null,
-      input.workspaceId ?? null,
-      input.sessionId ?? null,
-      input.sessionId ?? null,
-      input.laneId ?? null,
-      input.laneId ?? null,
-      claimedAt,
-      input.ownerId,
-      claimedAt,
-    ).first<ExecutionRow>();
-    if (row === null) return { type: "empty" };
-    return {
-      type: "claimed",
-      execution: toExecution(row),
-      fence: toFence(row),
-    };
+      ...(lock ? [lock.workspaceId, lock.sessionId, lock.version, lock.holderId] : []),
+    );
   }
 
-  async renew(input: {
+  private claimedResult(row: ExecutionRow): ClaimSessionExecutionResult {
+    return { type: "claimed", execution: toExecution(row), fence: toFence(row) };
+  }
+
+  private async findOwnedAttempt(
+    ownerId: string,
+    attemptId: string,
+  ): Promise<ClaimSessionExecutionResult | null> {
+    const row = await this.sql.prepare(`
+      SELECT ${columns()} FROM managed_session_executions
+       WHERE owner_id = ? AND attempt_id = ? AND state = 'running'
+    `).bind(ownerId, attemptId).first<ExecutionRow>();
+    return row === null ? null : this.claimedResult(row);
+  }
+
+  renew(input: {
     fence: SessionExecutionFence;
     renewedAt: string;
     leaseTtlMs: number;
   }): Promise<RenewSessionExecutionResult> {
-    validateTtl(input.leaseTtlMs);
-    const renewedAt = timestamp(input.renewedAt, "renewal");
-    await this.terminalizeExpired(renewedAt);
-    const row = await this.sql.prepare(`
-      UPDATE managed_session_executions
-         SET lease_expires_at_ms = CASE
-               WHEN ? < deadline_at_ms THEN ? ELSE deadline_at_ms END,
-             revision = revision + 1
-       WHERE workspace_id = ? AND id = ? AND session_id = ?
-         AND state = 'running' AND attempt_id = ? AND owner_id = ?
-         AND generation = ? AND lease_expires_at_ms > ?
-         AND deadline_at_ms > ?
-      RETURNING ${columns()}
-    `).bind(
-      renewedAt + input.leaseTtlMs,
-      renewedAt + input.leaseTtlMs,
-      input.fence.workspaceId,
-      input.fence.executionId,
-      input.fence.sessionId,
-      input.fence.attemptId,
-      input.fence.ownerId,
-      input.fence.generation,
-      renewedAt,
-      renewedAt,
-    ).first<ExecutionRow>();
-    return row === null
-      ? { type: "lost" }
-      : {
-          type: "renewed",
-          fence: toFence(row),
-          interruptRequestedAt: toExecution(row).interruptRequestedAt,
-        };
+    return runCoordinatorPort(Effect.tryPromise({
+      try: () => withDbBoundary({
+      op: "session_execution.renew",
+      sessionId: input.fence.sessionId,
+    }, async () => {
+      validateTtl(input.leaseTtlMs);
+      const renewedAt = timestamp(input.renewedAt, "renewal");
+      await this.sweepExpired(renewedAt);
+      const row = await this.sql.prepare(`
+        UPDATE managed_session_executions
+           SET lease_expires_at_ms = CASE
+                 WHEN ? < deadline_at_ms THEN ? ELSE deadline_at_ms END,
+               revision = revision + 1
+         WHERE workspace_id = ? AND id = ? AND session_id = ?
+           AND state = 'running' AND attempt_id = ? AND owner_id = ?
+           AND generation = ? AND lease_expires_at_ms > ?
+           AND deadline_at_ms > ?
+        RETURNING ${columns()}
+      `).bind(
+        renewedAt + input.leaseTtlMs,
+        renewedAt + input.leaseTtlMs,
+        input.fence.workspaceId,
+        input.fence.executionId,
+        input.fence.sessionId,
+        input.fence.attemptId,
+        input.fence.ownerId,
+        input.fence.generation,
+        renewedAt,
+        renewedAt,
+      ).first<ExecutionRow>();
+      return row === null
+        ? { type: "lost" as const }
+        : {
+            type: "renewed" as const,
+            fence: toFence(row),
+            interruptRequestedAt: toExecution(row).interruptRequestedAt,
+          };
+    }),
+      catch: (error: unknown) => error,
+    }));
   }
 
-  async settle(input: {
+  settle(input: {
     fence: SessionExecutionFence;
     settledAt: string;
     outcome: "completed" | "failed" | "cancelled";
     failure?: string;
   }): Promise<SettleSessionExecutionResult> {
-    const settledAt = timestamp(input.settledAt, "settlement");
-    const row = await this.sql.prepare(`
-      UPDATE managed_session_executions
-         SET state = CASE
-               WHEN interrupt_requested_at_ms IS NOT NULL THEN 'cancelled'
-               ELSE ?
-             END,
-             settled_at_ms = ?,
-             failure = CASE
-               WHEN interrupt_requested_at_ms IS NOT NULL
-                 THEN COALESCE(failure, 'interrupted during execution')
-               ELSE ?
-             END,
-             revision = revision + 1
-       WHERE workspace_id = ? AND id = ? AND session_id = ?
-         AND state = 'running' AND attempt_id = ? AND owner_id = ?
-         AND generation = ? AND lease_expires_at_ms > ?
-      RETURNING ${columns()}
-    `).bind(
-      input.outcome,
-      settledAt,
-      input.failure?.slice(0, 4_096) ?? null,
-      input.fence.workspaceId,
-      input.fence.executionId,
-      input.fence.sessionId,
-      input.fence.attemptId,
-      input.fence.ownerId,
-      input.fence.generation,
-      settledAt,
-    ).first<ExecutionRow>();
-    return row === null
-      ? { type: "lost" }
-      : { type: "settled", execution: toExecution(row) };
+    return runCoordinatorPort(Effect.tryPromise({
+      try: () => withDbBoundary({
+      op: "session_execution.settle",
+      sessionId: input.fence.sessionId,
+    }, async () => {
+      const settledAt = timestamp(input.settledAt, "settlement");
+      const row = await this.sql.prepare(`
+        UPDATE managed_session_executions
+           SET state = CASE
+                 WHEN interrupt_requested_at_ms IS NOT NULL THEN 'cancelled'
+                 ELSE ?
+               END,
+               settled_at_ms = ?,
+               failure = CASE
+                 WHEN interrupt_requested_at_ms IS NOT NULL
+                   THEN COALESCE(failure, 'interrupted during execution')
+                 ELSE ?
+               END,
+               revision = revision + 1
+         WHERE workspace_id = ? AND id = ? AND session_id = ?
+           AND state = 'running' AND attempt_id = ? AND owner_id = ?
+           AND generation = ? AND lease_expires_at_ms > ?
+        RETURNING ${columns()}
+      `).bind(
+        input.outcome,
+        settledAt,
+        input.failure?.slice(0, 4_096) ?? null,
+        input.fence.workspaceId,
+        input.fence.executionId,
+        input.fence.sessionId,
+        input.fence.attemptId,
+        input.fence.ownerId,
+        input.fence.generation,
+        settledAt,
+      ).first<ExecutionRow>();
+      if (row !== null) return { type: "settled" as const, execution: toExecution(row) };
+      // A retried settle can observe its own commit: the row is already terminal
+      // for this attempt. That is success, not a lost lease.
+      const current = await this.find({
+        workspaceId: input.fence.workspaceId,
+        executionId: input.fence.executionId,
+      });
+      const settledAtIso = new Date(settledAt).toISOString();
+      if (current !== null &&
+        current.state !== "queued" && current.state !== "running" &&
+        current.settledAt === settledAtIso &&
+        current.attempt?.id === input.fence.attemptId &&
+        current.attempt.ownerId === input.fence.ownerId &&
+        current.attempt.generation === input.fence.generation) {
+        return { type: "settled" as const, execution: current };
+      }
+      return { type: "lost" as const };
+    }),
+      catch: (error: unknown) => error,
+    }));
   }
 
   async requestInterrupt(input: {
@@ -579,23 +866,71 @@ export class SqlSessionExecutionStore
     return row === null ? null : toExecution(row);
   }
 
-  private async terminalizeExpired(now: number): Promise<void> {
-    await this.sql.batch([
-      this.sql.prepare(`
-        UPDATE managed_session_executions
-           SET state = 'failed', settled_at_ms = ?,
-               failure = 'execution deadline exceeded', revision = revision + 1
-         WHERE state IN ('queued', 'running') AND deadline_at_ms <= ?
-      `).bind(now, now),
-      this.sql.prepare(`
-        UPDATE managed_session_executions
-           SET state = 'failed', settled_at_ms = ?,
-               failure = 'execution attempt limit exhausted',
-               revision = revision + 1
-         WHERE state = 'running' AND lease_expires_at_ms <= ?
-           AND attempt_count >= max_attempts
-      `).bind(now, now),
-    ]);
+
+  private async sweepExpired(now: number): Promise<void> {
+    const interval = this.options.sweepIntervalMs ?? 0;
+    if (interval > 0 && now < this.#nextSweepAt) return;
+    if (interval > 0) {
+      this.#nextSweepAt = now + interval + Math.floor(Math.random() * interval * 2);
+    }
+    try {
+      await withDbBoundary({ op: "session_execution.sweep_expired" }, async () => {
+        await this.terminalizeMatching(
+          now,
+          "execution deadline exceeded",
+          "state IN ('queued', 'running') AND deadline_at_ms <= ?",
+          [now],
+        );
+        await this.terminalizeMatching(
+          now,
+          "execution attempt limit exhausted",
+          "state = 'running' AND lease_expires_at_ms <= ? AND attempt_count >= max_attempts",
+          [now],
+        );
+      });
+    } catch (error) {
+      if (this.options.onError === undefined) throw error;
+      this.options.onError(error, "session_execution.sweep_expired");
+    }
+  }
+
+  private async terminalizeMatching(
+    now: number,
+    failure: string,
+    where: string,
+    binds: unknown[],
+  ): Promise<void> {
+    for (let batch = 0; batch < 20; batch++) {
+      const selected = await this.sql.prepare(`
+        SELECT workspace_id, id, revision
+          FROM managed_session_executions
+         WHERE ${where}
+         LIMIT 100
+      `).bind(...binds).all<{
+        workspace_id: string;
+        id: string;
+        revision: number | string;
+      }>();
+      const rows = selected.results ?? [];
+      if (rows.length === 0) return;
+      for (const row of rows) {
+        await this.sql.prepare(`
+          UPDATE managed_session_executions
+             SET state = 'failed', settled_at_ms = ?, failure = ?,
+                 revision = revision + 1
+           WHERE workspace_id = ? AND id = ? AND revision = ?
+             AND ${where}
+        `).bind(
+          now,
+          failure,
+          row.workspace_id,
+          row.id,
+          safeInteger(row.revision, "execution revision"),
+          ...binds,
+        ).run();
+      }
+      if (rows.length < 100) return;
+    }
   }
 }
 

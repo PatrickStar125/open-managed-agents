@@ -755,6 +755,47 @@ describe("Sandbox lifecycle", () => {
     }]);
   });
 
+  it("CloudflareSandbox mounts a scoped live workspace via R2 FUSE only", async () => {
+    const mountBucket = vi.fn(async () => {});
+    const unmountBucket = vi.fn(async () => {});
+    const sandbox = new CloudflareSandbox({
+      SANDBOX: {}, WORKSPACE_BUCKET: {}, WORKSPACE_BUCKET_NAME: "workspace-bucket",
+      R2_ENDPOINT: "https://example.r2.cloudflarestorage.com",
+      R2_ACCESS_KEY_ID: "access", R2_SECRET_ACCESS_KEY: "secret",
+    } as any, "test-session-id") as any;
+    sandbox.sandboxPromise = Promise.resolve({ mountBucket, unmountBucket });
+
+    await sandbox.mountDurableWorkspace({ workspaceId: "tenant-1", sessionId: "session-1" });
+    expect(unmountBucket).toHaveBeenCalledWith("/workspace");
+    expect(mountBucket).toHaveBeenCalledWith("workspace-bucket", "/workspace", {
+      endpoint: "https://example.r2.cloudflarestorage.com",
+      provider: "r2",
+      credentials: { accessKeyId: "access", secretAccessKey: "secret" },
+      prefix: "/openma-workspaces/tenant-1/session-1/",
+      readOnly: false,
+      credentialProxy: true,
+    });
+  });
+
+  it("CloudflareSandbox rejects missing R2 mount credentials and propagates native failures", async () => {
+    const sandbox = new CloudflareSandbox({
+      SANDBOX: {}, WORKSPACE_BUCKET: {}, WORKSPACE_BUCKET_NAME: "workspace-bucket",
+    } as any, "test-session-id") as any;
+    const mountBucket = vi.fn(async () => { throw new Error("native FUSE unavailable"); });
+    sandbox.sandboxPromise = Promise.resolve({ mountBucket });
+    const identity = { workspaceId: "tenant-1", sessionId: "session-1" };
+    await expect(sandbox.mountDurableWorkspace(identity)).rejects.toThrow(/R2 credentials/);
+    expect(mountBucket).not.toHaveBeenCalled();
+    sandbox.env.R2_ENDPOINT = "https://example.r2.cloudflarestorage.com";
+    sandbox.env.R2_ACCESS_KEY_ID = "access";
+    sandbox.env.R2_SECRET_ACCESS_KEY = "secret";
+    await expect(sandbox.mountDurableWorkspace(identity)).rejects.toThrow("native FUSE unavailable");
+    await expect(sandbox.mountDurableWorkspace({ workspaceId: "..", sessionId: "session-1" }))
+      .rejects.toThrow(/Unsafe workspace mount/);
+    sandbox.sandboxPromise = Promise.resolve({});
+    await expect(sandbox.mountDurableWorkspace(identity)).rejects.toThrow(/mount primitive/);
+  });
+
   it("CloudflareSandbox surfaces an output mount failure to its Port caller", async () => {
     const sandbox = new CloudflareSandbox({
       SANDBOX: {},

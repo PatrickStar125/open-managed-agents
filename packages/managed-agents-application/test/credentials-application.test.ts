@@ -241,4 +241,141 @@ describe("CredentialsApplicationService", () => {
       message: "Credential auth type is immutable",
     });
   });
+
+  it("persists a refresh rotation without returning or logging the new secrets", async () => {
+    const persistence = new InMemoryCredentialPersistence();
+    const previousAccess = "previous-access-token-value";
+    const previousRefresh = "previous-refresh-token-value";
+    const rotatedAccess = "rotated-access-token-value";
+    const rotatedRefresh = "rotated-refresh-token-value";
+    const clientSecret = "rotated-client-secret-value";
+    const secrets = [previousAccess, previousRefresh, rotatedAccess, rotatedRefresh, clientSecret];
+    let attempts = 0;
+    const replace = persistence.replace.bind(persistence);
+    persistence.replace = async (input) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return { type: "revision_conflict", actualRevision: input.expectedRevision + 1 };
+      }
+      return replace(input);
+    };
+    const service = new CredentialsApplicationService({
+      workspaceId: "workspace_01",
+      store: persistence,
+      vaults,
+      validation: {
+        validate: async () => ({
+          hasRefreshToken: true,
+          mcpProbe: {
+            response: {
+              body: "expired [redacted]",
+              bodyTruncated: false,
+              contentType: "application/json",
+              statusCode: 401,
+            },
+            method: "initialize",
+          },
+          refresh: { response: null, status: "succeeded" },
+          status: "valid",
+          rotation: {
+            accessToken: rotatedAccess,
+            refreshToken: rotatedRefresh,
+            expiresAt: "2026-08-26T01:00:00.000Z",
+          },
+        }),
+      },
+      clock: { now: () => new Date("2026-08-26T00:00:00.000Z") },
+      ids: { nextCredentialId: () => "vcrd_rotate" },
+    });
+    await service.createCredential({
+      vaultId: "vlt_01",
+      auth: {
+        type: "mcp_oauth",
+        accessToken: previousAccess,
+        mcpServerUrl: "https://mcp.example.test/mcp",
+        refresh: {
+          clientId: "oauth-client",
+          refreshToken: previousRefresh,
+          tokenEndpoint: "https://auth.example.test/token",
+          tokenEndpointAuth: { type: "client_secret_post", clientSecret },
+        },
+      },
+    });
+
+    const validated = await service.validateCredential({
+      vaultId: "vlt_01",
+      credentialId: "vcrd_rotate",
+    });
+
+    expect(attempts).toBe(2);
+    expect(validated.type).toBe("validated");
+    expect(JSON.stringify(validated).includes("rotation")).toBe(false);
+    expect(secrets.some((secret) => JSON.stringify(validated).includes(secret))).toBe(false);
+    const stored = persistence.records.get("workspace_01:vlt_01:vcrd_rotate")?.credential.auth;
+    expect(stored?.type).toBe("mcp_oauth");
+    if (stored?.type === "mcp_oauth") {
+      expect(stored.accessToken === rotatedAccess).toBe(true);
+      expect(stored.refresh?.refreshToken === rotatedRefresh).toBe(true);
+      expect(stored.expiresAt).toBe("2026-08-26T01:00:00.000Z");
+      expect(stored.refresh?.tokenEndpointAuth.clientSecret === clientSecret).toBe(true);
+    }
+  });
+
+  it("keeps a store failure that contains credential material off the validation result", async () => {
+    const persistence = new InMemoryCredentialPersistence();
+    const secret = "store-failure-access-token";
+    persistence.replace = async () => {
+      throw new Error(`database rejected ${secret}`);
+    };
+    const service = new CredentialsApplicationService({
+      workspaceId: "workspace_01",
+      store: persistence,
+      vaults,
+      validation: {
+        validate: async () => ({
+          hasRefreshToken: true,
+          mcpProbe: null,
+          refresh: { response: null, status: "succeeded" },
+          status: "valid",
+          rotation: {
+            accessToken: secret,
+            refreshToken: "store-failure-refresh-token",
+            expiresAt: null,
+          },
+        }),
+      },
+      clock: { now: () => new Date("2026-08-26T00:00:00.000Z") },
+      ids: { nextCredentialId: () => "vcrd_fail" },
+    });
+    await service.createCredential({
+      vaultId: "vlt_01",
+      auth: {
+        type: "mcp_oauth",
+        accessToken: "old-access-token-value",
+        mcpServerUrl: "https://mcp.example.test/mcp",
+        refresh: {
+          clientId: "oauth-client",
+          refreshToken: "old-refresh-token-value",
+          tokenEndpoint: "https://auth.example.test/token",
+          tokenEndpointAuth: { type: "none" },
+        },
+      },
+    });
+
+    try {
+      const validated = await service.validateCredential({
+        vaultId: "vlt_01",
+        credentialId: "vcrd_fail",
+      });
+      expect(validated.type).toBe("validated");
+      expect(JSON.stringify(validated).includes(secret)).toBe(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      throw new Error(
+        message.includes(secret)
+          ? "validation surfaced credential material"
+          : "validation rejected a store failure",
+      );
+    }
+  });
 });

@@ -288,12 +288,13 @@ export class ManagedNodeSubagents implements ManagedNodeSubagentControl {
       } catch (error) {
         child.state = { threadId: child.thread.id, status: controller.signal.aborted ? "interrupted" : "failed" };
         if (!controller.signal.aborted) await this.emit(child, { type: "session.error", error: {
-          type: "unknown_error", retry_status: "terminal", message: error instanceof Error ? error.message : String(error),
+          type: "unknown_error", retry_status: "exhausted", message: error instanceof Error ? error.message : String(error),
         } });
       } finally {
         this.input.abortSignal.removeEventListener("abort", abortFromParent);
         await this.emit(child, { type: "session.thread_status_idle", agent_name: child.session.agent.name,
-          stop_reason: { type: "end_turn" }, ...(controller.signal.aborted && { interrupted: true }) });
+          stop_reason: { type: child.state?.status === "failed" ? "retries_exhausted" : "end_turn" },
+          ...(controller.signal.aborted && { interrupted: true }) });
         child.controller = undefined;
       }
     };

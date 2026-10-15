@@ -1245,7 +1245,10 @@ describe("SessionDO recovery — DO-level", () => {
     let firedCount = 0;
     await runInDurableObject(stub, async (instance, state) => {
       (instance as unknown as Record<string, unknown>)._oma_test_cron =
-        async function () { firedCount++; };
+        async function () {
+          const self = this as unknown as { _oma_test_cron_fired?: number };
+          self._oma_test_cron_fired = (self._oma_test_cron_fired ?? 0) + 1;
+        };
       // Cron "* * * * *" → every minute. Backdate `time` so alarm()
       // sees it as due now.
       const past = Math.floor(Date.now() / 1000) - 1;
@@ -1258,7 +1261,13 @@ describe("SessionDO recovery — DO-level", () => {
     });
 
     await runDurableObjectAlarm(stub);
-    await new Promise((r) => setTimeout(r, 50));
+    // Do not sleep here: `_scheduleNextAlarm` may re-arm at now+1ms when the
+    // cron row is still due, and workerd will fire a chained alarm that
+    // invokes the callback again. Read the count from DO state — the test
+    // runner heap is not the same as the isolate that runs alarm().
+    firedCount = await runInDurableObject(stub, (instance) =>
+      (instance as unknown as { _oma_test_cron_fired?: number })._oma_test_cron_fired ?? 0,
+    );
 
     expect(firedCount).toBe(1);
 

@@ -5,7 +5,8 @@ image. **It does NOT deploy any worker to a Cloudflare account.**
 
 | Workflow | Purpose |
 |---|---|
-| `release.yml` | changeset-driven npm publish for the SDK / CLI packages |
+| `ci.yml` | `verify` runs the full suite. `release-check` is a separate short job: changesets, changelog coverage, and unreleased pull requests |
+| `release.yml` | changeset-driven npm publish for the SDK / CLI packages. `publish` runs `scripts/release-check.mjs --publish` before `pnpm release` |
 | `build-sandbox-image.yml` | builds the agent sandbox base image for OSS users to pull |
 | `build-server-image.yml` | verifies and publishes the Node/Console server image to GHCR under an immutable full-Git-SHA tag; release tags add a human version alias |
 

@@ -48,8 +48,11 @@ import { nodeToMarkdown } from "@open-managed-agents/markdown/adapters/node";
 import { SqlAgentPersistence } from "@open-managed-agents/managed-agents-adapters-sql";
 
 import { resolveFeishuAgentTools } from "../lib/feishu-agent-tools.js";
+import { createLegacySessionMcpProxy } from "../lib/legacy-session-mcp-proxy.js";
 
 import { NodeWorkspaceBackupService } from "../lib/node-workspace-backup.js";
+import { NodeSharedSessionOutputs } from "../lib/node-shared-session-outputs.js";
+import { nodeOutputsAdapter } from "../lib/node-outputs-adapter.js";
 import { DefaultSandboxOrchestrator } from "@open-managed-agents/sandbox/orchestrator";
 
 import { startMemoryBlobWatcher } from "../lib/memory-blob-watcher.js";
@@ -230,6 +233,11 @@ export async function createNodeFoundation(
 
   const filesBlob: BlobStore = components.blobs.files.store;
   const filesBlobDescription = components.blobs.files.description;
+  const sharedSessionOutputs = config.blobs.files.kind === "s3"
+    ? new NodeSharedSessionOutputs({ sql, blobs: filesBlob })
+    : undefined;
+  await sharedSessionOutputs?.ensureSchema(dialect);
+  const sessionOutputs = sharedSessionOutputs ?? nodeOutputsAdapter(outputsRoot);
 
   const workspaceBackups = new NodeWorkspaceBackupService({
     sql,
@@ -369,6 +377,11 @@ export async function createNodeFoundation(
     }));
   }
 
+  const legacySessionMcpProxy = createLegacySessionMcpProxy({
+    sessions: sessionsService,
+    credentials: credentialService,
+  });
+
   const sessionRegistry = new SessionRegistry({
     sql,
     hub,
@@ -380,12 +393,15 @@ export async function createNodeFoundation(
     sandboxWorkdirRoot: config.paths.sandboxWorkdir,
     sqlDialect: dialect,
     buildModel: (agent, tenantId) => buildNodeLanguageModel(tenantId, agent.model),
-    buildTools: async (agent, sandbox, tenantId) => {
+    buildTools: async (agent, sandbox, tenantId, sessionId) => {
       const creds = await resolveNodeModelCreds(tenantId, agent.model);
       return buildTools(agent, sandbox, {
         ANTHROPIC_API_KEY: creds.apiKey,
         ANTHROPIC_BASE_URL: creds.baseURL,
         toMarkdown: toMarkdownProvider,
+        tenantId,
+        sessionId,
+        mcpBinding: legacySessionMcpProxy,
       });
     },
     buildHarness: (agent) => {
@@ -425,6 +441,7 @@ export async function createNodeFoundation(
         log: input.eventLog,
         hub,
         sandbox: input.sandbox,
+        usageLedger: input.usageLedger,
       });
       await runtime.refreshHistory();
       const rawSystemPrompt = input.agent.system ?? "";
@@ -488,6 +505,8 @@ export async function createNodeFoundation(
     memoryService,
     dreamsService,
     outputsRoot,
+    sessionOutputs,
+    sharedSessionOutputs,
     filesBlob,
     filesBlobDescription,
     newEventLog,

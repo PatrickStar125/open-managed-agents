@@ -22,6 +22,8 @@
 //          tenant_id injected on session.start/.prompt.
 //   4. GET /agents/runtime/me — daemon-facing alternative to the absent
 //      /v1/oma/runtimes/:id, used by daemon-side v1→v2 migration.
+//   5. GET /v1/oma/runtimes — workspace API key: user-bound list,
+//      single-user fallback, multi-user 401, foreign runtime hidden.
 
 import { env, exports } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
@@ -338,6 +340,76 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
       return { stub, runtimeId: rid, userId: uid };
     }
 
+    // Accept the client socket and wait until the DO has finished
+    // webSocketClose. Dropping the upgrade Response leaves the server socket
+    // alive until the vitest worker tears the file down; that close logs
+    // "harness closed" via console.log, and the onUserConsoleLog RPC is still
+    // pending when the worker closes.
+    async function attachHarnessClient(stub, sessionId: string, tenantId: string) {
+      const response = await stub.fetch(new Request("http://runtime-room/_attach_harness", {
+        headers: {
+          Upgrade: "websocket",
+          "x-attach-role": "harness",
+          "x-session-id": sessionId,
+          "x-harness-tenant": tenantId,
+        },
+      }));
+      return response;
+    }
+
+    async function releaseHarnessSocket(stub, response, sessionId: string) {
+      const socket = response.webSocket;
+      if (!socket) throw new Error("harness attach did not return a websocket");
+      // workerd reports the client socket OPEN before accept(), and close()
+      // sends a frame, so accept() has to run first. A second accept() throws.
+      try {
+        socket.accept();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/already accepted/i.test(message)) throw error;
+      }
+      if (socket.readyState !== WebSocket.CLOSED) socket.close(1000, "test finished");
+      await vi.waitFor(async () => {
+        let open = -1;
+        await runInDurableObject(stub, async (instance) => {
+          open = instance.ctx.getWebSockets(`harness:${sessionId}`).length;
+        });
+        expect(open).toBe(0);
+      });
+    }
+
+    // The 101 client socket is an I/O object owned by the DO that created it.
+    // Reading response.webSocket after runInDurableObject returns throws
+    // "Cannot perform I/O on behalf of a different Durable Object", so
+    // accept/close has to happen inside that callback. The wait runs in a
+    // later callback, after the test's getWebSockets stub is gone.
+    function closeOwnedSocket(response) {
+      const socket = response?.webSocket;
+      if (!socket) throw new Error("attach did not return a websocket");
+      try {
+        socket.accept();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/already accepted/i.test(message)) throw error;
+      }
+      if (socket.readyState !== WebSocket.CLOSED) socket.close(1000, "test finished");
+    }
+
+    async function waitUntilNoDaemonSockets(stub) {
+      // webSocketClose runs on client close (it logs daemon_close and calls
+      // markOffline) while getWebSockets() can still list the hibernated
+      // socket. Wait until none of those sockets are still open.
+      await vi.waitFor(async () => {
+        let open = -1;
+        await runInDurableObject(stub, async (instance) => {
+          open = instance.ctx.getWebSockets("daemon").filter((socket) =>
+            socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN,
+          ).length;
+        });
+        expect(open).toBe(0);
+      });
+    }
+
     it("persists ordered runner output before acknowledging and deduplicates reconnect replay", async () => {
       const { stub } = await freshRoom(["tn_delivery", "tn_other"]);
       await runInDurableObject(stub, async (room, state) => {
@@ -403,7 +475,9 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
       try {
         await vi.waitFor(() => expect(frames.filter((frame) => frame.delivery).map((frame) => frame.delivery.seq)).toEqual([4, 5]), { timeout: 1000 });
         expect(frames[0]).toMatchObject({ type: "attached", capabilities: ["durable_session_events_v1"] });
-      } finally { response.webSocket.close(); }
+      } finally {
+        await releaseHarnessSocket(stub, response, "replay-session");
+      }
       // The pin belongs to the task, and must survive closing its observer.
       const wrong = await stub.fetch(new Request("http://runtime-room/_attach_harness", { headers: {
         Upgrade: "websocket", "x-attach-role": "harness", "x-session-id": "replay-session", "x-harness-tenant": "tn_wrong_replay",
@@ -444,8 +518,10 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
         );
 
         expect(response.status).toBe(101);
+        closeOwnedSocket(response);
       });
       expect(staleSocketClosed).toBe(true);
+      await waitUntilNoDaemonSockets(stub);
     });
 
     it("keeps the current daemon while its server-observed lease is fresh", async () => {
@@ -516,8 +592,10 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
         );
 
         expect(response.status).toBe(101);
+        closeOwnedSocket(response);
       });
       expect(offlineSocketClosed).toBe(true);
+      await waitUntilNoDaemonSockets(stub);
     });
 
     it("does not let an evicted daemon close mark its replacement offline", async () => {
@@ -559,13 +637,17 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
         expect(response.status).toBe(101);
 
         await room.webSocketClose(staleSocket, 1012, "lease expired");
+        const row = await env.AUTH_DB
+          .prepare(`SELECT status FROM "runtimes" WHERE id = ?`)
+          .bind(runtimeId)
+          .first();
+        expect(row?.status).toBe("online");
+        // Closing the replacement runs markOffline. That has to happen after
+        // the assertion, and it has to happen here: the client socket cannot
+        // leave this Durable Object.
+        closeOwnedSocket(response);
       });
-
-      const row = await env.AUTH_DB
-        .prepare(`SELECT status FROM "runtimes" WHERE id = ?`)
-        .bind(runtimeId)
-        .first<{ status: string }>();
-      expect(row?.status).toBe("online");
+      await waitUntilNoDaemonSockets(stub);
     });
 
     it("drops messages from a daemon that no longer owns the room", async () => {
@@ -773,18 +855,11 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
       const { stub } = await freshRoom(["tn_pin_a", "tn_pin_b"]);
       const sid = `sess_pin_${Math.random().toString(36).slice(2, 6)}`;
       // Pin the session by issuing a real attachHarness request — that's the
-      // public path that populates #sessionTenant. The WebSocket upgrade
-      // returns a client we discard; we just need the pin side-effect.
-      await stub.fetch(
-        new Request("http://runtime-room/_attach_harness", {
-          headers: {
-            Upgrade: "websocket",
-            "x-attach-role": "harness",
-            "x-session-id": sid,
-            "x-harness-tenant": "tn_pin_a",
-          },
-        }),
-      );
+      // public path that populates #sessionTenant. Close the client before
+      // the test returns so webSocketClose logs while this worker is alive.
+      const attached = await attachHarnessClient(stub, sid, "tn_pin_a");
+      expect(attached.status).toBe(101);
+      await releaseHarnessSocket(stub, attached, sid);
 
       await runInDurableObject(stub, async (instance, state) => {
         await (instance as unknown as {
@@ -805,16 +880,9 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
       const { stub } = await freshRoom(["tn_inj"]);
       const sid = `sess_inj_${Math.random().toString(36).slice(2, 6)}`;
       // Public path: real attach with x-harness-tenant → pin populated.
-      await stub.fetch(
-        new Request("http://runtime-room/_attach_harness", {
-          headers: {
-            Upgrade: "websocket",
-            "x-attach-role": "harness",
-            "x-session-id": sid,
-            "x-harness-tenant": "tn_inj",
-          },
-        }),
-      );
+      const attached = await attachHarnessClient(stub, sid, "tn_inj");
+      expect(attached.status).toBe(101);
+      await releaseHarnessSocket(stub, attached, sid);
 
       const collected: Array<Record<string, unknown>> = [];
       await runInDurableObject(stub, async (instance) => {
@@ -850,5 +918,184 @@ describe("/agents/runtime/* — multi-tenant CLI bridge daemon (step 2)", () => 
         response: { outcome: { outcome: "selected", optionId: "original-choice" } },
       });
     });
+  });
+});
+
+// GET /v1/oma/runtimes — workspace API key auth (OMA-2)
+describe("GET /v1/oma/runtimes — workspace API key", () => {
+  beforeAll(async () => {
+    await api("/health").catch(() => {});
+  });
+
+  async function putWorkspaceApiKey(opts: {
+    plain: string;
+    tenantId: string;
+    userId?: string;
+  }): Promise<void> {
+    const hash = await sha256Hex(opts.plain);
+    await env.CONFIG_KV.put(
+      `apikey:${hash}`,
+      JSON.stringify({
+        id: `ak_${Math.random().toString(36).slice(2, 10)}`,
+        tenant_id: opts.tenantId,
+        ...(opts.userId ? { user_id: opts.userId } : {}),
+        name: "test key",
+        created_at: new Date().toISOString(),
+        credential: { type: "workspace" },
+      }),
+    );
+  }
+
+  async function seedTenantUser(opts: {
+    tenantId: string;
+    userId: string;
+    tenantName?: string;
+  }): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await env.AUTH_DB
+      .prepare(
+        `INSERT OR IGNORE INTO "tenant" (id, name, createdAt, updatedAt) VALUES (?, ?, ?, ?)`,
+      )
+      .bind(opts.tenantId, opts.tenantName ?? opts.tenantId, now * 1000, now * 1000)
+      .run();
+    await env.AUTH_DB
+      .prepare(
+        `INSERT OR REPLACE INTO "user" (id, name, email, emailVerified, tenantId, role, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        opts.userId,
+        "Test User",
+        `${opts.userId}@test.local`,
+        1,
+        opts.tenantId,
+        "owner",
+        now * 1000,
+        now * 1000,
+      )
+      .run();
+    await env.AUTH_DB
+      .prepare(
+        `INSERT OR REPLACE INTO "membership" (user_id, tenant_id, role, created_at) VALUES (?, ?, ?, ?)`,
+      )
+      .bind(opts.userId, opts.tenantId, "owner", now)
+      .run();
+  }
+
+  async function insertRuntimeRow(opts: {
+    runtimeId: string;
+    ownerUserId: string;
+    ownerTenantId: string;
+    hostname?: string;
+  }): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await env.AUTH_DB
+      .prepare(
+        `INSERT OR REPLACE INTO "runtimes"
+          (id, owner_user_id, owner_tenant_id, machine_id, hostname, os, agents_json, version, status, last_heartbeat, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        opts.runtimeId,
+        opts.ownerUserId,
+        opts.ownerTenantId,
+        `machine-${opts.runtimeId}`,
+        opts.hostname ?? "test-host",
+        "darwin",
+        '[{"id":"claude-acp"}]',
+        "0.0.1-test",
+        "online",
+        now,
+        now,
+      )
+      .run();
+  }
+
+  it("user-bound workspace key lists only that user's machines", async () => {
+    const tenantId = `tn_ub_${Math.random().toString(36).slice(2, 8)}`;
+    const userId = `u_ub_${Math.random().toString(36).slice(2, 8)}`;
+    const ridMine = `rt_ub_mine_${Math.random().toString(36).slice(2, 8)}`;
+    const ridOther = `rt_ub_other_${Math.random().toString(36).slice(2, 8)}`;
+    const otherUser = `u_ub_other_${Math.random().toString(36).slice(2, 8)}`;
+
+    await seedTenantUser({ tenantId, userId });
+    await seedTenantUser({ tenantId, userId: otherUser });
+    await insertRuntimeRow({ runtimeId: ridMine, ownerUserId: userId, ownerTenantId: tenantId, hostname: "mine" });
+    await insertRuntimeRow({ runtimeId: ridOther, ownerUserId: otherUser, ownerTenantId: tenantId, hostname: "other" });
+
+    const keyPlain = `oma_ub_${Math.random().toString(36).slice(2)}`;
+    await putWorkspaceApiKey({ plain: keyPlain, tenantId, userId });
+
+    const res = await api("/v1/oma/runtimes", {
+      headers: { "x-api-key": keyPlain },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.runtimes).toHaveLength(1);
+    expect(body.runtimes[0].id).toBe(ridMine);
+    expect(body.runtimes[0].hostname).toBe("mine");
+    expect(body.runtimes[0].status).toBe("online");
+    expect(body.runtimes[0].last_heartbeat).toEqual(expect.any(Number));
+    expect(body.runtimes[0].agents).toEqual([{ id: "claude-acp" }]);
+  });
+
+  it("single-user tenant fills in user_id for a key with no user_id", async () => {
+    const tenantId = `tn_su_${Math.random().toString(36).slice(2, 8)}`;
+    const userId = `u_su_${Math.random().toString(36).slice(2, 8)}`;
+    const rid = `rt_su_${Math.random().toString(36).slice(2, 8)}`;
+
+    await seedTenantUser({ tenantId, userId });
+    await insertRuntimeRow({ runtimeId: rid, ownerUserId: userId, ownerTenantId: tenantId });
+
+    const keyPlain = `oma_su_${Math.random().toString(36).slice(2)}`;
+    await putWorkspaceApiKey({ plain: keyPlain, tenantId });
+
+    const res = await api("/v1/oma/runtimes", { headers: { "x-api-key": keyPlain } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.runtimes.map((r: { id: string }) => r.id)).toEqual([rid]);
+  });
+
+  it("multi-user tenant returns 401 when the key has no user_id", async () => {
+    const tenantId = `tn_mu_${Math.random().toString(36).slice(2, 8)}`;
+    await seedTenantUser({ tenantId, userId: `u_mu_a_${Math.random().toString(36).slice(2, 8)}` });
+    await seedTenantUser({ tenantId, userId: `u_mu_b_${Math.random().toString(36).slice(2, 8)}` });
+
+    const keyPlain = `oma_mu_${Math.random().toString(36).slice(2)}`;
+    await putWorkspaceApiKey({ plain: keyPlain, tenantId });
+
+    const res = await api("/v1/oma/runtimes", { headers: { "x-api-key": keyPlain } });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toMatchObject({ type: "authentication_error", message: "unauthorized" });
+  });
+
+  it("legacy env API_KEY resolves with no user and gets 401", async () => {
+    const res = await api("/v1/oma/runtimes", { headers: { "x-api-key": "test-key" } });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toMatchObject({ type: "authentication_error", message: "unauthorized" });
+  });
+
+  it("does not list another user's runtime in the same tenant", async () => {
+    const tenantId = `tn_iso_${Math.random().toString(36).slice(2, 8)}`;
+    const userA = `u_iso_a_${Math.random().toString(36).slice(2, 8)}`;
+    const userB = `u_iso_b_${Math.random().toString(36).slice(2, 8)}`;
+    const ridA = `rt_iso_a_${Math.random().toString(36).slice(2, 8)}`;
+    const ridB = `rt_iso_b_${Math.random().toString(36).slice(2, 8)}`;
+
+    await seedTenantUser({ tenantId, userId: userA });
+    await seedTenantUser({ tenantId, userId: userB });
+    await insertRuntimeRow({ runtimeId: ridA, ownerUserId: userA, ownerTenantId: tenantId });
+    await insertRuntimeRow({ runtimeId: ridB, ownerUserId: userB, ownerTenantId: tenantId });
+
+    const keyPlain = `oma_iso_${Math.random().toString(36).slice(2)}`;
+    await putWorkspaceApiKey({ plain: keyPlain, tenantId, userId: userA });
+
+    const res = await api("/v1/oma/runtimes", { headers: { "x-api-key": keyPlain } });
+    expect(res.status).toBe(200);
+    const ids = (await res.json()).runtimes.map((r: { id: string }) => r.id);
+    expect(ids).toEqual([ridA]);
+    expect(ids).not.toContain(ridB);
   });
 });

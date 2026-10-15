@@ -746,6 +746,16 @@ The interactive prompt produces a `.changeset/<random>.md` file. Commit it
 along with your code change. PRs that only touch console / workers / docs /
 internal packages don't need a changeset.
 
+CI job `release-check` runs in parallel with `verify` and does not install
+dependencies. It fails when shipped `packages/cli` or `packages/sdk` files
+(`src/`, `README.md`, runtime dependencies) change without a changeset, and
+when a minor or major changeset or version bump lacks the `release:minor` or
+`release:major` label. Patch bumps need no label. `pnpm changeset --empty`
+opts out. A version-bump PR must also have a CHANGELOG entry covering every
+shipped pull request since the previous `@openma/<name>@*` tag. The publish
+job runs `node scripts/release-check.mjs --publish` before `pnpm release`;
+that check does not change how versions are bumped or published.
+
 **After your PR merges:**
 
 1. `release.yml` automatically opens a "Version Packages" PR that bumps

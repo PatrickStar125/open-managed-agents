@@ -21,6 +21,13 @@ import {
   encodeRuntimeHistoryEvent,
   encodeRuntimeSessionEvent,
 } from "@open-managed-agents/managed-agents-adapters-runtime";
+import {
+  createNodeHarnessUsageLedger,
+  creditCacheTokensFromSpanEnd,
+  creditHarnessUsage,
+  ledgerToManagedSessionUsage,
+  type NodeHarnessUsageLedger,
+} from "./node-harness-usage.js";
 
 type UnstampedRuntimeProducedSessionEvent =
   RuntimeProducedSessionEvent extends infer Event
@@ -237,12 +244,30 @@ export interface ManagedNodeHarnessRuntimeInput {
   ids: { nextEventId(): string };
 }
 
+/** History is read back `ORDER BY processed_at` (millisecond precision) and
+ * then by id. Two events stamped from one clock reading can swap when ids are
+ * unrelated. One generator is therefore strictly increasing. */
+export function createStrictlyIncreasingEventStamp(
+  clock: { now(): Date },
+): () => string {
+  let lastStampMs = Number.NEGATIVE_INFINITY;
+  return () => {
+    lastStampMs = Math.max(clock.now().getTime(), lastStampMs + 1);
+    return new Date(lastStampMs).toISOString();
+  };
+}
+
 export class ManagedNodeHarnessRuntime implements HarnessRuntime {
   readonly history: HistoryStore;
   readonly sandbox: SandboxExecutor;
   readonly abortSignal?: AbortSignal;
   private readonly applicationHistoryEvents: SessionEventView[];
   private outputChain: Promise<void> = Promise.resolve();
+  private readonly nextStamp: () => string;
+  private readonly usageLedger: NodeHarnessUsageLedger;
+  /** Number of `agent.*` events (tool calls, messages, thinking) produced so far:
+   * a turn that produced none has no side effects and is safe to re-run. */
+  agentEventCount = 0;
 
   constructor(private readonly input: ManagedNodeHarnessRuntimeInput) {
     this.history = new ManagedNodeHistoryStore(
@@ -252,36 +277,78 @@ export class ManagedNodeHarnessRuntime implements HarnessRuntime {
     this.sandbox = input.sandbox;
     this.abortSignal = input.abortSignal;
     this.applicationHistoryEvents = structuredClone(input.events);
+    this.nextStamp = createStrictlyIncreasingEventStamp(input.clock);
+    this.usageLedger = createNodeHarnessUsageLedger();
   }
 
+  reportUsage = async (
+    input_tokens: number,
+    output_tokens: number,
+  ): Promise<void> => {
+    creditHarnessUsage(this.usageLedger, { input_tokens, output_tokens });
+    this.broadcastProducedEvent({
+      type: "session.usage",
+      usage: ledgerToManagedSessionUsage(this.usageLedger),
+    });
+  };
+
   broadcast = (event: SessionEvent): void => {
+    creditCacheTokensFromSpanEnd(
+      this.usageLedger,
+      event as { type?: string; model_usage?: Record<string, number | undefined> },
+    );
     const frame = structuredClone(event) as SessionEvent & {
       id?: string;
       processed_at?: string;
     };
     if (typeof frame.id !== "string") frame.id = this.input.ids.nextEventId();
     if (typeof frame.processed_at !== "string") {
-      frame.processed_at = this.input.clock.now().toISOString();
+      frame.processed_at = this.stamp();
     }
+    if (typeof frame.type === "string" && frame.type.startsWith("agent.")) this.agentEventCount += 1;
     this.history.append(frame);
     const applicationEvent = decodeRuntimeProducedSessionEvent(frame);
     if (applicationEvent !== null) {
       this.applicationHistoryEvents.push(applicationEvent);
     }
     void this.enqueue(frame);
+    this.publishSessionUsageIfCacheChanged(event);
   };
 
   broadcastProducedEvent(event: UnstampedRuntimeProducedSessionEvent): string {
     const stamped = {
       ...event,
       id: this.input.ids.nextEventId(),
-      processedAt: this.input.clock.now().toISOString(),
+      processedAt: this.stamp(),
     } as RuntimeProducedSessionEvent;
     const frame = encodeRuntimeHistoryEvent(stamped) as SessionEvent;
+    if (stamped.type.startsWith("agent.")) this.agentEventCount += 1;
     this.history.append(frame);
     this.applicationHistoryEvents.push(stamped);
     void this.enqueue(frame);
     return stamped.id;
+  }
+
+  private publishSessionUsageIfCacheChanged(event: SessionEvent): void {
+    if (event.type !== "span.model_request_end") return;
+    const usage = (event as { model_usage?: Record<string, number | undefined> })
+      .model_usage;
+    if (!usage) return;
+    const cc = usage.cache_creation_input_tokens || 0;
+    const cr = usage.cache_read_input_tokens || 0;
+    if (cc === 0 && cr === 0) return;
+    this.broadcastProducedEvent({
+      type: "session.usage",
+      usage: ledgerToManagedSessionUsage(this.usageLedger),
+    });
+  }
+
+  /** Event history is read back ordered by `processed_at` (ms precision) and
+   * then by random id, so events stamped in the same millisecond (tool_use and
+   * its tool_result) could replay out of order on another owner. Stamps are
+   * therefore strictly increasing within a runtime. */
+  private stamp(): string {
+    return this.nextStamp();
   }
 
   getApplicationHistoryEvents(): SessionEventView[] {

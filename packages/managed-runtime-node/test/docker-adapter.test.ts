@@ -705,11 +705,13 @@ describe("DockerManagedRuntimeAdapter", () => {
         if (command.type === "start") {
           stdoutController.enqueue(encoder.encode(
             '{"type":"ready","protocol":"openma-harness-supervisor-v1"}\n'
-              + `{"type":"checkpoint","checkpointId":"checkpoint_1","sessionId":"${scope.sessionId}","turnId":"turn_1"}\n`
-              + '{"type":"completed","exitCode":0}\n',
+              + `{"type":"checkpoint","checkpointId":"checkpoint_1","sessionId":"${scope.sessionId}","turnId":"turn_1","requestId":"periodic_1"}\n`,
           ));
         } else if (command.type === "checkpoint.commit") {
-          // The fake process has already emitted its next record.
+          stdoutController.enqueue(encoder.encode(
+            '{"type":"checkpoint.committed","requestId":"periodic_1"}\n'
+              + '{"type":"completed","exitCode":0}\n',
+          ));
         } else if (command.type === "drain") {
           stdoutController.enqueue(encoder.encode('{"type":"drained"}\n'));
         }
@@ -780,6 +782,7 @@ describe("DockerManagedRuntimeAdapter", () => {
       done: false,
       value: { type: "ready", protocol: "openma-harness-supervisor-v1" },
     });
+    await channel.send({ type: "checkpoint.request", requestId: "periodic_1" });
     await expect(events.next()).resolves.toEqual({
       done: false,
       value: {
@@ -787,9 +790,14 @@ describe("DockerManagedRuntimeAdapter", () => {
         checkpointId: "checkpoint_1",
         sessionId: scope.sessionId,
         turnId: "turn_1",
+        requestId: "periodic_1",
       },
     });
     await channel.send({ type: "checkpoint.commit", checkpointId: "checkpoint_1" });
+    await expect(events.next()).resolves.toEqual({
+      done: false,
+      value: { type: "checkpoint.committed", requestId: "periodic_1" },
+    });
     await expect(events.next()).resolves.toEqual({
       done: false,
       value: { type: "completed", exitCode: 0 },
@@ -809,6 +817,7 @@ describe("DockerManagedRuntimeAdapter", () => {
     ]);
     expect(writes.map((value: any) => value.type)).toEqual([
       "start",
+      "checkpoint.request",
       "checkpoint.commit",
       "drain",
     ]);

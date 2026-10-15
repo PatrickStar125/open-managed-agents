@@ -115,7 +115,7 @@ downgrades `durable` to ephemeral storage.
 | Port | Owns | Must not own |
 |---|---|---|
 | `ManagedSandboxPort` | acquire, observe, heartbeat, suspend, terminate and orphan reap of isolated compute | Canonical files or Session state |
-| `WorkspacePersistencePort` | materialize `/workspace`, attach it, create immutable restore candidates | User-visible final deliverables |
+| `WorkspacePersistencePort` | materialize `/workspace` and attach it; create immutable restore candidates only for checkpoint strategies | User-visible final deliverables |
 | `SessionOutputPort` | prepare `/mnt/session/outputs`, collect files and create an immutable manifest | The mutable coding workspace |
 | `RuntimeResourceFencePort` | generation lease and atomic publication of active candidate pointers | Provider process management |
 
@@ -140,7 +140,7 @@ a POSIX network mount.
 
 | Strategy | What survives | Commit point | Main boundary |
 |---|---|---|---|
-| `durable_mount` | Writes accepted by an external durable filesystem | Filesystem/provider acknowledgement plus fenced revision publication | Mount latency and provider consistency model |
+| `durable_mount` | Live writes accepted by an external durable filesystem | Filesystem/provider acknowledgement; a fenced publication may record the mount identity, **not its contents** | Mount latency and provider consistency model; **no version or rollback of mounted files** |
 | `retained_runtime` | Local disk while the provider retains the runtime | Successful suspend/retention | Not durable against provider expiry or deletion |
 | `checkpoint_restore` | Last complete archive/snapshot published by the current generation | Immutable candidate hash + fenced pointer CAS | Changes after the last checkpoint can be lost |
 | `ephemeral` | Nothing after termination | None | Valid only when explicitly requested |
@@ -149,6 +149,11 @@ For a coding agent, `checkpoint_restore` is the portable baseline: acquire a
 fresh runtime, restore the last active candidate into `/workspace`, replay the
 durable Session event log and resume the harness. A provider-native retained
 runtime is a latency optimization unless an external checkpoint also exists.
+A configurable checkpoint interval is a **target at safe harness boundaries**:
+a long-running turn without a safe point can exceed it. Checkpoint bytes are
+staged first; a failed upload or stale fence never advances the active pointer.
+An ordinary OSS mount is a different strategy and is not rolled back by a
+sandbox checkpoint.
 
 ### Optional process-memory checkpoints
 
@@ -342,8 +347,8 @@ The normal transaction is:
 3. acquire compute, attach bindings and run the selected driver;
 4. keep the resource fence alive through run, drain, checkpoint and output
    finalization;
-5. write immutable workspace/output candidates;
-6. atomically publish both active pointers under the current generation;
+5. for `checkpoint_restore`, write an immutable workspace candidate; for `durable_mount`, record only the mount identity; finalize any output candidate independently;
+6. atomically publish the candidate pointers under the current generation (this does not make mount writes transactional);
 7. terminate or suspend compute, then release temporary bindings.
 
 Failure behavior is intentionally asymmetric:
@@ -356,7 +361,7 @@ Failure behavior is intentionally asymmetric:
 | Lost Work lease or resource fence | Abort cooperatively, then hard-kill; late events and publications are rejected |
 | Sandbox disappears | Cold acquire, restore last active workspace, replay Session events |
 | Hard kill fails | Persist token-free orphan and retry idempotent provider reap |
-| Resume/checkpoint is corrupt | Reject it; use the last verified revision rather than an empty workspace |
+| Published checkpoint is missing or corrupt | Fail closed; never silently replace an existing workspace with an empty one. Selecting an older verified revision requires an explicit recovery operation |
 
 This bounds split brain at every OpenMA commit point. It cannot undo a stale
 process's already-completed side effect in GitHub, a database or another
@@ -370,7 +375,7 @@ what a vendor might theoretically support.
 | Preset | Sandbox lifecycle | Workspace | Outputs | Runtime memory | Driver lanes |
 |---|---|---|---|---|---|
 | Node + Docker | hard remove; no suspend | filesystem `checkpoint_restore` | filesystem `final_collect` | none | `ama_worker`; `openma_supervised` |
-| Cloudflare Sandbox | destroy + durable orphan reap; no runtime-scoped resume | `createBackup`/`restoreBackup` as filesystem `checkpoint_restore` | R2 `final_collect` when `FILES_BUCKET` exists | not advertised | `ama_worker`; full preset also installs `openma_supervised` transport |
+| Cloudflare Sandbox | destroy + durable orphan reap; no runtime-scoped resume | `createBackup`/`restoreBackup` as `checkpoint_restore`; opt-in unversioned R2 `durable_mount` (a separate strategy) | R2 `final_collect` when `FILES_BUCKET` exists | not advertised | `ama_worker`; full preset also installs `openma_supervised` transport |
 | E2B / compatible | suspend/resume + kill/reap | `retained_runtime` and provider snapshot as `checkpoint_restore` | S3-compatible `final_collect` only with a complete store configuration | not advertised; RuntimeCheckpointPort required for process memory | `ama_worker`; `openma_supervised` |
 | Daytona | stop/start + stable-name delete/reap | `retained_runtime` and portable filesystem snapshot | BlobStore `final_collect` when explicitly configured | not advertised | `ama_worker`; `openma_supervised` |
 | LiteBox / BoxRun | stable get-or-create, stop/start, force remove/reap | provider-local `retained_runtime` | BlobStore `final_collect` when explicitly configured | not advertised | `ama_worker`; `openma_supervised` |
@@ -423,7 +428,10 @@ output strategy; it does not pretend local output files are persisted.
 
     The full preset uses `MAIN_DB` for fences/orphans, `SANDBOX` for compute
     and `FILES_BUCKET` for outputs. Applying the SQL schema remains an operator
-    migration.
+    migration. Optional `workspaceDurableMount: true` advertises a live
+    `/workspace` R2 mount only when `WORKSPACE_BUCKET`, its bucket name and
+    real R2 FUSE credentials exist. This **does not** version or roll back
+    mounted files; the provider mount must be tested in its actual sandbox.
   </TabItem>
   <TabItem label="E2B">
     ```ts

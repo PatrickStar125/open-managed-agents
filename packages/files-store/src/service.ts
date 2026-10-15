@@ -7,6 +7,12 @@ import type {
   NewFileInput,
 } from "./ports";
 import {
+  listUnifiedSessionFiles,
+  type SessionOutputPageSource,
+  type UnifiedListQuery,
+  type UnifiedPageResult,
+} from "./unified-page";
+import {
   DEFAULT_LIST_LIMIT,
   FileRow,
   MAX_LIST_LIMIT,
@@ -157,6 +163,36 @@ export class FileService {
       limit,
     };
     return this.repo.list(opts.tenantId, listOpts);
+  }
+
+  /**
+   * Session-scoped page across the files table and the session-outputs
+   * blob prefix. `outputs` is null when that prefix is not configured;
+   * the D1 half still uses the unified keyset so a cursor stays valid.
+   */
+  async listUnifiedPage(opts: {
+    tenantId: string;
+    scopeId: string;
+    outputs: SessionOutputPageSource | null;
+    limit?: number;
+    order?: "asc" | "desc";
+    cursor?: string;
+    beforeId?: string;
+    afterId?: string;
+  }): Promise<UnifiedPageResult> {
+    let limit = opts.limit ?? DEFAULT_LIST_LIMIT;
+    if (!Number.isFinite(limit) || limit < 1) limit = DEFAULT_LIST_LIMIT;
+    if (limit > MAX_LIST_LIMIT) limit = MAX_LIST_LIMIT;
+    const query: UnifiedListQuery = {
+      tenantId: opts.tenantId,
+      scopeId: opts.scopeId,
+      limit,
+      order: opts.order ?? "desc",
+      cursor: opts.cursor,
+      beforeId: opts.beforeId,
+      afterId: opts.afterId,
+    };
+    return listUnifiedSessionFiles(this.repo, query, opts.outputs);
   }
 }
 

@@ -14,6 +14,7 @@ import { nanoid } from "nanoid";
 
 import { resolveNodeProcessMode, validateNodeProcessEnvironment, type NodeProcessMode } from "./process-mode.js";
 import { resolveRealtimeFanout, type RealtimeFanoutConfig } from "./realtime-fanout.js";
+import { parseAllowHosts } from "./lib/skill-sources.js";
 
 export type NodeEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -31,6 +32,10 @@ export type BlobBackendConfig =
       accessKey: string;
       secretKey: string;
       region: string;
+      prefix?: string;
+      forcePathStyle?: boolean;
+      requestChecksumCalculation?: "WHEN_REQUIRED" | "WHEN_SUPPORTED";
+      conditionalCreate?: "if-none-match" | "oss-forbid-overwrite";
     };
 
 export interface NodeConfig {
@@ -63,6 +68,11 @@ export interface NodeConfig {
   };
   dreamCurator: "model" | "dedup";
   execution: { ownerId: string; concurrency: number };
+  workspace: {
+    strategy: "ephemeral" | "checkpoint_restore";
+    /** Target between safe turn checkpoints; no fixed wall-clock RPO. */
+    checkpointIntervalMs: number;
+  };
   managedWebhooks: {
     url: string | undefined;
     signingKey: string | undefined;
@@ -75,11 +85,21 @@ export interface NodeConfig {
     publicBaseUrl: string | undefined;
     gatewayOrigin: string;
     consoleDir: string | undefined;
+    /** CONSOLE_BRANDING_DIR: branding.json plus the logo, favicon, and stylesheet it names. */
+    brandingDir: string | undefined;
     metricsToken: string | undefined;
     /** Legacy static API key accepted alongside per-tenant keys. */
     apiKey: string | undefined;
   };
   tunnels: { domainSuffix: string };
+  skillSources: {
+    /**
+     * SKILL_SOURCES_ALLOW_HOSTS: hosts the control plane may fetch skill
+     * sources from even when they resolve to private addresses (and over
+     * plain http). Entries are host names, IP literals, or `*.example.com`.
+     */
+    allowHosts: string[];
+  };
   integrationsInternalToken: string | undefined;
   email: {
     host: string;
@@ -169,13 +189,41 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
     const accessKey = env[`${prefix}_ACCESS_KEY`];
     const secretKey = env[`${prefix}_SECRET_KEY`];
     if (!endpoint || !bucket || !accessKey || !secretKey) return null;
-    return { kind: "s3" as const, endpoint, bucket, accessKey, secretKey, region: env[`${prefix}_REGION`] ?? "us-east-1" };
+    const keyPrefix = env[`${prefix}_PREFIX`]?.trim();
+    if (keyPrefix && (keyPrefix.startsWith("/") || !keyPrefix.endsWith("/") || keyPrefix.split("/").includes(".."))) {
+      problems.push(`${prefix}_PREFIX must be a relative object-key prefix ending in /`);
+    }
+    const pathStyle = env[`${prefix}_FORCE_PATH_STYLE`];
+    if (pathStyle !== undefined && pathStyle !== "0" && pathStyle !== "1") problems.push(`${prefix}_FORCE_PATH_STYLE must be 0 or 1`);
+    const conditionalCreate = env[`${prefix}_CONDITIONAL_CREATE`];
+    if (conditionalCreate !== undefined && conditionalCreate !== "if-none-match" && conditionalCreate !== "oss-forbid-overwrite") {
+      problems.push(`${prefix}_CONDITIONAL_CREATE must be if-none-match or oss-forbid-overwrite`);
+    }
+    const checksum = env[`${prefix}_REQUEST_CHECKSUM_CALCULATION`];
+    if (checksum !== undefined && checksum !== "WHEN_REQUIRED" && checksum !== "WHEN_SUPPORTED") {
+      problems.push(`${prefix}_REQUEST_CHECKSUM_CALCULATION must be WHEN_REQUIRED or WHEN_SUPPORTED`);
+    }
+    return {
+      kind: "s3" as const, endpoint, bucket, accessKey, secretKey, region: env[`${prefix}_REGION`] ?? "us-east-1",
+      ...(keyPrefix && !keyPrefix.startsWith("/") && keyPrefix.endsWith("/") && !keyPrefix.split("/").includes("..") ? { prefix: keyPrefix } : {}),
+      ...(pathStyle === undefined ? {} : { forcePathStyle: pathStyle === "1" }),
+      ...(checksum === "WHEN_REQUIRED" || checksum === "WHEN_SUPPORTED" ? { requestChecksumCalculation: checksum as "WHEN_REQUIRED" | "WHEN_SUPPORTED" } : {}),
+      ...(conditionalCreate === "oss-forbid-overwrite" ? { conditionalCreate: "oss-forbid-overwrite" as const } : {}),
+    };
   };
   const memoryS3 = s3("MEMORY_S3");
   const memory: NodeConfig["blobs"]["memory"] = memoryS3 === null
     ? { kind: "localfs", dir: env.MEMORY_BLOB_DIR ?? "./data/memory-blobs" }
     : { ...memoryS3, pollIntervalMs: Math.max(5_000, integer("MEMORY_S3_POLL_INTERVAL_SEC", 30) * 1000) };
   const files: BlobBackendConfig = s3("FILES_S3") ?? { kind: "localfs", dir: env.FILES_BLOB_DIR ?? "./data/files-blobs" };
+  const workspaceStrategy = env.OMA_WORKSPACE_STRATEGY ?? "ephemeral";
+  if (workspaceStrategy !== "ephemeral" && workspaceStrategy !== "checkpoint_restore") {
+    problems.push("OMA_WORKSPACE_STRATEGY must be ephemeral or checkpoint_restore");
+  }
+  if (workspaceStrategy === "checkpoint_restore" && files.kind !== "s3") {
+    problems.push("FILES_S3_* shared storage is required for checkpoint_restore");
+  }
+  const checkpointIntervalMs = integer("OMA_WORKSPACE_CHECKPOINT_INTERVAL_SEC", 60, { min: 1 }) * 1000;
 
   const memoryQueueRaw = env.MEMORY_QUEUE ?? "auto";
   const memoryQueue: NodeConfig["memoryQueue"] = memoryQueueRaw === "disabled" ? "disabled" : "auto";
@@ -198,6 +246,8 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
     const value = env[key];
     return value && value.trim() ? value : fallback;
   };
+
+  const skillSourceAllowHosts = attempt<string[]>([], () => parseAllowHosts(env.SKILL_SOURCES_ALLOW_HOSTS));
 
   const config: NodeConfig = {
     processMode,
@@ -225,6 +275,10 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
       ownerId: env.OMA_SESSION_EXECUTION_OWNER_ID ?? `node:${process.pid}:${nanoid()}`,
       concurrency: integer("OMA_SESSION_EXECUTION_CONCURRENCY", 8, { min: 1 }),
     },
+    workspace: {
+      strategy: workspaceStrategy === "checkpoint_restore" ? "checkpoint_restore" : "ephemeral",
+      checkpointIntervalMs,
+    },
     managedWebhooks: {
       url: env.OMA_MANAGED_AGENTS_WEBHOOK_URL,
       signingKey: env.OMA_MANAGED_AGENTS_WEBHOOK_SIGNING_KEY,
@@ -241,10 +295,12 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
       publicBaseUrl: env.PUBLIC_BASE_URL,
       gatewayOrigin: env.GATEWAY_ORIGIN ?? env.PUBLIC_BASE_URL ?? "http://localhost:8787",
       consoleDir: env.CONSOLE_DIR,
+      brandingDir: env.CONSOLE_BRANDING_DIR,
       metricsToken: env.METRICS_BIND_TOKEN,
       apiKey: env.API_KEY,
     },
     tunnels: { domainSuffix: env.TUNNEL_DOMAIN_SUFFIX ?? "tunnels.localhost" },
+    skillSources: { allowHosts: skillSourceAllowHosts },
     integrationsInternalToken: env.INTEGRATIONS_INTERNAL_TOKEN,
     email,
     feishuWsRunner: flag("FEISHU_WS_RUNNER"),

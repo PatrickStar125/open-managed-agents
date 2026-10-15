@@ -53,6 +53,8 @@ export interface CloudflareManagedRuntimeSandbox
     generation: number;
     reason: "completed" | "failed" | "lease_lost";
   }): Promise<void>;
+  /** Live unversioned R2 mount. Its bytes are not part of sandbox checkpoints. */
+  mountDurableWorkspace(input: { workspaceId: string; sessionId: string }): Promise<void>;
 }
 
 export interface CloudflareManagedRuntimeOptions {
@@ -64,6 +66,8 @@ export interface CloudflareManagedRuntimeOptions {
   /** API origin reachable from the container for scoped Work/MCP traffic. */
   controlPlaneBaseUrl?: string;
   runtimeEnvironment?: ProviderRuntimeEnvironment<CloudflareManagedRuntimeSandbox>;
+  /** Opt in to a session-scoped R2 mount at /workspace. No snapshot/rollback. */
+  workspaceDurableMount?: boolean;
 }
 
 export interface CloudflareManagedRuntimeHostOptions
@@ -71,6 +75,8 @@ export interface CloudflareManagedRuntimeHostOptions
   /** Stable identity of this SessionDO/worker instance; never a user token. */
   ownerId: string;
   heartbeatIntervalMs?: number;
+  /** Safe-point target for checkpoint_restore; mount strategy never snapshots. */
+  checkpointIntervalMs?: number;
   runtimeCheckpoint?: RuntimeCheckpointPort;
   sessionInputs?: SessionInputMaterializerPort;
 }
@@ -88,6 +94,29 @@ export interface CloudflareManagedEnvironmentWorkerOptions {
 export interface CloudflareManagedRuntimeProviderFactoryOptions
   extends CloudflareManagedRuntimeDriverOptions {
   env: Env;
+}
+
+export function cloudflareWorkspaceMountPrefix(workspaceId: string, sessionId: string): string {
+  for (const [label, value] of [["workspaceId", workspaceId], ["sessionId", sessionId]]) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(value)) {
+      throw new Error(`Unsafe workspace mount ${label}`);
+    }
+  }
+  return `openma-workspaces/${encodeURIComponent(workspaceId)}/${encodeURIComponent(sessionId)}/`;
+}
+
+function durableWorkspaceMountConfigured(env: Env, enabled: boolean | undefined): boolean {
+  if (!enabled) return false;
+  if (
+    !env.WORKSPACE_BUCKET
+    || !env.WORKSPACE_BUCKET_NAME?.trim()
+    || !env.R2_ENDPOINT?.trim()
+    || !env.R2_ACCESS_KEY_ID?.trim()
+    || !env.R2_SECRET_ACCESS_KEY?.trim()
+  ) {
+    throw new Error("Cloudflare workspace R2 durable mount requires WORKSPACE_BUCKET, WORKSPACE_BUCKET_NAME, R2_ENDPOINT and R2 credentials");
+  }
+  return true;
 }
 
 export function createCloudflareSandboxProvider(
@@ -121,6 +150,7 @@ export function createCloudflareManagedRuntime(
       && env.R2_ACCESS_KEY_ID
       && env.R2_SECRET_ACCESS_KEY,
   );
+  const hasDurableWorkspaceMount = durableWorkspaceMountConfigured(env, options.workspaceDurableMount);
   const instantiate = options.createSandbox;
   const sandboxProvider = createCloudflareSandboxProvider(env, instantiate);
   const provider: ProviderManagedRuntimeProviderPort<CloudflareManagedRuntimeSandbox> = {
@@ -169,6 +199,26 @@ export function createCloudflareManagedRuntime(
     workspace: {
       strategies: ["checkpoint_restore"],
       portableCheckpointKind: "filesystem",
+      ...(hasDurableWorkspaceMount
+        ? {
+            durableMount: {
+              identity: (scope: { workspaceId: string; sessionId: string }) =>
+                `r2://${env.WORKSPACE_BUCKET_NAME!}/${cloudflareWorkspaceMountPrefix(scope.workspaceId, scope.sessionId)}`,
+              async attach({ runtime, scope, signal }: {
+                runtime: CloudflareManagedRuntimeSandbox;
+                scope: { workspaceId: string; sessionId: string };
+                signal: AbortSignal;
+              }) {
+                signal.throwIfAborted();
+                if (typeof runtime.mountDurableWorkspace !== "function") {
+                  throw new Error("Cloudflare runtime does not expose the workspace R2 mount Port");
+                }
+                await runtime.mountDurableWorkspace({ workspaceId: scope.workspaceId, sessionId: scope.sessionId });
+                signal.throwIfAborted();
+              },
+            },
+          }
+        : {}),
     },
     reapRuntime: async ({ lease }) => {
       await instantiate(env, lease.runtimeId).destroy();
@@ -241,6 +291,7 @@ export function createCloudflareManagedRuntimeDriver(
   env: Env,
   options: CloudflareManagedRuntimeDriverOptions,
 ): ManagedRuntimeProviderDriverPort {
+  const hasDurableWorkspaceMount = durableWorkspaceMountConfigured(env, options.workspaceDurableMount);
   const hasOutputStore = env.FILES_BUCKET !== undefined;
   const hasDurableOutputMount = Boolean(
     env.FILES_BUCKET
@@ -260,7 +311,9 @@ export function createCloudflareManagedRuntimeDriver(
             hardTerminate: "supported",
             runtimeCheckpoints: [],
           },
-          workspace: { strategies: ["checkpoint_restore"] },
+          workspace: {
+            strategies: ["checkpoint_restore", ...(hasDurableWorkspaceMount ? ["durable_mount" as const] : [])],
+          },
           outputs: {
             strategies: hasOutputStore
               ? [
@@ -326,6 +379,7 @@ export function createCloudflareManagedRuntimeHost(
     ownerId: options.ownerId,
     leaseTtlMs,
     heartbeatIntervalMs: options.heartbeatIntervalMs ?? 30_000,
+    ...(options.checkpointIntervalMs === undefined ? {} : { checkpointIntervalMs: options.checkpointIntervalMs }),
     fences,
     sandbox: runtime.sandbox,
     workspace: runtime.workspace,

@@ -13,6 +13,7 @@ import type {
 import type { Env } from "@open-managed-agents/shared";
 import { getSandbox as cfGetSandbox } from "@cloudflare/sandbox";
 import { sessionOutputsPrefix } from "@open-managed-agents/shared";
+import { cloudflareWorkspaceMountPrefix } from "@open-managed-agents/managed-runtime-cloudflare";
 // `bash-parser` is CJS; the bundler handles interop for worker builds.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
@@ -161,6 +162,37 @@ export class CloudflareSandbox
     // Intentionally no-op. /workspace is plain container disk now.
     // Persistence is wired in session-do.ts via restoreWorkspaceBackup
     // (warmup) and createWorkspaceBackup (destroy).
+  }
+
+  /** Opt-in, live R2-backed /workspace. Mount contents are not included in
+   * sandbox checkpoints and this path provides no version/rollback semantics.
+   * Never substitute localBucket mode for a durable mount. */
+  async mountDurableWorkspace(input: { workspaceId: string; sessionId: string }): Promise<void> {
+    const prefix = `/${cloudflareWorkspaceMountPrefix(input.workspaceId, input.sessionId)}`;
+    const fuse = this.fuseR2ConfigOrNull();
+    const bucketName = this.env.WORKSPACE_BUCKET_NAME?.trim();
+    if (!this.env.WORKSPACE_BUCKET || !bucketName || !fuse) {
+      throw new Error("Workspace R2 credentials and bucket binding are required for durable_mount");
+    }
+    const sandbox = await this.getSandbox();
+    if (typeof sandbox.mountBucket !== "function") {
+      throw new Error("Cloudflare sandbox does not expose the workspace R2 mount primitive");
+    }
+    // SDK mount bookkeeping can outlive a stopped container. Clear a stale
+    // record while the new container is alive, as with the output mount.
+    if (typeof sandbox.unmountBucket === "function") {
+      await sandbox.unmountBucket("/workspace").catch(() => {});
+    }
+    await sandbox.mountBucket(bucketName, "/workspace", {
+      endpoint: fuse.endpoint,
+      provider: "r2",
+      credentials: fuse.credentials,
+      prefix,
+      readOnly: false,
+      // The agent must not read bucket-wide R2 keys from s3fs's password file.
+      // The SDK keeps real keys in the DO and enforces this mount's prefix.
+      credentialProxy: true,
+    });
   }
 
   /**

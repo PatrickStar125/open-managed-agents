@@ -79,6 +79,8 @@ describe("createNodeManagedRuntime", () => {
       credentialEgress,
       sessionInputs,
     };
+    await expect(createNodeManagedRuntime({ ...options, checkpointIntervalMs: 0 }))
+      .rejects.toThrow(/checkpointIntervalMs/);
     const runtime = await createNodeManagedRuntime(options);
 
     expect(runtime).toMatchObject({

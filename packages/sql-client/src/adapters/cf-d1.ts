@@ -4,12 +4,16 @@
 // binding API, so each method delegates verbatim to the underlying
 // D1Database / D1PreparedStatement.
 
+import { driverRetry } from "../db-errors";
 import type {
   SqlClient,
   SqlRunResult,
   SqlSelectResult,
   SqlStatement,
 } from "../ports";
+import { translateCfD1Error } from "./cf-d1-errors";
+
+const retryD1 = driverRetry(translateCfD1Error);
 
 class CfD1SqlStatement implements SqlStatement {
   constructor(private stmt: D1PreparedStatement) {}
@@ -19,25 +23,31 @@ class CfD1SqlStatement implements SqlStatement {
   }
 
   async run<T = unknown>(): Promise<SqlRunResult<T>> {
-    const r = await this.stmt.run<T>();
-    return {
-      results: r.results as T[] | undefined,
-      meta: { changes: r.meta?.changes ?? 0, last_row_id: r.meta?.last_row_id },
-      success: r.success,
-    };
+    return retryD1(async () => {
+      const r = await this.stmt.run<T>();
+      return {
+        results: r.results as T[] | undefined,
+        meta: { changes: r.meta?.changes ?? 0, last_row_id: r.meta?.last_row_id },
+        success: r.success,
+      };
+    });
   }
 
   async first<T = unknown>(): Promise<T | null> {
-    const r = await this.stmt.first<T>();
-    return r ?? null;
+    return retryD1(async () => {
+      const r = await this.stmt.first<T>();
+      return r ?? null;
+    });
   }
 
   async all<T = unknown>(): Promise<SqlSelectResult<T>> {
-    const r = await this.stmt.all<T>();
-    return {
-      results: r.results as T[] | undefined,
-      meta: { changes: r.meta?.changes ?? 0, last_row_id: r.meta?.last_row_id },
-    };
+    return retryD1(async () => {
+      const r = await this.stmt.all<T>();
+      return {
+        results: r.results as T[] | undefined,
+        meta: { changes: r.meta?.changes ?? 0, last_row_id: r.meta?.last_row_id },
+      };
+    });
   }
 
   /** Internal — used by CfD1SqlClient.batch to access the underlying D1 stmt. */
@@ -54,20 +64,22 @@ export class CfD1SqlClient implements SqlClient {
   }
 
   async batch<T = unknown>(stmts: SqlStatement[]): Promise<Array<SqlRunResult<T>>> {
-    const d1Stmts = stmts.map((s) => {
-      // The batch contract: all statements MUST come from this client's
-      // prepare(). Mixing adapters in one batch is undefined.
-      if (!(s instanceof CfD1SqlStatement)) {
-        throw new Error("CfD1SqlClient.batch: foreign SqlStatement (not from this client's prepare)");
-      }
-      return s.unwrap();
+    return retryD1(async () => {
+      const d1Stmts = stmts.map((s) => {
+        // The batch contract: all statements MUST come from this client's
+        // prepare(). Mixing adapters in one batch is undefined.
+        if (!(s instanceof CfD1SqlStatement)) {
+          throw new Error("CfD1SqlClient.batch: foreign SqlStatement (not from this client's prepare)");
+        }
+        return s.unwrap();
+      });
+      const results = await this.db.batch<T>(d1Stmts);
+      return results.map((r) => ({
+        results: r.results as T[] | undefined,
+        meta: { changes: r.meta?.changes ?? 0, last_row_id: r.meta?.last_row_id },
+        success: r.success,
+      }));
     });
-    const results = await this.db.batch<T>(d1Stmts);
-    return results.map((r) => ({
-      results: r.results as T[] | undefined,
-      meta: { changes: r.meta?.changes ?? 0, last_row_id: r.meta?.last_row_id },
-      success: r.success,
-    }));
   }
 
   async exec(sql: string): Promise<void> {
@@ -82,7 +94,7 @@ export class CfD1SqlClient implements SqlClient {
       .map((statement) => statement.trim())
       .filter(Boolean);
     for (const statement of statements) {
-      await this.db.prepare(statement).run();
+      await this.prepare(statement).run();
     }
   }
 }

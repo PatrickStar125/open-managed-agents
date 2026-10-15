@@ -127,6 +127,35 @@ describe("MemorySessionStore", () => {
     expect(deployment.map((record) => record.session.id)).toEqual(["session_01"]);
   });
 
+  it("persists metadata on insert and replace without list filtering", async () => {
+    const store = new MemorySessionStore();
+    await insert(store, "workspace_01", session(
+      "session_01",
+      "2026-08-26T00:00:00.000Z",
+      { metadata: { project_id: "proj_a" } },
+    ));
+
+    const stored = await store.findCurrent({
+      workspaceId: "workspace_01",
+      sessionId: "session_01",
+    });
+    expect(stored?.session.metadata).toEqual({ project_id: "proj_a" });
+
+    await store.replaceCurrent({
+      workspaceId: "workspace_01",
+      sessionId: "session_01",
+      expectedRevision: 1,
+      next: session("session_01", "2026-08-26T00:00:00.000Z", {
+        metadata: { project_id: "proj_b" },
+      }),
+    });
+    const updated = await store.findCurrent({
+      workspaceId: "workspace_01",
+      sessionId: "session_01",
+    });
+    expect(updated?.session.metadata).toEqual({ project_id: "proj_b" });
+  });
+
   it("archives and deletes with explicit results", async () => {
     const store = new MemorySessionStore();
     await insert(store, "workspace_01", session(

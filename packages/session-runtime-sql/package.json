@@ -16,7 +16,8 @@
   "dependencies": {
     "@open-managed-agents/domain": "workspace:*",
     "@open-managed-agents/session-runtime-contract": "workspace:*",
-    "@open-managed-agents/sql-client": "workspace:*"
+    "@open-managed-agents/sql-client": "workspace:*",
+    "effect": "3.22.1"
   },
   "devDependencies": {
     "better-sqlite3": "^13.0.3",

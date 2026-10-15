@@ -65,21 +65,20 @@ export async function createNodeTracer(
 
   const NodeSDK = sdkMod.NodeSDK;
   const OTLPTraceExporter = traceExpMod.OTLPTraceExporter;
-  const Resource = resourceMod
-    ? (resourceMod as { Resource?: typeof import("@opentelemetry/resources").Resource }).Resource
-    : undefined;
-  const semconv = semconvMod as
-    | typeof import("@opentelemetry/semantic-conventions")
-    | null;
-
-  const resource = Resource && semconv
-    ? new Resource({
-        [semconv.SemanticResourceAttributes?.SERVICE_NAME ?? "service.name"]:
-          opts.serviceName ?? "oma-main-node",
-        [semconv.SemanticResourceAttributes?.SERVICE_VERSION ?? "service.version"]:
-          opts.serviceVersion ?? "0.1.0",
-      })
-    : undefined;
+  const serviceName = opts.serviceName ?? "oma-main-node";
+  const serviceVersion = opts.serviceVersion ?? "0.1.0";
+  // resources 2.x removed `new Resource(attributes)`. Build the same
+  // service identity with resourceFromAttributes and keep the SDK defaults
+  // (telemetry.sdk.*, process runtime) underneath it.
+  const resource =
+    resourceMod?.resourceFromAttributes && resourceMod.defaultResource
+      ? resourceMod.defaultResource().merge(
+          resourceMod.resourceFromAttributes({
+            [semconvMod?.ATTR_SERVICE_NAME ?? "service.name"]: serviceName,
+            [semconvMod?.ATTR_SERVICE_VERSION ?? "service.version"]: serviceVersion,
+          }),
+        )
+      : undefined;
 
   // OTel auto-instrumentations are lazy-imported; the precise type isn't in
   // scope without forcing a hard dep, so use any for the SDK option shape.
@@ -93,10 +92,16 @@ export async function createNodeTracer(
     if (autoMod) instrumentations = [autoMod.getNodeAutoInstrumentations()];
   }
 
+  // sdk-node 0.222 treats an omitted metricReaders option as
+  // OTEL_METRICS_EXPORTER=otlp. 0.55 did not start a MeterProvider unless
+  // one was passed. Application series stay on the prom-client registry;
+  // only an explicit OTEL_METRICS_EXPORTER opts into the OTel metrics SDK.
+  const metricsExporter = process.env.OTEL_METRICS_EXPORTER?.trim();
   const sdk = new NodeSDK({
     traceExporter: new OTLPTraceExporter({ url: `${endpoint.replace(/\/$/, "")}/v1/traces` }),
     instrumentations,
     ...(resource ? { resource } : {}),
+    ...(metricsExporter ? {} : { metricReaders: [] }),
   });
   sdk.start();
 

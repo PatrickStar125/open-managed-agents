@@ -87,6 +87,12 @@ function parseCommand(line: string): HarnessSupervisorCommand {
     throw new Error("Harness supervisor command must be an object with a type");
   }
   if (value.type === "drain") return { type: "drain" };
+  if (value.type === "checkpoint.request") {
+    if (!isNonEmptyString(value.requestId)) {
+      throw new Error("Harness supervisor checkpoint request id is invalid");
+    }
+    return { type: "checkpoint.request", requestId: value.requestId };
+  }
   if (value.type === "checkpoint.commit") {
     if (!isNonEmptyString(value.checkpointId)) {
       throw new Error("Harness supervisor checkpoint id is invalid");

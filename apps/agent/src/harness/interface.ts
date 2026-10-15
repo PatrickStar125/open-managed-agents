@@ -214,6 +214,14 @@ export interface HarnessContext {
    */
   tenant_id?: string;
 
+  /**
+   * When the agent uses `runtime_binding` (AcpProxyHarness), the host
+   * filesystem path for an attached `github_repository` resource. Forwarded
+   * on `session.start.cwd` so the ACP child runs in the project tree while
+   * the daemon keeps the OMA bundle in its scratch directory.
+   */
+  acpSessionStartCwd?: string;
+
   /** Platform-prepared tools: built from agent config, ready to pass to generateText. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tools: Record<string, any>;
@@ -258,6 +266,19 @@ export interface HarnessContext {
   platformReminders?: Array<{ source: string; text: string }>;
 
   /**
+   * Resolved skill mounts for assembly-layer exposure (Pi / default harness).
+   * When set, SKILL.md bodies are not inlined into `systemPrompt` by default.
+   */
+  skillMounts?: Array<{
+    skillId: string;
+    name: string;
+    description: string;
+    mountRoot: string;
+    body?: string;
+    source?: "builtin" | "custom";
+  }>;
+
+  /**
    * Resolve a `file_id` (Anthropic Managed Agents ImageBlock/DocumentBlock
    * `source.type === "file"`) into inline bytes + media type + filename for
    * the next derive cycle. SessionDO populates this with a
@@ -290,6 +311,20 @@ export interface HarnessContext {
     mcpProxy?: {
       gatewayBaseUrl: string;
       sessionsToken: string;
+    };
+    /** Same Work capability as mcpProxy; used to project hosted inference env. */
+    hostedInference?: {
+      gatewayBaseUrl: string;
+      sessionsToken: string;
+      model?: {
+        providerId: string;
+        baseUrl: string | null;
+        protocolEndpoints?: readonly {
+          protocol: "anthropic-messages" | "openai-chat" | "openai-responses" | "gemini";
+          proxyPathSegment: string;
+          upstreamBaseUrl: string;
+        }[];
+      };
     };
     environmentConfig?: { networking?: { type: string; allowed_hosts?: string[] } };
     /** Register a background task for completion notification (CC-style task_notification). */

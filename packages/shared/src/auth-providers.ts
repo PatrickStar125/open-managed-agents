@@ -37,12 +37,24 @@ export function buildSocialProviders(
   return providers;
 }
 
+/** A deployment-configured OpenID Connect provider, as shown on sign-in. */
+export interface SignInProviderInfo {
+  id: string;
+  name: string;
+}
+
+/**
+ * Sign-in methods for the public /auth-info response. `emailPassword: false`
+ * drops "email" and "email-otp", matching a Better Auth instance built with
+ * email and password disabled.
+ */
 export function listAuthProviders(
-  options: SocialProviderCredentials & { emailOtp?: boolean },
+  options: SocialProviderCredentials & { emailOtp?: boolean; emailPassword?: boolean },
 ): string[] {
+  const emailPassword = options.emailPassword ?? true;
   return [
-    "email",
-    ...(options.emailOtp ? ["email-otp"] : []),
+    ...(emailPassword ? ["email"] : []),
+    ...(emailPassword && options.emailOtp ? ["email-otp"] : []),
     ...Object.keys(buildSocialProviders(options)),
   ];
 }

@@ -29,6 +29,10 @@
 // loaded by createPostgresSqlClient so importing this package doesn't
 // require `postgres` to be installed.
 
+import { driverRetry } from "../db-errors";
+import { translatePostgresError } from "./postgres-errors";
+
+const retryPostgres = driverRetry(translatePostgresError);
 import type {
   SqlClient,
   SqlRunResult,
@@ -119,25 +123,31 @@ class PostgresSqlStatement implements SqlStatement {
   }
 
   async run<T = unknown>(): Promise<SqlRunResult<T>> {
-    const r = await this.sql.unsafe(this.text, this.params as unknown[]);
-    return {
-      meta: { changes: r.count ?? r.length ?? 0 },
-      // Some statements (INSERT ... RETURNING, UPDATE ... RETURNING) return
-      // rows even from .run() — surface them so callers that want them can
-      // read result.results without re-executing.
-      results: r as unknown as T[],
-      success: true,
-    };
+    return retryPostgres(async () => {
+      const r = await this.sql.unsafe(this.text, this.params as unknown[]);
+      return {
+        meta: { changes: r.count ?? r.length ?? 0 },
+        // Some statements (INSERT ... RETURNING, UPDATE ... RETURNING) return
+        // rows even from .run() — surface them so callers that want them can
+        // read result.results without re-executing.
+        results: r as unknown as T[],
+        success: true,
+      };
+    }, { sql: this.text });
   }
 
   async first<T = unknown>(): Promise<T | null> {
-    const r = await this.sql.unsafe(this.text, this.params as unknown[]);
-    return ((r[0] ?? null) as T | null);
+    return retryPostgres(async () => {
+      const r = await this.sql.unsafe(this.text, this.params as unknown[]);
+      return ((r[0] ?? null) as T | null);
+    }, { sql: this.text });
   }
 
   async all<T = unknown>(): Promise<SqlSelectResult<T>> {
-    const r = await this.sql.unsafe(this.text, this.params as unknown[]);
-    return { results: r as unknown as T[], meta: { changes: r.count ?? 0 } };
+    return retryPostgres(async () => {
+      const r = await this.sql.unsafe(this.text, this.params as unknown[]);
+      return { results: r as unknown as T[], meta: { changes: r.count ?? 0 } };
+    }, { sql: this.text });
   }
 
   /** Internal — used by PostgresSqlClient.batch to execute under a tx. */
@@ -160,6 +170,10 @@ export class PostgresSqlClient implements SqlClient {
   }
 
   async batch<T = unknown>(stmts: SqlStatement[]): Promise<Array<SqlRunResult<T>>> {
+    return retryPostgres(() => this.batchOnce<T>(stmts));
+  }
+
+  private async batchOnce<T = unknown>(stmts: SqlStatement[]): Promise<Array<SqlRunResult<T>>> {
     return this.sql.begin<Array<SqlRunResult<T>>>(async (tx) => {
       const out: SqlRunResult<T>[] = [];
       for (const s of stmts) {
@@ -180,7 +194,9 @@ export class PostgresSqlClient implements SqlClient {
    * statements (CREATE TABLE; CREATE INDEX; ...).
    */
   async exec(sql: string): Promise<void> {
-    await this.sql.unsafe(sql);
+    await retryPostgres(async () => {
+      await this.sql.unsafe(sql);
+    }, { sql });
   }
 }
 

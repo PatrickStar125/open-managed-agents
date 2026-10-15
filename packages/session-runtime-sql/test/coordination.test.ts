@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   AdmitSessionExecution,
   SessionExecutionCoordinatorPort,
@@ -6,6 +9,7 @@ import type {
 } from "@open-managed-agents/session-runtime-contract/coordination";
 import {
   createBetterSqlite3SqlClient,
+  Deadlock,
   type SqlClient,
 } from "@open-managed-agents/sql-client";
 import {
@@ -95,6 +99,10 @@ function admitted(
 }
 
 describe("SqlSessionExecutionCoordinator", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
   let sql: SqlClient;
   let coordinator: SessionExecutionCoordinatorPort;
 
@@ -102,6 +110,117 @@ describe("SqlSessionExecutionCoordinator", () => {
     sql = await createBetterSqlite3SqlClient(":memory:");
     await ensureSessionExecutionCoordinatorSchema(sql);
     coordinator = new SqlSessionExecutionCoordinator(sql);
+  });
+
+  it("claims a default-mode Session without preparing the optional checkpoint-only lock table", async () => {
+    await sql.exec("DROP TABLE managed_session_claim_locks");
+    await coordinator.admit(admitted("no-lock", "session_01", at(1)));
+    const result = await coordinator.claim({ ownerId: "ordinary_node", attemptId: "ordinary_attempt",
+      claimedAt: at(2), leaseTtlMs: 10_000 });
+    expect(result.type).toBe("claimed");
+  });
+
+  it("leaves a queued execution in place when the serial claim transaction deadlocks", async () => {
+    let attempts = 0;
+    const retryingSql: SqlClient = {
+      prepare: (statement) => sql.prepare(statement),
+      exec: (statement) => sql.exec(statement),
+      batch: async () => {
+        attempts++;
+        throw new Deadlock({ op: "session_execution.claim", sessionId: "session_01" });
+      },
+    };
+    const retrying = new SqlSessionExecutionCoordinator(retryingSql, { serializeSessionClaims: true });
+    await retrying.admit(admitted("deadlock", "session_01", at(1)));
+    await expect(retrying.claim({
+      ownerId: "recovered",
+      attemptId: "recovered_attempt",
+      claimedAt: at(2),
+      leaseTtlMs: 10_000,
+    })).rejects.toBeInstanceOf(Deadlock);
+    expect(attempts).toBe(1);
+    await expect(retrying.find({
+      workspaceId: "workspace_01",
+      executionId: "deadlock",
+    })).resolves.toMatchObject({ state: "queued" });
+  });
+
+  it("adds claim-lock version columns onto an older mutex table", async () => {
+    await sql.exec("DROP TABLE managed_session_claim_locks");
+    await sql.exec(`CREATE TABLE managed_session_claim_locks (
+      workspace_id VARCHAR(191) NOT NULL,
+      session_id VARCHAR(191) NOT NULL,
+      claim_token VARCHAR(191) NOT NULL,
+      PRIMARY KEY (workspace_id, session_id)
+    )`);
+    const { upgradeSessionClaimLockColumns } = await import("../src/coordination");
+    await upgradeSessionClaimLockColumns(sql);
+    const columns = await sql.prepare(
+      "PRAGMA table_info(managed_session_claim_locks)",
+    ).all<{ name: string }>();
+    expect(columns.results?.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["version", "holder_execution_id", "claim_token"]),
+    );
+  });
+
+  it("serializes opted-in cross-lane claims across owners without changing default lane concurrency", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openma-serial-claims-"));
+    roots.push(root);
+    const dbPath = join(root, "shared.db");
+    const firstSql = await createBetterSqlite3SqlClient(dbPath);
+    const secondSql = await createBetterSqlite3SqlClient(dbPath);
+    await ensureSessionExecutionCoordinatorSchema(firstSql);
+    const first = new SqlSessionExecutionCoordinator(firstSql, { serializeSessionClaims: true });
+    const second = new SqlSessionExecutionCoordinator(secondSql, { serializeSessionClaims: true });
+    await first.admit({ ...admitted("primary", "session_01", at(1)), execution: {
+      ...admitted("primary", "session_01", at(1)).execution, laneId: "sthr_primary",
+    } });
+    await first.admit({ ...admitted("child", "session_01", at(2)), execution: {
+      ...admitted("child", "session_01", at(2)).execution, laneId: "sthr_child",
+    } });
+    const claims = await Promise.all([
+      first.claim({ ownerId: "node_a", attemptId: "attempt_a", claimedAt: at(3), leaseTtlMs: 10_000 }),
+      second.claim({ ownerId: "node_b", attemptId: "attempt_b", claimedAt: at(3), leaseTtlMs: 10_000 }),
+    ]);
+    expect(claims.filter((result) => result.type === "claimed")).toHaveLength(1);
+    const owned = claims.find((result) => result.type === "claimed");
+    if (owned?.type !== "claimed") throw new Error("missing first claim");
+    expect(owned.execution.id).toBe("primary");
+    expect(await second.claim({ ownerId: "node_b", attemptId: "attempt_c", claimedAt: at(4), leaseTtlMs: 10_000 }))
+      .toEqual({ type: "empty" });
+    await first.settle({ fence: owned.fence, settledAt: at(5), outcome: "completed" });
+    const next = await second.claim({ ownerId: "node_b", attemptId: "attempt_d", claimedAt: at(6), leaseTtlMs: 10_000 });
+    expect(next).toMatchObject({ type: "claimed", execution: { id: "child" } });
+  });
+
+  it("does not serialize two lanes of one Session unless explicitly opted in", async () => {
+    await coordinator.admit(admitted("primary", "session_01", at(1)));
+    await coordinator.admit({ ...admitted("child", "session_01", at(2)), execution: {
+      ...admitted("child", "session_01", at(2)).execution, laneId: "sthr_child",
+    } });
+    const first = await coordinator.claim({ ownerId: "node_a", attemptId: "attempt_a", claimedAt: at(3), leaseTtlMs: 10_000 });
+    const second = await coordinator.claim({ ownerId: "node_b", attemptId: "attempt_b", claimedAt: at(3), leaseTtlMs: 10_000 });
+    expect([first, second].map((result) => result.type)).toEqual(["claimed", "claimed"]);
+  });
+
+  it("allows opted-in session claim takeover only after the previous lease expires", async () => {
+    const first = new SqlSessionExecutionCoordinator(sql, { serializeSessionClaims: true });
+    const second = new SqlSessionExecutionCoordinator(sql, { serializeSessionClaims: true });
+    await first.admit(admitted("primary", "session_01", at(1)));
+    await first.admit({ ...admitted("child", "session_01", at(2)), execution: {
+      ...admitted("child", "session_01", at(2)).execution, laneId: "sthr_child",
+    } });
+    const initial = await first.claim({ ownerId: "node_a", attemptId: "attempt_a", claimedAt: at(3), leaseTtlMs: 2_000 });
+    expect(initial.type).toBe("claimed");
+    expect(await second.claim({ ownerId: "node_b", attemptId: "attempt_b", claimedAt: at(4), leaseTtlMs: 2_000 }))
+      .toEqual({ type: "empty" });
+    const takeover = await second.claim({ ownerId: "node_b", attemptId: "attempt_c", claimedAt: at(5), leaseTtlMs: 2_000 });
+    expect(takeover).toMatchObject({ type: "claimed", execution: { id: "primary" }, fence: { generation: 2 } });
+    if (initial.type !== "claimed") throw new Error("missing initial claim");
+    expect(await first.settle({ fence: initial.fence, settledAt: at(6), outcome: "completed" }))
+      .toEqual({ type: "lost" });
+    expect(await first.claim({ ownerId: "node_a", attemptId: "attempt_d", claimedAt: at(6), leaseTtlMs: 2_000 }))
+      .toEqual({ type: "empty" });
   });
 
   it("rejects malformed admissions, timestamps, leases, and empty execution ids", async () => {

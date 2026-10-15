@@ -38,6 +38,15 @@ export class SupervisedSandboxHarnessDriver
     if (input.signal.aborted) onAbort();
     else input.signal.addEventListener("abort", onAbort, { once: true });
     let channel: HarnessSupervisorChannel | null = null;
+    let requestSequence = 0;
+    // Object state is mutated by the ready callback while the event loop runs.
+    const requestState: { pending: {
+      id: string;
+      promise: Promise<void>;
+      resolve(): void;
+      reject(error: unknown): void;
+    } | null } = { pending: null };
+    let finished = false;
 
     const sendStop = async (reason: "aborted" | "failed") => {
       if (channel === null) return;
@@ -78,6 +87,27 @@ export class SupervisedSandboxHarnessDriver
         },
         "ready",
       );
+      const activeChannel = channel;
+      input.onCheckpointRequester?.(() => {
+        if (finished || controller.signal.aborted) return Promise.resolve();
+        if (requestState.pending !== null) return requestState.pending.promise;
+        const id = `periodic_${++requestSequence}`;
+        let resolve!: () => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<void>((done, failed) => {
+          resolve = done;
+          reject = failed;
+        });
+        requestState.pending = { id, promise, resolve, reject };
+        void activeChannel.send({ type: "checkpoint.request", requestId: id })
+          .catch((error: unknown) => {
+            if (requestState.pending?.id === id) {
+              requestState.pending.reject(error);
+              requestState.pending = null;
+            }
+          });
+        return promise;
+      });
 
       let completed = false;
       while (!completed) {
@@ -96,6 +126,9 @@ export class SupervisedSandboxHarnessDriver
           ) {
             throw new SupervisorProtocolError("Supervisor checkpoint request is invalid");
           }
+          if (event.requestId !== undefined && requestState.pending?.id !== event.requestId) {
+            throw new SupervisorProtocolError("Supervisor checkpoint request id is invalid");
+          }
           try {
             await input.checkpoint({
               checkpointId: event.checkpointId,
@@ -107,6 +140,10 @@ export class SupervisedSandboxHarnessDriver
               checkpointId: event.checkpointId,
             });
           } catch (error) {
+            if (event.requestId !== undefined && requestState.pending !== null) {
+              requestState.pending.reject(error);
+              requestState.pending = null;
+            }
             await channel.send({
               type: "checkpoint.reject",
               checkpointId: event.checkpointId,
@@ -116,8 +153,19 @@ export class SupervisedSandboxHarnessDriver
           }
           continue;
         }
+        if (event.type === "checkpoint.committed") {
+          if (requestState.pending?.id !== event.requestId) {
+            throw new SupervisorProtocolError("Supervisor checkpoint acknowledgement id is invalid");
+          }
+          requestState.pending.resolve();
+          requestState.pending = null;
+          continue;
+        }
         if (event.type === "error") throw new SupervisorProtocolError(event.message);
         if (event.type === "completed") {
+          finished = true;
+          requestState.pending?.resolve();
+          requestState.pending = null;
           if (event.exitCode !== 0) {
             throw new SupervisorProtocolError(
               `Harness exited with code ${event.exitCode}`,
@@ -151,6 +199,11 @@ export class SupervisedSandboxHarnessDriver
       await sendStop("failed");
       throw error;
     } finally {
+      finished = true;
+      // Completion without a harness safe point is not a failed checkpoint.
+      // The final workspace checkpoint still runs in ManagedRuntimeHost.
+      requestState.pending?.resolve();
+      requestState.pending = null;
       controller.abort(new Error("Supervisor driver closed"));
       input.signal.removeEventListener("abort", onAbort);
       await channel?.close().catch(() => {});

@@ -36,6 +36,10 @@ export interface ManagedRuntimeHostDependencies {
   /** Cadence for materializer-owned writable Memory Stores. Defaults to 15s,
    * matching the official Environment Worker's synchronization interval. */
   sessionInputSyncIntervalMs?: number;
+  /** Optional target cadence for supervised checkpoint_restore workspaces.
+   * Requests are fulfilled only when the harness reaches a safe checkpoint
+   * boundary; long turns have no fixed RPO. Omit to disable. */
+  checkpointIntervalMs?: number;
   /** Upper bound for provider sandbox destruction before durable orphan
    * reconciliation takes ownership. Defaults to 30s. */
   sandboxTerminationTimeoutMs?: number;
@@ -76,16 +80,17 @@ export interface ManagedRuntimeHost {
 
 const defaultScheduler: RuntimeSchedulerPort = {
   sleep(milliseconds, signal) {
+    signal.throwIfAborted();
     return new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(resolve, milliseconds);
-      signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timeout);
-          reject(signal.reason);
-        },
-        { once: true },
-      );
+      const onAbort = () => {
+        clearTimeout(timeout);
+        reject(signal.reason);
+      };
+      const timeout = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, milliseconds);
+      signal.addEventListener("abort", onAbort, { once: true });
     });
   },
 };
@@ -220,6 +225,11 @@ export function createManagedRuntimeHost(
   if (!Number.isSafeInteger(sandboxTerminationTimeoutMs) || sandboxTerminationTimeoutMs <= 0) {
     throw new Error("sandboxTerminationTimeoutMs must be a positive integer");
   }
+  if (dependencies.checkpointIntervalMs !== undefined && (
+    !Number.isSafeInteger(dependencies.checkpointIntervalMs) || dependencies.checkpointIntervalMs <= 0
+  )) {
+    throw new Error("checkpointIntervalMs must be a positive integer");
+  }
 
   return {
     async run({ scope, profile, session, sessionInputAccess, signal }) {
@@ -253,6 +263,13 @@ export function createManagedRuntimeHost(
         outputs: outputCapabilities,
         harness: harnessCapabilities,
       });
+      if (
+        dependencies.checkpointIntervalMs !== undefined
+        && plan.workspaceStrategy === "checkpoint_restore"
+        && plan.driver.type !== "openma_supervised"
+      ) {
+        throw new Error("Periodic workspace checkpoints require the supervised harness driver");
+      }
       if (plan.runtimeCheckpoint !== null && dependencies.runtimeCheckpoint === undefined) {
         throw new Error(
           `The selected composition advertises ${plan.runtimeCheckpoint} runtime checkpoints but does not provide RuntimeCheckpointPort`,
@@ -308,6 +325,9 @@ export function createManagedRuntimeHost(
       let sessionInputSyncLoop: Promise<void> | null = null;
       let sessionInputSyncFailure: unknown = null;
       let sessionInputSyncTail: Promise<void> = Promise.resolve();
+      let checkpointRequestAbort: AbortController | null = null;
+      let checkpointRequestLoop: Promise<void> | null = null;
+      let checkpointRequestFailure: unknown = null;
 
       const loseLease = (reason: string) => {
         leaseLost = true;
@@ -658,11 +678,49 @@ export function createManagedRuntimeHost(
           outputPath: outputBinding?.mountPath ?? null,
           driver: plan.driver,
           checkpoint: checkpointLiveTurn,
+          ...(dependencies.checkpointIntervalMs !== undefined
+            && plan.workspaceStrategy === "checkpoint_restore"
+            ? { onCheckpointRequester: (request: () => Promise<void>) => {
+                if (checkpointRequestLoop !== null) {
+                  throw new Error("Harness registered overlapping checkpoint requesters");
+                }
+                checkpointRequestAbort = new AbortController();
+                const periodicAbort = checkpointRequestAbort;
+                const abortPeriodic = () => periodicAbort.abort(controller.signal.reason);
+                controller.signal.addEventListener("abort", abortPeriodic, { once: true });
+                checkpointRequestLoop = (async () => {
+                  try {
+                    while (!periodicAbort.signal.aborted) {
+                      await scheduler.sleep(dependencies.checkpointIntervalMs!, periodicAbort.signal);
+                      if (periodicAbort.signal.aborted) return;
+                      // The request waits for the next harness safe point (or
+                      // for completion). Never snapshot a running turn here.
+                      await request();
+                    }
+                  } catch (error) {
+                    if (periodicAbort.signal.aborted) return;
+                    checkpointRequestFailure = error;
+                    controller.abort(error);
+                  } finally {
+                    controller.signal.removeEventListener("abort", abortPeriodic);
+                  }
+                })();
+              } }
+            : {}),
           signal: controller.signal,
         });
+        // Registered by the supervised driver after ready (inside a callback).
+        (checkpointRequestAbort as AbortController | null)?.abort(new Error("Managed runtime harness settled"));
+        await checkpointRequestLoop;
+        if (dependencies.checkpointIntervalMs !== undefined
+          && plan.workspaceStrategy === "checkpoint_restore"
+          && checkpointRequestLoop === null) {
+          throw new Error("Supervised harness did not register a checkpoint requester");
+        }
         sessionInputSyncAbort?.abort(new Error("Managed runtime harness settled"));
         await sessionInputSyncLoop;
         await sessionInputSyncTail;
+        if (checkpointRequestFailure !== null) throw checkpointRequestFailure;
         if (leaseLost) {
           cleanupReason = "lease_lost";
           return { type: "lease_lost" };
@@ -775,6 +833,8 @@ export function createManagedRuntimeHost(
       } finally {
         signal?.removeEventListener("abort", onExternalAbort);
         sessionInputSyncAbort?.abort(new Error("Managed runtime cleanup"));
+        (checkpointRequestAbort as AbortController | null)?.abort(new Error("Managed runtime cleanup"));
+        await checkpointRequestLoop;
         await sessionInputSyncLoop;
         await sessionInputSyncTail;
         controller.abort(new Error("Managed runtime cleanup"));

@@ -24,6 +24,24 @@ export interface NewFileInput {
   createdAt: number;
 }
 
+/** Position in the `(created_at, id)` total order used by scoped file pages. */
+export interface FileKeyset {
+  createdAtMs: number;
+  id: string;
+}
+
+export interface FileKeysetOptions {
+  /** When set, only rows with this session_id. */
+  sessionId?: string;
+  order: "asc" | "desc";
+  limit: number;
+  /**
+   * Exclusive bound. Return rows strictly after this key in `order`
+   * (the next page), not rows near it in the opposite direction.
+   */
+  after?: FileKeyset;
+}
+
 export interface FileListOptions {
   /**
    * Optional session filter — when set, returns ONLY files where
@@ -47,6 +65,13 @@ export interface FileRepo {
   get(tenantId: string, fileId: string): Promise<FileRow | null>;
 
   list(tenantId: string, opts: FileListOptions): Promise<FileRow[]>;
+
+  /**
+   * Keyset page ordered by `(created_at, id)` in `opts.order`.
+   * `after` is exclusive. Ties on `created_at` break by `id` in the
+   * same direction so two rows written in the same millisecond stay put.
+   */
+  listKeyset(tenantId: string, opts: FileKeysetOptions): Promise<FileRow[]>;
 
   /**
    * Hard-delete a file row. Returns the deleted row (so the caller can pull

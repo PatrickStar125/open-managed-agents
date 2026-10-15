@@ -28,7 +28,10 @@ import type {
   ValidateCredentialResult,
 } from "../ports/credentials";
 import type { CredentialStore } from "@open-managed-agents/credential-store";
-import type { CredentialValidationProbePort } from "./validation";
+import type {
+  CredentialValidationProbePort,
+  CredentialValidationRotation,
+} from "./validation";
 import type { CredentialVaultSourcePort } from "./vault-source";
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -447,6 +450,17 @@ export class CredentialsApplicationService implements CredentialsApplicationPort
       workspaceId: this.dependencies.workspaceId,
       credential: record.credential,
     });
+    const rotation = validation.rotation ?? null;
+    if (rotation !== null && rotation.accessToken.length > 0) {
+      try {
+        await this.persistRotation(record, rotation);
+      } catch (error) {
+        // Driver errors can embed the sealed document. Keep only the error
+        // name, never error.message, out of logs and the HTTP error page.
+        const name = error instanceof Error ? error.name : "Error";
+        console.warn(`credential rotation could not be persisted (${name})`);
+      }
+    }
     return {
       type: "validated",
       validation: {
@@ -478,4 +492,55 @@ export class CredentialsApplicationService implements CredentialsApplicationPort
       },
     };
   }
+
+  private async persistRotation(
+    record: { credential: Credential; revision: number },
+    rotation: CredentialValidationRotation,
+  ): Promise<void> {
+    let current = record;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const next = applyCredentialRotation(
+        current.credential,
+        rotation,
+        this.dependencies.clock.now().toISOString(),
+      );
+      if (next === null) return;
+      const replaced = await this.dependencies.store.replace({
+        workspaceId: this.dependencies.workspaceId,
+        vaultId: current.credential.vaultId,
+        credentialId: current.credential.id,
+        expectedRevision: current.revision,
+        next,
+      });
+      if (replaced.type === "replaced" || replaced.type === "not_found") return;
+      const latest = await this.dependencies.store.find({
+        workspaceId: this.dependencies.workspaceId,
+        vaultId: current.credential.vaultId,
+        credentialId: current.credential.id,
+      });
+      if (latest === null) return;
+      current = latest;
+    }
+  }
+}
+
+function applyCredentialRotation(
+  credential: Credential,
+  rotation: CredentialValidationRotation,
+  updatedAt: string,
+): Credential | null {
+  if (credential.auth.type !== "mcp_oauth") return null;
+  const refresh = credential.auth.refresh;
+  return {
+    ...credential,
+    auth: {
+      ...credential.auth,
+      accessToken: rotation.accessToken,
+      ...(rotation.expiresAt !== null ? { expiresAt: rotation.expiresAt } : {}),
+      ...(refresh != null && rotation.refreshToken !== null
+        ? { refresh: { ...refresh, refreshToken: rotation.refreshToken } }
+        : {}),
+    },
+    updatedAt,
+  };
 }

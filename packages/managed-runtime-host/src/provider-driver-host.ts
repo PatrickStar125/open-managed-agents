@@ -16,6 +16,7 @@ export interface ManagedRuntimeProviderHostOptions
     | "ownerId"
     | "leaseTtlMs"
     | "heartbeatIntervalMs"
+    | "checkpointIntervalMs"
     | "fences"
     | "orphans"
     | "scheduler"
@@ -62,6 +63,7 @@ export function createManagedRuntimeProviderHost(
         ownerId: options.ownerId,
         leaseTtlMs: options.leaseTtlMs,
         heartbeatIntervalMs: options.heartbeatIntervalMs,
+        ...(options.checkpointIntervalMs === undefined ? {} : { checkpointIntervalMs: options.checkpointIntervalMs }),
         fences: options.fences,
         orphans: options.orphans,
         sandbox: resources.sandbox,

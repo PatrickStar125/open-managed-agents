@@ -22,6 +22,7 @@ import { Toaster } from "./components/ui/sonner";
 import { AppShell } from "./components/AppShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { queryClient } from "./lib/query-client";
+import { loadBranding } from "./lib/branding";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { AgentsList } from "./pages/AgentsList";
@@ -272,6 +273,8 @@ const router = createBrowserRouter([
     children: protectedRoutes,
   },
 ]);
+
+void loadBranding();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

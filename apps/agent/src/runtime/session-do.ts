@@ -77,6 +77,7 @@ import {
 } from "@open-managed-agents/sandbox";
 import { HarnessLease, resolveHarness } from "../harness/registry";
 import { composeSystemPrompt } from "../harness/platform-guidance";
+import { resolveRepositoryLocalPath } from "../harness/acp-proxy-delivery";
 import {
   createPiModelRuntime,
   toAiSdkLanguageModel,
@@ -101,10 +102,17 @@ import { ensureSetupApplied } from "./setup-on-warmup";
 import {
   resolveSkills,
   resolveCustomSkills,
+  resolveCustomSkillMounts,
+  type SkillMountDescriptor,
   getSkillFiles,
   getSkillFilesFromManagedSource,
   mountSkillFiles,
 } from "../harness/skills";
+import {
+  agentUsesAssemblySkillMount,
+  resolveSkillAssemblyConfig,
+  skillMountsShouldFetchBodies,
+} from "../harness/assembly/skill-config";
 import { resolveAppendablePrompts } from "./appendable-prompts";
 import { createCfBrowserHarness } from "@open-managed-agents/browser-harness/cf";
 import type { BrowserHarness, BrowserBillingHook, BrowserSession } from "@open-managed-agents/browser-harness";
@@ -329,6 +337,24 @@ const STATE_ROW_ID = "cf_state_row_id";
 const KEEP_ALIVE_INTERVAL_MS = 30_000;
 const HUNG_SCHEDULE_TIMEOUT_SECONDS = 30;
 
+/** Next cron fire strictly after `nowMs`. `getNextDate` can return the current
+ * tick on a boundary; a due row makes `_scheduleNextAlarm` re-arm at now+1ms
+ * and the handler can invoke the callback again immediately. */
+function nextCronFireSeconds(cron: string, nowMs = Date.now()): number {
+  const expr = parseCronExpression(cron);
+  let anchor = new Date(nowMs);
+  let nextSec = Math.floor(expr.getNextDate(anchor).getTime() / 1000);
+  const nowSec = Math.floor(nowMs / 1000);
+  for (let guard = 0; nextSec <= nowSec && guard < 512; guard++) {
+    anchor = new Date((nextSec + 1) * 1000);
+    nextSec = Math.floor(expr.getNextDate(anchor).getTime() / 1000);
+  }
+  if (nextSec <= nowSec) {
+    throw new Error(`Could not compute a future cron fire time for ${cron}`);
+  }
+  return nextSec;
+}
+
 export class SessionDO extends DurableObject<Env> {
   // ── cf-agents-replacement state (see _ensureCfAgentsSchema below) ─────
   private _state: SessionState | undefined;
@@ -524,6 +550,33 @@ export class SessionDO extends DurableObject<Env> {
    * data through the init body and avoid the KV cross-binding issue.
    */
   private async getAgentConfig(agentId: string): Promise<AgentConfig | null> {
+    // Integration resume writes a refreshed snapshot through sessions.update()
+    // while the session is idle. The next turn must read that row: the DO
+    // copy taken at /init would keep the publish-time MCP wiring forever.
+    if (
+      agentId === this.state.agent_id &&
+      this.state.session_id &&
+      this.state.tenant_id
+    ) {
+      try {
+        const services = await getCfServicesForTenant(this.env, this.state.tenant_id);
+        const session = await services.sessions.get({
+          tenantId: this.state.tenant_id,
+          sessionId: this.state.session_id,
+        });
+        if (session?.agent_snapshot) {
+          if (JSON.stringify(this.state.agent_snapshot) !== JSON.stringify(session.agent_snapshot)) {
+            this.setState({ ...this.state, agent_snapshot: session.agent_snapshot });
+          }
+          return session.agent_snapshot;
+        }
+      } catch (err) {
+        logWarn(
+          { op: "session_do.agent_snapshot_reload", session_id: this.state.session_id, err },
+          "failed to reload agent snapshot; using the DO copy",
+        );
+      }
+    }
     if (this.state.agent_snapshot && agentId === this.state.agent_id) {
       return this.state.agent_snapshot;
     }
@@ -993,6 +1046,25 @@ export class SessionDO extends DurableObject<Env> {
       wakeupId: id,
     });
     return { cancelled: result.type === "cancelled" };
+  }
+
+  /**
+   * Cancel every pending wakeup for this session. Used when the managed MCP
+   * proxy observes a terminal loss of access. Idempotent: a second call
+   * finds an empty list.
+   */
+  async cancelAllWakeups(): Promise<{ cancelled: number }> {
+    // This Durable Object is already one session. Cancel every wakeup
+    // schedule on it, including rows whose stored scope was written before
+    // state.session_id was hydrated.
+    const pending = this.getSchedules().filter(
+      (record) => record.callback === "onScheduledWakeup",
+    );
+    let cancelled = 0;
+    for (const record of pending) {
+      if (await this.cancelSchedule(record.id)) cancelled += 1;
+    }
+    return { cancelled };
   }
 
   /**
@@ -2535,6 +2607,11 @@ export class SessionDO extends DurableObject<Env> {
       }
 
       return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
+    if (request.method === "POST" && url.pathname === "/wakeups/cancel") {
+      const cancelled = await this.cancelAllWakeups();
+      return Response.json(cancelled);
     }
 
     // GET /status
@@ -4844,13 +4921,16 @@ export class SessionDO extends DurableObject<Env> {
       access: "read_write" | "read_only";
       instructions?: string;
     }> = [];
+    let sessionResourceRows: Awaited<
+      ReturnType<Awaited<ReturnType<typeof getCfServicesForTenant>>["sessions"]["listResourcesBySession"]>
+    > = [];
     if (sessionId) {
       // listResourcesBySession queries the session_id column directly — no
       // tenant-prefix mismatch, no JSON.parse loop. Replaces the prior
       // CONFIG_KV.list scan that tripped over staging KV namespaces.
       const services = await getCfServicesForTenant(this.env, this.state.tenant_id);
-      const rows = await services.sessions.listResourcesBySession({ sessionId });
-      for (const row of rows) {
+      sessionResourceRows = await services.sessions.listResourcesBySession({ sessionId });
+      for (const row of sessionResourceRows) {
         if (row.type === "memory_store" && row.resource.type === "memory_store" && row.resource.memory_store_id) {
           memoryAttachments.push({
             store_id: row.resource.memory_store_id,
@@ -4994,6 +5074,12 @@ export class SessionDO extends DurableObject<Env> {
     // want to handle them differently — e.g. RAG harness might want to
     // resolve a query before injecting.)
     const platformReminders: Array<{ source: string; text: string }> = [];
+    const skillMounts: SkillMountDescriptor[] = [];
+    const assemblySkillMount = agentUsesAssemblySkillMount(agent);
+    const skillAssemblyConfig = assemblySkillMount ? resolveSkillAssemblyConfig(agent) : undefined;
+    const fetchSkillBodies = skillAssemblyConfig
+      ? skillMountsShouldFetchBodies(skillAssemblyConfig.mode)
+      : false;
 
     // Platform-built-in appendable prompts the agent author opted into. Use
     // for provider-specific syntax (e.g. Linear's @-mention URL form) that
@@ -5014,18 +5100,43 @@ export class SessionDO extends DurableObject<Env> {
       // Built-in (anthropic) skills from the in-memory registry
       const builtinSkills = resolveSkills(agent.skills);
       for (const s of builtinSkills) {
-        if (s.system_prompt_addition) {
+        if (assemblySkillMount) {
+          skillMounts.push({
+            skillId: s.id,
+            name: s.name,
+            description: s.name,
+            mountRoot: `/home/user/.skills/${s.name}/`,
+            body: s.system_prompt_addition,
+            source: "builtin",
+          });
+        } else if (s.system_prompt_addition) {
           platformReminders.push({ source: `skill:${s.id}`, text: s.system_prompt_addition });
         }
       }
 
-      // Custom skills from KV — lightweight metadata
+      // Custom skills from KV
       if (this.env.CONFIG_KV) {
         try {
-          const customSkills = await resolveCustomSkills(agent.skills, this.env.CONFIG_KV, this.env.FILES_BUCKET, this.state.tenant_id);
-          for (const s of customSkills) {
-            if (s.system_prompt_addition) {
-              platformReminders.push({ source: `skill:${s.id}`, text: s.system_prompt_addition });
+          if (assemblySkillMount) {
+            const customMounts = await resolveCustomSkillMounts(
+              agent.skills,
+              this.env.CONFIG_KV,
+              this.env.FILES_BUCKET,
+              this.state.tenant_id,
+              { fetchBodies: fetchSkillBodies },
+            );
+            skillMounts.push(...customMounts);
+          } else {
+            const customSkills = await resolveCustomSkills(
+              agent.skills,
+              this.env.CONFIG_KV,
+              this.env.FILES_BUCKET,
+              this.state.tenant_id,
+            );
+            for (const s of customSkills) {
+              if (s.system_prompt_addition) {
+                platformReminders.push({ source: `skill:${s.id}`, text: s.system_prompt_addition });
+              }
             }
           }
         } catch (err) {
@@ -5123,18 +5234,29 @@ export class SessionDO extends DurableObject<Env> {
     // prefix (turn N + 1 reuses the same prompt as turn N).
     const systemPrompt = composeSystemPrompt(rawSystemPrompt, platformReminders);
 
+    const acpSessionStartCwd = agent.runtime_binding
+      ? resolveRepositoryLocalPath(
+          sessionResourceRows.map((row) => ({
+            type: row.type,
+            resource: row.resource as unknown as Record<string, unknown>,
+          })),
+        )
+      : undefined;
+
     // --- Harness receives a fully-prepared context ---
     const ctx: HarnessContext = {
       agent,
       userMessage,
       session_id: this.state.session_id,
       tenant_id: this.state.tenant_id,
+      ...(acpSessionStartCwd ? { acpSessionStartCwd } : {}),
       tools: allTools,
       model,
       pi: piRuntime,
       systemPrompt,
       rawSystemPrompt,
       platformReminders,
+      ...(skillMounts.length > 0 ? { skillMounts } : {}),
       // file_id → bytes resolver for ImageBlock/DocumentBlock content blocks
       // whose `source.type === "file"`. Default-loop's eventsToMessagesAsync
       // dedupes via a per-derive Promise cache, so the same file referenced
@@ -6018,8 +6140,7 @@ export class SessionDO extends DurableObject<Env> {
     } else if (typeof when === "string") {
       type = "cron";
       cron = when;
-      const next = parseCronExpression(when).getNextDate(new Date());
-      timestamp = Math.floor(next.getTime() / 1000);
+      timestamp = nextCronFireSeconds(when);
       this.ctx.storage.sql.exec(
         `INSERT OR REPLACE INTO cf_agents_schedules (id, callback, payload, type, cron, time) VALUES (?, ?, ?, 'cron', ?, ?)`,
         id, callbackName, payloadJson, when, timestamp,
@@ -6278,8 +6399,7 @@ export class SessionDO extends DurableObject<Env> {
       // Reschedule cron / interval, delete one-shots
       if (row.type === "cron" && row.cron) {
         try {
-          const nextTime = parseCronExpression(row.cron).getNextDate(new Date());
-          const nextSec = Math.floor(nextTime.getTime() / 1000);
+          const nextSec = nextCronFireSeconds(row.cron);
           this.ctx.storage.sql.exec(`UPDATE cf_agents_schedules SET time = ? WHERE id = ?`, nextSec, row.id);
         } catch (err) {
           console.error(`[schedule] cron parse failed during reschedule for ${row.id}:`, err);

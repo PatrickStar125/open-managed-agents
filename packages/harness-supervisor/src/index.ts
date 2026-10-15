@@ -85,7 +85,9 @@ export function createHarnessSupervisor(
   let eventQueue = Promise.resolve();
   let stopped = false;
   let checkpointSequence = 0;
+  let pendingRequestId: string | null = null;
   let pendingCheckpoint: {
+    requestId?: string;
     id: string;
     resolve(): void;
     reject(error: Error): void;
@@ -123,13 +125,18 @@ export function createHarnessSupervisor(
       resolve = resolvePromise;
       reject = rejectPromise;
     });
-    pendingCheckpoint = { id, resolve, reject };
+    // A host request is only a hint. The harness invokes this callback when
+    // its own turn reaches a safe boundary; never force a mid-turn capture.
+    const requestId = pendingRequestId;
+    pendingCheckpoint = { id, resolve, reject,
+      ...(requestId === null ? {} : { requestId }) };
     try {
       await emit({
         type: "checkpoint",
         checkpointId: id,
         sessionId: input.sessionId,
         ...(input.turnId === undefined ? {} : { turnId: input.turnId }),
+        ...(requestId === null ? {} : { requestId }),
       });
       await committed;
     } finally {
@@ -193,6 +200,7 @@ export function createHarnessSupervisor(
           }
           controller.abort(new Error("Harness completed"));
           state = "completed";
+          pendingRequestId = null;
           await emit({ type: "completed", exitCode: result.exitCode });
         } catch (error) {
           if (stopped) return;
@@ -228,6 +236,7 @@ export function createHarnessSupervisor(
     }
     if (state === "stopped") return;
     controller.abort(new Error(`Harness stopped: ${reason}`));
+    pendingRequestId = null;
     pendingCheckpoint?.reject(new Error(`Harness checkpoint interrupted: ${reason}`));
     pendingCheckpoint = null;
     stopped = true;
@@ -246,17 +255,37 @@ export function createHarnessSupervisor(
         case "drain":
           await drain();
           return;
+        case "checkpoint.request":
+          if (command.requestId.length === 0) {
+            throw new Error("Harness checkpoint request requires a non-empty id");
+          }
+          // Completion may race the host timer: no new safe point remains.
+          if (state === "completed" || state === "drained") return;
+          if (state !== "running") {
+            throw new Error("Harness checkpoint request requires a running harness");
+          }
+          if (pendingRequestId !== null) {
+            throw new Error("Harness supervisor already has a pending checkpoint request");
+          }
+          pendingRequestId = command.requestId;
+          return;
         case "checkpoint.commit":
           if (pendingCheckpoint?.id !== command.checkpointId) {
             throw new Error(`Unknown harness checkpoint ${command.checkpointId}`);
           }
+          if (pendingCheckpoint.requestId !== undefined) pendingRequestId = null;
+          const committedRequestId = pendingCheckpoint.requestId;
           pendingCheckpoint.resolve();
           pendingCheckpoint = null;
+          if (committedRequestId !== undefined) {
+            await emit({ type: "checkpoint.committed", requestId: committedRequestId });
+          }
           return;
         case "checkpoint.reject":
           if (pendingCheckpoint?.id !== command.checkpointId) {
             throw new Error(`Unknown harness checkpoint ${command.checkpointId}`);
           }
+          if (pendingCheckpoint.requestId !== undefined) pendingRequestId = null;
           pendingCheckpoint.reject(new Error(command.message));
           pendingCheckpoint = null;
           return;
@@ -278,6 +307,7 @@ export function createHarnessSupervisor(
         return;
       }
       controller.abort(new Error("Harness supervisor closed"));
+      pendingRequestId = null;
       pendingCheckpoint?.reject(new Error("Harness supervisor closed"));
       pendingCheckpoint = null;
       await heartbeat?.catch(() => {});

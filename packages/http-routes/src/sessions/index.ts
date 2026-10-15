@@ -305,6 +305,7 @@ export function buildSessionRoutes(deps: SessionRoutesDeps) {
         file_id?: string;
         memory_store_id?: string;
         mount_path?: string;
+        local_path?: string;
         access?: "read_write" | "read_only";
         instructions?: string;
         url?: string;
@@ -324,6 +325,19 @@ export function buildSessionRoutes(deps: SessionRoutesDeps) {
     const memCount = (body.resources ?? []).filter((r) => r.type === "memory_store").length;
     if (memCount > 8) {
       return c.json({ error: "Maximum 8 memory_store resources per session" }, 422);
+    }
+
+    for (const r of body.resources ?? []) {
+      if (
+        (r.type === "github_repository" || r.type === "github_repo") &&
+        typeof r.local_path === "string" &&
+        r.local_path.trim()
+      ) {
+        const localPath = r.local_path.trim();
+        if (!isAbsoluteHostPath(localPath)) {
+          return c.json({ error: "local_path must be an absolute filesystem path" }, 400);
+        }
+      }
     }
 
     const seenStores = new Set<string>();
@@ -431,6 +445,9 @@ export function buildSessionRoutes(deps: SessionRoutesDeps) {
           url: repoUrl,
           repo_url: repoUrl,
           mount_path: res.mount_path || "/workspace",
+          ...(typeof res.local_path === "string" && res.local_path.trim()
+            ? { local_path: res.local_path.trim() }
+            : {}),
           checkout: res.checkout,
         });
       } else if ((res.type === "env" || res.type === "env_secret") && res.name && res.value) {
@@ -1276,4 +1293,10 @@ async function openSse(
       "x-accel-buffering": "no",
     },
   });
+}
+
+/** Host path for local runtime repo roots (POSIX or Windows drive). */
+function isAbsoluteHostPath(path: string): boolean {
+  if (path.startsWith("/")) return true;
+  return /^[A-Za-z]:[\\/]/.test(path);
 }

@@ -56,6 +56,48 @@ describe("in-sandbox harness supervisor", () => {
     await supervisor.close();
   });
 
+  it("defers a host checkpoint request to a harness safe point and coalesces overlap", async () => {
+    let checkpoint!: () => Promise<void>;
+    const events: unknown[] = [];
+    const supervisor = createHarnessSupervisor({
+      heartbeatIntervalMs: 60_000,
+      resolveHarness: vi.fn(async () => ({
+        start: vi.fn(async (input) => {
+          checkpoint = () => input.checkpoint({ sessionId: start.scope.sessionId });
+          return {
+            completed: new Promise<{ exitCode: number }>(() => {}),
+            drain: vi.fn(async () => {}),
+            stop: vi.fn(async () => {}),
+          };
+        }),
+      })),
+      emit: async (event) => { events.push(event); },
+    });
+    await supervisor.dispatch(start);
+    await supervisor.dispatch({ type: "checkpoint.request", requestId: "periodic_1" });
+    expect(events).toEqual([{ type: "ready", protocol: "openma-harness-supervisor-v1" }]);
+    await expect(supervisor.dispatch({
+      type: "checkpoint.request", requestId: "periodic_2",
+    })).rejects.toThrow("pending checkpoint request");
+    const atSafePoint = checkpoint();
+    await vi.waitFor(() => expect(events).toContainEqual({
+      type: "checkpoint", checkpointId: "checkpoint_1",
+      sessionId: start.scope.sessionId, requestId: "periodic_1",
+    }));
+    await supervisor.dispatch({ type: "checkpoint.commit", checkpointId: "checkpoint_1" });
+    await atSafePoint;
+    expect(events).toContainEqual({ type: "checkpoint.committed", requestId: "periodic_1" });
+    await supervisor.dispatch({ type: "checkpoint.request", requestId: "periodic_2" });
+    const next = checkpoint();
+    await vi.waitFor(() => expect(events).toContainEqual({
+      type: "checkpoint", checkpointId: "checkpoint_2",
+      sessionId: start.scope.sessionId, requestId: "periodic_2",
+    }));
+    await supervisor.dispatch({ type: "checkpoint.reject", checkpointId: "checkpoint_2", message: "lost" });
+    await expect(next).rejects.toThrow("lost");
+    await supervisor.close();
+  });
+
   it("rejects a pending harness checkpoint when the outer Runtime Host loses its fence", async () => {
     let checkpoint!: () => Promise<void>;
     const supervisor = createHarnessSupervisor({

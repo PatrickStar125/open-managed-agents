@@ -84,6 +84,11 @@ interface E2BSandboxLike {
 }
 
 export interface E2BSandboxOptions {
+  /** Probe the new sandbox with a no-op command before returning it. Some
+   * E2B-compatible providers (Haven) briefly reject envd calls right after
+   * create, e.g. `[unauthenticated] invalid username: 'user'`. Only such
+   * transient errors are retried; `false` disables the probe. */
+  readiness?: false | { attempts?: number; delayMs?: number };
   /** E2B API key. Falls back to process.env.E2B_API_KEY. */
   apiKey?: string;
   /** E2B-compatible control-plane URL. Falls back to E2B_API_URL. */
@@ -137,7 +142,37 @@ export async function createE2BSandbox(
     opts.templateId ?? "base",
     creationOptions(opts),
   );
+  if (opts.readiness !== false) {
+    try {
+      await waitForSandboxReady(sb, opts.readiness ?? {});
+    } catch (error) {
+      await sb.kill?.().catch(() => undefined);
+      throw error;
+    }
+  }
   return new E2BSandboxExecutor(sb, opts);
+}
+
+const TRANSIENT_READINESS = /\[(unauthenticated|unavailable|deadline_exceeded)\]|invalid username|connection refused|ECONNRESET|ECONNREFUSED|socket hang up|\b50[234]\b/iu;
+
+async function waitForSandboxReady(
+  sandbox: E2BSandboxLike,
+  options: { attempts?: number; delayMs?: number },
+): Promise<void> {
+  const attempts = Math.max(1, options.attempts ?? 10);
+  const delayMs = Math.max(0, options.delayMs ?? 1_000);
+  let last: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await sandbox.commands.run("true", { timeoutMs: 30_000 });
+      return;
+    } catch (error) {
+      if (!TRANSIENT_READINESS.test(String((error as Error)?.message ?? error))) throw error;
+      last = error;
+      if (attempt < attempts && delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw new Error(`E2B sandbox was not ready after ${attempts} probes: ${String((last as Error)?.message ?? last)}`);
 }
 
 export class E2BSandboxExecutor

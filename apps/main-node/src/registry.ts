@@ -43,6 +43,11 @@ import type {
 import type { LanguageModel } from "ai";
 import { getLogger } from "@open-managed-agents/observability";
 import type { EventStreamHub } from "./lib/event-stream-hub.js";
+import {
+  createNodeHarnessUsageLedger,
+  ledgerToApiTokenUsage,
+  type NodeHarnessUsageLedger,
+} from "./lib/node-harness-usage.js";
 
 const log = getLogger("session-registry");
 
@@ -77,6 +82,7 @@ export interface SessionRegistryDeps {
     agent: AgentConfig,
     sandbox: SandboxPort,
     tenantId: string,
+    sessionId: string,
   ): Promise<unknown>;
 
   /** Build harness instance + context. Each is platform-neutral so the
@@ -94,6 +100,7 @@ export interface SessionRegistryDeps {
     sessionId: string;
     tenantId: string;
     eventLog: SqlEventLog;
+    usageLedger: NodeHarnessUsageLedger;
   }): Promise<unknown>;
 
   /** Sandbox workdir root, e.g. /app/data/sandboxes. Per-session dirs
@@ -110,12 +117,26 @@ interface SessionEntry {
   machine: SessionStateMachine;
   sandbox: SandboxPort;
   eventLog: SqlEventLog;
+  usageLedger: NodeHarnessUsageLedger;
 }
 
 export class SessionRegistry {
   private map = new Map<string, Promise<SessionEntry>>();
 
   constructor(private deps: SessionRegistryDeps) {}
+
+  async getApiTokenUsage(
+    sessionId: string,
+  ): Promise<ReturnType<typeof ledgerToApiTokenUsage> | null> {
+    const entry = await this.map.get(sessionId);
+    if (entry === undefined) return null;
+    try {
+      const resolved = await entry;
+      return ledgerToApiTokenUsage(resolved.usageLedger);
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Get-or-create the SessionStateMachine for a session. Lazy: the
@@ -252,12 +273,27 @@ export class SessionRegistry {
       // Node has no eviction — leave hintTurnInFlight unset.
     });
 
+    const usageLedger = createNodeHarnessUsageLedger();
+
     const machine = new SessionStateMachine({
       sessionId,
       tenantId,
       adapter,
       sandbox,
       loadAgent: async (agentId) => {
+        // The session snapshot is the frozen user config plus the integration
+        // MCP wiring refreshed on resume. Sub-agents still resolve live.
+        const stored = await this.deps.sql
+          .prepare(`SELECT agent_id, agent_snapshot FROM sessions WHERE id = ?`)
+          .bind(sessionId)
+          .first<{ agent_id: string | null; agent_snapshot: string | null }>();
+        if (stored?.agent_id === agentId && stored.agent_snapshot) {
+          try {
+            return JSON.parse(stored.agent_snapshot) as AgentConfig;
+          } catch {
+            // Fall through to the live agent row.
+          }
+        }
         const row = await this.deps.agentsService.get({ tenantId, agentId });
         return row ?? null;
       },
@@ -267,7 +303,7 @@ export class SessionRegistry {
       mountMemoryStores: async () => {},
       mountSessionOutputs: async () => {},
       buildModel: (agent) => this.deps.buildModel(agent, tenantId),
-      buildTools: (agent, sb) => this.deps.buildTools(agent, sb, tenantId),
+      buildTools: (agent, sb) => this.deps.buildTools(agent, sb, tenantId, sessionId),
       buildHarness: (agent) => this.deps.buildHarness(agent),
       buildHarnessContext: (input) =>
         this.deps.buildHarnessContext({
@@ -275,6 +311,7 @@ export class SessionRegistry {
           sessionId,
           tenantId,
           eventLog,
+          usageLedger,
         }),
       beforeSandboxDestroy: async () => {
         await this.deps.sandboxOrchestrator.snapshotWorkspaceNow(sandbox, {
@@ -285,6 +322,6 @@ export class SessionRegistry {
       publish: (event: SessionEvent) => this.deps.hub.publish(sessionId, event),
     });
 
-    return { machine, sandbox, eventLog };
+    return { machine, sandbox, eventLog, usageLedger };
   }
 }

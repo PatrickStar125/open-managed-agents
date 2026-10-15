@@ -4,7 +4,9 @@ import type { ApiKeyResolution } from "@open-managed-agents/auth";
 import type { Logger } from "@open-managed-agents/observability";
 import type { NodeComponents } from "../components.js";
 import type { NodeProcessMode } from "../process-mode.js";
+import { setDbBoundaryLogger } from "@open-managed-agents/sql-client";
 import { Disposables } from "../lifecycle.js";
+import { installDbUnhandledRejectionNet } from "../lib/db-unhandled-rejection.js";
 import { buildNodeScheduler } from "../lib/node-scheduler-jobs.js";
 import { createNodeRuntime } from "./node-runtime.js";
 import { mountNodeHttp } from "./node-http.js";
@@ -64,10 +66,14 @@ async function buildNodeControlPlane(
 ): Promise<NodeControlPlane> {
   const runtime = await createNodeRuntime(components, disposables, log);
   const {
-    config, processMode, logger, backendDescription, platformRootSecret, sql,
+    config, processMode, logger, metrics, backendDescription, platformRootSecret, sql,
     agentsService, environmentsService, sessionsService, evalsService, kv,
-    memoryService, managedSessionExecutionWorker,
+    memoryService, managedSessionExecutionWorker, sharedSessionOutputs,
   } = runtime;
+  setDbBoundaryLogger((record) => {
+    const level = record.outcome === "error" ? "error" : record.retryCount > 0 ? "warn" : "info";
+    logger[level]({ ...record, op: record.op }, "db boundary");
+  });
 
   const app = await mountNodeHttp(runtime, disposables);
 
@@ -85,6 +91,8 @@ async function buildNodeControlPlane(
     },
     memory: memoryService,
     integrationsSql: platformRootSecret ? sql : null,
+    sessionOutputGarbageCollection: sharedSessionOutputs
+      ? () => sharedSessionOutputs.collectGarbage() : null,
     cron: config.cron,
   });
   disposables.add("scheduler", () => scheduler.stop());
@@ -97,6 +105,7 @@ async function buildNodeControlPlane(
   };
 
   let started = false;
+  let removeRejectionNet: (() => void) | null = null;
   return {
     app,
     processMode,
@@ -106,6 +115,11 @@ async function buildNodeControlPlane(
     async start() {
       if (started) return;
       started = true;
+      // Vitest sets NODE_ENV=test. Installing the handler there would mark
+      // every later rejection handled. Production standalone still installs it.
+      if (processMode === "standalone" && process.env.NODE_ENV !== "test") {
+        removeRejectionNet = installDbUnhandledRejectionNet({ logger, metrics });
+      }
       // Start the execution poller only after every runtime dependency above
       // (Managed Memory/Skill applications included) has initialized.
       managedSessionExecutionWorker.start();
@@ -113,6 +127,10 @@ async function buildNodeControlPlane(
       logger.info({ op: "main-node.scheduler.started" }, "scheduler started");
     },
     components,
-    stop: (signal) => shutdownNodeApp(signal),
+    stop: async (signal) => {
+      removeRejectionNet?.();
+      removeRejectionNet = null;
+      await shutdownNodeApp(signal);
+    },
   };
 }

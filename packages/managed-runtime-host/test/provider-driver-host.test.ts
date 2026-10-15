@@ -101,6 +101,12 @@ describe("provider-backed Managed Runtime Host", () => {
       providerConfig,
     });
     expect(acquire).toHaveBeenCalledOnce();
+    const invalid = createManagedRuntimeProviderHost({
+      driver: driver(create), placement: "driver_service", providerConfig,
+      ownerId: "worker_01", leaseTtlMs: 90_000, heartbeatIntervalMs: 30_000,
+      checkpointIntervalMs: 0, fences: { acquire } as never, orphans: {} as never,
+    });
+    await expect(invalid.run({ scope, profile })).rejects.toThrow(/checkpointIntervalMs/);
   });
 
   it("fails capability admission before a provider adapter can allocate resources", async () => {

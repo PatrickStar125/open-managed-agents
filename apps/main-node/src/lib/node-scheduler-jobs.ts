@@ -36,6 +36,8 @@ export interface NodeSchedulerDeps {
   /** Optional integrations DB SqlClient. Pass null to skip the
    *  webhook-events retention sweep on Node. */
   integrationsSql?: SqlClient | null;
+  /** Shared Session-output candidate sweeper, enabled only with shared blob storage. */
+  sessionOutputGarbageCollection?: (() => Promise<number>) | null;
   /** Optional Linear dispatch sweeper. Wired by the bootstrap when an
    *  in-process LinearProvider is available. Skip when null — most
    *  self-host deployments don't run the Linear gateway side yet. */
@@ -89,6 +91,18 @@ export function buildNodeScheduler(deps: NodeSchedulerDeps) {
       forEachShard: async (fn) => [await fn({ memory: deps.memory }, "default")],
     }),
   });
+
+  if (deps.sessionOutputGarbageCollection) {
+    const sweep = deps.sessionOutputGarbageCollection;
+    scheduler.register({
+      name: "session-output-candidates-retention",
+      cron: "* * * * *",
+      handler: async () => {
+        try { await sweep(); }
+        catch (err) { log.warn({ err, op: "scheduler.session_output_gc.failed" }, "Session output GC failed"); }
+      },
+    });
+  }
 
   // Webhook-events retention — only registered if an integrations DB
   // is wired (P4 territory). Otherwise the registration is skipped so
