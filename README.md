@@ -40,7 +40,7 @@ one that matches your hosting story:
 |---|---|---|
 | Where it lives | Your VPS / Mac / Docker host / fly.io / your k8s | Cloudflare Workers + DO + Containers |
 | Storage | SQLite or Postgres + local FS | D1 + KV + R2 |
-| Sandbox | Docker, or managed runtimes: E2B / Daytona / Modal / Sprites / Vercel / Blaxel / BoxLite / Superserve | Cloudflare Sandbox (Containers), or any managed runtime via the bridge driver |
+| Sandbox | Docker, or managed runtimes: E2B / Daytona / Modal / Sprites / Vercel / Blaxel / BoxLite / Superserve | Cloudflare Sandbox (Containers), or managed runtimes via the `cloudflare-bridge` driver (`ama_worker` lane) |
 | Time to running | `docker compose up` (~2 min) | wrangler deploy (~10 min once configured) |
 | Best for | OSS users, on-prem, no CF account, data-resident deploys | Edge scale, no host management, already on CF |
 
@@ -172,7 +172,7 @@ npx wrangler secret put API_KEY               # initial bootstrap key for the RE
 # npx wrangler secret put ANTHROPIC_API_KEY
 
 npm run deploy
-# → https://openma.ai (or https://managed-agents.<your-subdomain>.workers.dev for a personal deploy)
+# → https://app.openma.ai (or https://managed-agents.<your-subdomain>.workers.dev for a personal deploy)
 ```
 
 What gets deployed:
