@@ -164,11 +164,11 @@ OpenMatter publishes a kernel package and one package per provider:
 - `/store` exports the store and inbox conformance suites, and `/runtime`
   hosts `@openma/matter-loop` guests.
 - Inside a provider package, the Integration depends on the `credentials`
-  port, never on the Binding beside it, as `integration-github` and
-  `integration-slack` do today. The host passes it credentials minted by the
+  port, never on the Binding beside it, as the GitHub and Slack integrations
+  do today. The host passes it credentials minted by the
   Bond.
-- Reference adapters, the Slack, GitHub, and Linear integrations, and the
-  hosts stay private in the OpenMatter repository until they have a consumer
+- Reference adapters, the Slack, GitHub, and Linear provider packages, and
+  the hosts stay private in the OpenMatter repository until they have a consumer
   outside it.
 - `@openma/matter-loop` is the guest SDK used by Loop code inside an isolate. It has no
   dependencies, including `effect`, and its API is plain `async` functions
