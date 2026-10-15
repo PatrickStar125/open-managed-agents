@@ -8,6 +8,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import Database from "better-sqlite3";
 
 import { validateOidcSignInProviders } from "@open-managed-agents/auth-config";
 import { listAuthProviders } from "@open-managed-agents/shared";
@@ -54,11 +55,14 @@ function testConfig(): NodeConfig {
 interface MockProvider {
   issuer: string;
   tokenRequests: URLSearchParams[];
+  /** Profile fields the provider returns next to the fixed identity. */
+  profile: { name: string; picture?: string };
 }
 
 /** A minimal OpenID provider: discovery, token, and userinfo. */
 async function startMockProvider(): Promise<MockProvider> {
   const tokenRequests: URLSearchParams[] = [];
+  const profile: MockProvider["profile"] = { name: "Ada Lovelace" };
   const server = createServer((req, res) => {
     const issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const json = (status: number, body: unknown) => {
@@ -85,7 +89,16 @@ async function startMockProvider(): Promise<MockProvider> {
         const code = form.get("code");
         if (code === "id-token-code") {
           // Claims in an ID token from the back channel; no userinfo call needed.
-          const claims = { iss: issuer, sub: "corp-user-7", aud: "client-1", email: "grace@corp.example", name: "Grace Hopper" };
+          const claims = {
+            iss: issuer,
+            sub: "corp-user-7",
+            aud: "client-1",
+            iat: Math.floor(Date.now() / 1000),
+            exp: Math.floor(Date.now() / 1000) + 3600,
+            email: "grace@corp.example",
+            name: "Grace Hopper",
+            ...(profile.picture ? { picture: profile.picture } : {}),
+          };
           const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
           return json(200, {
             access_token: "at-without-userinfo",
@@ -105,7 +118,7 @@ async function startMockProvider(): Promise<MockProvider> {
         sub: "corp-user-42",
         email: "ada@corp.example",
         email_verified: true,
-        name: "Ada Lovelace",
+        ...profile,
       });
     }
     json(404, { error: "not_found" });
@@ -113,7 +126,7 @@ async function startMockProvider(): Promise<MockProvider> {
   servers.push(server);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { issuer, tokenRequests };
+  return { issuer, tokenRequests, profile };
 }
 
 function provider(issuer: string): OidcSignInProvider {
@@ -152,10 +165,89 @@ async function boot(oidc: OidcSignInProvider[], emailPassword: boolean) {
   });
   const cp = await createNodeControlPlane(await nodeDefaults(config, { database, auth }));
   created.push(cp);
-  return { cp, database, auth };
+  return { cp, database, auth, config };
+}
+
+/** Runs the authorization-code flow once and returns the session cookies. */
+async function signInOnce(cp: NodeControlPlane, code: string): Promise<string> {
+  const start = await cp.fetch(
+    new Request(`${BASE}/auth/sign-in/oauth2`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: BASE },
+      body: JSON.stringify({ providerId: "corp", callbackURL: "/" }),
+    }),
+  );
+  const cookies = cookieJar("", start);
+  const state = new URL(((await start.json()) as { url: string }).url).searchParams.get("state")!;
+  const callback = await cp.fetch(
+    new Request(`${BASE}/auth/oauth2/callback/corp?code=${code}&state=${encodeURIComponent(state)}`, {
+      headers: { cookie: cookies },
+    }),
+  );
+  expect(callback.headers.get("location")).toBe("/");
+  return cookieJar(cookies, callback);
+}
+
+/** Reads the user row from the separate SQLite auth database. */
+function storedUser(config: NodeConfig, email: string) {
+  const db = new Database(config.auth.databasePath, { readonly: true });
+  try {
+    const user = db.prepare(`SELECT id, name, image FROM "user" WHERE email = ?`).get(email) as
+      | { id: string; name: string; image: string | null }
+      | undefined;
+    const accounts = user
+      ? (db.prepare(`SELECT COUNT(*) AS n FROM account WHERE "userId" = ?`).get(user.id) as { n: number }).n
+      : 0;
+    return { user, accounts };
+  } finally {
+    db.close();
+  }
 }
 
 describe("OIDC sign-in wire point", () => {
+  it("stores the provider's picture URL and refreshes it on every sign-in", async () => {
+    const idp = await startMockProvider();
+    const { cp, config } = await boot([provider(idp.issuer)], false);
+
+    idp.profile.picture = "https://avatars.example/ada-1.png";
+    await signInOnce(cp, "good-code");
+    const first = storedUser(config, "ada@corp.example").user;
+    expect(first?.image).toBe("https://avatars.example/ada-1.png");
+
+    idp.profile.picture = "https://avatars.example/ada-2.png";
+    idp.profile.name = "Ada King";
+    await signInOnce(cp, "good-code");
+    const second = storedUser(config, "ada@corp.example");
+    expect(second.user).toEqual({ id: first!.id, name: "Ada King", image: "https://avatars.example/ada-2.png" });
+    expect(second.accounts).toBe(1);
+  });
+
+  it("refreshes the picture from ID token claims on a repeat sign-in", async () => {
+    const idp = await startMockProvider();
+    const { cp, config, auth } = await boot([provider(idp.issuer)], false);
+
+    idp.profile.picture = "https://avatars.example/grace-1.png";
+    await signInOnce(cp, "id-token-code");
+    idp.profile.picture = "https://avatars.example/grace-2.png";
+    const cookies = await signInOnce(cp, "id-token-code");
+
+    const stored = storedUser(config, "grace@corp.example");
+    expect(stored.user).toMatchObject({ name: "Grace Hopper", image: "https://avatars.example/grace-2.png" });
+    expect(stored.accounts).toBe(1);
+    expect(await auth.resolveSession(new Headers({ cookie: cookies }))).toMatchObject({ email: "grace@corp.example" });
+  });
+
+  it("keeps the stored picture when a later sign-in carries none", async () => {
+    const idp = await startMockProvider();
+    const { cp, config } = await boot([provider(idp.issuer)], false);
+
+    idp.profile.picture = "https://avatars.example/ada-1.png";
+    await signInOnce(cp, "good-code");
+    delete idp.profile.picture;
+    await signInOnce(cp, "good-code");
+    expect(storedUser(config, "ada@corp.example").user?.image).toBe("https://avatars.example/ada-1.png");
+  });
+
   it("signs a user in through a configured provider and creates their workspace", async () => {
     const idp = await startMockProvider();
     const { cp, database, auth } = await boot([provider(idp.issuer)], false);
