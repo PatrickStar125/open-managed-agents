@@ -5,6 +5,7 @@ import {
   fauxProvider,
   fauxThinking,
   fauxToolCall,
+  getCurrentTools,
 } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import type { SessionEvent } from "@open-managed-agents/shared";
@@ -519,8 +520,16 @@ describe("PiHarness", () => {
       responses: ReturnType<typeof fauxAssistantMessage>[],
       toolSearchMode: "on" | "off" | "auto",
       mcpDescription = "Create a GitHub issue",
+      nativeToolLoading = true,
     ) {
       const base = makeContext(responses);
+      if (nativeToolLoading) {
+        // Declare mid-conversation tool changes so deferred tools load directly.
+        base.ctx.pi!.model = {
+          ...base.ctx.pi!.model,
+          compat: { supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true },
+        } as typeof base.ctx.pi.model;
+      }
       base.ctx.agent = {
         id: "agent-test",
         model: base.ctx.pi!.model.id,
@@ -665,6 +674,110 @@ describe("PiHarness", () => {
 
       await new PiHarness().run(ctx);
       expect(assemblyProbe.mock.calls[0]?.[0]).toContain(MCP_TOOL);
+    });
+
+    describe("without native mid-conversation tool loading", () => {
+      it("calls deferred tools through mcp_invoke with a fixed tool list", async () => {
+        const toolLists: string[][] = [];
+        let laterToolChanges = 0;
+        const record = (context: { messages: Parameters<typeof getCurrentTools>[0] }) => {
+          toolLists.push(getCurrentTools(context.messages).map((tool) => tool.name));
+          // Tool changes after the initial system message would re-send or extend the tool list.
+          laterToolChanges += context.messages.slice(1).filter((message) =>
+            message.role === "system"
+            && ((message.toolsAdded?.length ?? 0) > 0 || (message.toolsRemoved?.length ?? 0) > 0)).length;
+        };
+        const { ctx, faux, events } = makeToolSearchContext([], "on", undefined, false);
+        const createIssue = vi.fn(async () => ({ created: true }));
+        (ctx.tools[MCP_TOOL] as { execute: unknown }).execute = createIssue;
+        faux.setResponses([
+          (context) => {
+            record(context);
+            return fauxAssistantMessage(
+              [fauxToolCall("tool_search", { query: `select:${MCP_TOOL}` }, { id: "search-1" })],
+              { stopReason: "toolUse" },
+            );
+          },
+          (context) => {
+            record(context);
+            return fauxAssistantMessage(
+              [fauxToolCall(
+                "mcp_invoke",
+                { tool_name: MCP_TOOL, arguments: { title: "bug" } },
+                { id: "invoke-1" },
+              )],
+              { stopReason: "toolUse" },
+            );
+          },
+          (context) => {
+            record(context);
+            return fauxAssistantMessage("done");
+          },
+        ]);
+
+        await new PiHarness().run(ctx);
+
+        expect(faux.state.callCount).toBe(3);
+        expect(toolLists[0]).toEqual(["read", "tool_search", "mcp_invoke"]);
+        expect(toolLists[1]).toEqual(toolLists[0]);
+        expect(toolLists[2]).toEqual(toolLists[0]);
+        expect(laterToolChanges).toBe(0);
+        expect(createIssue).toHaveBeenCalledWith({ title: "bug" }, expect.anything());
+        expect(events.some((event) =>
+          event.type === "session.warning" && event.source === TOOL_ASSEMBLY_WARNING_SOURCE)).toBe(false);
+      });
+
+      it("rejects mcp_invoke arguments that do not match the target schema", async () => {
+        const { ctx, faux, events } = makeToolSearchContext([], "on", undefined, false);
+        const createIssue = vi.fn(async () => ({ created: true }));
+        (ctx.tools[MCP_TOOL] as { execute: unknown }).execute = createIssue;
+        faux.setResponses([
+          fauxAssistantMessage(
+            [fauxToolCall(
+              "mcp_invoke",
+              { tool_name: MCP_TOOL, arguments: {} },
+              { id: "invoke-bad" },
+            )],
+            { stopReason: "toolUse" },
+          ),
+          fauxAssistantMessage("retry later"),
+        ]);
+
+        await new PiHarness().run(ctx);
+
+        expect(createIssue).not.toHaveBeenCalled();
+        const result = events.find((event) =>
+          event.type === "agent.tool_result" && event.tool_use_id === "invoke-bad");
+        expect(result).toMatchObject({ is_error: true });
+      });
+
+      it("pauses always_ask targets for confirmation under the mcp_invoke call id", async () => {
+        const { ctx, faux, events } = makeToolSearchContext([], "on", undefined, false);
+        delete (ctx.tools[MCP_TOOL] as { execute?: unknown }).execute;
+        faux.setResponses([
+          fauxAssistantMessage(
+            [fauxToolCall(
+              "mcp_invoke",
+              { tool_name: MCP_TOOL, arguments: { title: "bug" } },
+              { id: "invoke-confirm" },
+            )],
+            { stopReason: "toolUse" },
+          ),
+        ]);
+
+        await new PiHarness().run(ctx);
+
+        expect(ctx.runtime.pendingConfirmations).toEqual(["invoke-confirm"]);
+        expect(faux.state.callCount).toBe(1);
+        // Projected as the call the model made, so the confirmation flow finds and replays it.
+        expect(events).toContainEqual(expect.objectContaining({
+          type: "agent.tool_use",
+          id: "invoke-confirm",
+          name: "mcp_invoke",
+          evaluated_permission: "ask",
+        }));
+        expect(events.some((event) => event.type === "agent.mcp_tool_use")).toBe(false);
+      });
     });
   });
 

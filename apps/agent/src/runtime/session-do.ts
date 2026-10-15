@@ -95,6 +95,7 @@ import {
   type OutcomeEvaluationRecord,
 } from "./outcome-supervisor";
 import { buildTools, disposeTools } from "../harness/tools";
+import { resolveProxiedToolCall } from "../harness/tool-proxy";
 import { MemoryStoreService } from "@open-managed-agents/memory-store";
 import { buildCfServices, buildCfTenantDbProvider, getCfServicesForTenant } from "@open-managed-agents/services";
 import { toEnvironmentConfig } from "@open-managed-agents/environments-store";
@@ -4234,14 +4235,16 @@ export class SessionDO extends DurableObject<Env> {
           scheduleWakeup: (a) => this.scheduleWakeup(a),
           cancelWakeup: (id) => this.cancelWakeup(id),
           listWakeups: () => this.listWakeups(),
-        });
+        }, { enforcePermissions: false });
 
-        // Find the original tool definition (before always_ask stripping)
-        // We need to re-build without permission stripping to get the execute function
-        const originalTool = allTools[pending.toolName];
+        // The user approved this call, so build without always_ask stripping
+        // to get the executable tool. A call proxied through mcp_invoke runs
+        // its target tool with the target's arguments.
+        const target = resolveProxiedToolCall(pending.toolName, pending.args);
+        const originalTool = allTools[target.toolName];
         if (originalTool?.execute) {
           try {
-            const result = await originalTool.execute(pending.args, {
+            const result = await originalTool.execute(target.args, {
               toolCallId: pending.toolCallId,
               messages: [],
               abortSignal: undefined,
@@ -5490,12 +5493,14 @@ export class SessionDO extends DurableObject<Env> {
 
       // Check if any pending are custom tool uses (no execute function, not always_ask built-in)
       const storedPendingCalls = this.state.pending_tool_calls;
-      const hasCustomToolPending = storedPendingCalls.some(p =>
-        !["bash", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search"].includes(p.toolName) &&
-        !p.toolName.startsWith("mcp_") &&
-        !p.toolName.startsWith("call_agent_") &&
-        !p.toolName.startsWith("memory_")
-      );
+      const hasCustomToolPending = storedPendingCalls.some((p) => {
+        // A call proxied through mcp_invoke awaits confirmation of its target.
+        const toolName = resolveProxiedToolCall(p.toolName, p.args).toolName;
+        return !["bash", "read", "write", "edit", "glob", "grep", "web_fetch", "web_search"].includes(toolName) &&
+          !toolName.startsWith("mcp_") &&
+          !toolName.startsWith("call_agent_") &&
+          !toolName.startsWith("memory_");
+      });
 
       let stopReason: import("@open-managed-agents/shared").SessionStatusEvent["stop_reason"];
       if (hasCustomToolPending) {
