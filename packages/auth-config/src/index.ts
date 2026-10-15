@@ -145,6 +145,9 @@ export function buildBetterAuth(opts: BuildBetterAuthOpts) {
           scopes: p.scopes ?? ["openid", "profile", "email"],
           pkce: true,
           authentication: p.clientAuthentication ?? "post",
+          // The identity provider owns the profile: refresh name and picture
+          // URL on every sign-in, not only when the user is first created.
+          overrideUserInfo: true,
         })),
       }),
     );

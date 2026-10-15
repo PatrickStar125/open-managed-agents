@@ -7,13 +7,17 @@ export interface SocialProviderCredentials {
 
 export type SocialProviderConfig = Record<
   "google" | "github",
-  { clientId: string; clientSecret: string }
+  { clientId: string; clientSecret: string; overrideUserInfoOnSignIn: true }
 >;
 
 /**
  * Keep Better Auth configuration and the public /auth-info response on the
  * same credential-pair rule. A provider is never exposed when only half of
  * its OAuth credentials are present.
+ *
+ * The provider owns the profile, so name and picture URL (Google `picture`,
+ * GitHub `avatar_url`) are refreshed on every sign-in instead of only when the
+ * user is first created.
  */
 export function buildSocialProviders(
   credentials: SocialProviderCredentials,
@@ -24,6 +28,7 @@ export function buildSocialProviders(
     providers.google = {
       clientId: credentials.googleClientId,
       clientSecret: credentials.googleClientSecret,
+      overrideUserInfoOnSignIn: true,
     };
   }
 
@@ -31,6 +36,7 @@ export function buildSocialProviders(
     providers.github = {
       clientId: credentials.githubClientId,
       clientSecret: credentials.githubClientSecret,
+      overrideUserInfoOnSignIn: true,
     };
   }
 
