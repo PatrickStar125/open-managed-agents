@@ -108,12 +108,13 @@ user links belong to that row, as ADR 0009 already stores them, and
 
 OMA core (the control-plane library, `matter-host`, `db-schema`,
 `http-routes`, and the console) contains no Feishu, GitLab, Slack, or Linear
-code. All provider knowledge lives in OpenMatter provider packages:
+code. All provider knowledge lives in one OpenMatter package per provider,
+`@openma/matter-<provider>`, exported from its `/bond` subpath:
 
-| Package                         | Owns                                                                                   |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| `@openma/matter-bond-<provider>`   | Install and link flows, token minting and refresh, the resource catalog, a manifest    |
-| `@openma/matter-integration-<provider>` | Event ingest, event sources, Effect delivery, agent tools, built-in Loop templates |
+| Part        | Owns                                                                                |
+| ----------- | ----------------------------------------------------------------------------------- |
+| Binding     | Install and link flows, token minting and refresh, the resource catalog, a manifest |
+| Integration | Event ingest, event sources, Effect delivery, agent tools, built-in Loop templates  |
 
 The Bond binding manifest declares what the console needs to render
 generically:
@@ -151,28 +152,30 @@ Two exceptions are allowed:
 
 ### Package layout
 
-OpenMatter, published to npm as `@openma/matter-<name>`:
+OpenMatter publishes a kernel package and one package per provider:
 
-| Package                         | Status   | Depends on                                         |
-| ------------------------------- | -------- | -------------------------------------------------- |
-| `bond`                          | exists   | `credentials`                                      |
-| `bond-gitlab`                   | exists   | `bond`                                             |
-| `bond-feishu`                   | new      | `bond`                                             |
-| `integration-gitlab`            | new      | `core`, `credentials`, `integration`, `http`, `loop` |
-| `integration-feishu`            | new      | `core`, `credentials`, `integration`, `http`, `loop` |
-| `loop`                          | new      | nothing                                            |
-| `runtime`                       | exists   | adds `loop`                                        |
-| `store`                         | exists   | exports conformance suites                         |
+| Package                 | Status                | Contents                                                                                              |
+| ----------------------- | --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `@openma/matter`        | exists                | The kernel, one subpath per port: `.` (core), `/credentials`, `/bond`, `/store`, `/inbox`, `/integration`, `/agent`, `/runtime`, `/http` |
+| `@openma/matter-loop`   | new                   | The guest SDK. No dependencies                                                                        |
+| `@openma/matter-gitlab` | exists, Binding only  | `/bond`: the GitLab Binding and Integration                                                           |
+| `@openma/matter-feishu` | new                   | `/bond`: the Feishu Binding and Integration                                                           |
 
-- Integrations depend on the `credentials` port, never on a `bond-*`
-  package, as `integration-github` and `integration-slack` do today. The
-  host passes them credentials minted by the Bond.
-- `loop` is the guest SDK used by Loop code inside an isolate. It has no
+- `/store` exports the store and inbox conformance suites, and `/runtime`
+  hosts `@openma/matter-loop` guests.
+- Inside a provider package, the Integration depends on the `credentials`
+  port, never on the Binding beside it, as `integration-github` and
+  `integration-slack` do today. The host passes it credentials minted by the
+  Bond.
+- Reference adapters, the Slack, GitHub, and Linear integrations, and the
+  hosts stay private in the OpenMatter repository until they have a consumer
+  outside it.
+- `@openma/matter-loop` is the guest SDK used by Loop code inside an isolate. It has no
   dependencies, including `effect`, and its API is plain `async` functions
   that call the host over RPC. It also holds the host and guest protocol
-  types. `runtime` adapts that protocol to its Effect-based `WorkContext`.
-  Built-in templates in the integration packages import only `loop`, so they
-  run the same way as user code.
+  types. `/runtime` adapts that protocol to its Effect-based `WorkContext`.
+  Built-in templates in the provider packages import only
+  `@openma/matter-loop`, so they run the same way as user code.
 
 OMA:
 
@@ -190,7 +193,7 @@ compose the same code. The `loop-runner-` family follows the provider package
 rules in `scripts/provider-package-boundaries.mjs`.
 
 The existing `packages/feishu` (API client, webhook signature checks, scopes)
-moves into `bond-feishu` and `integration-feishu` and is deleted with the
+moves into `@openma/matter-feishu` and is deleted with the
 legacy routes. The `glab` capability spec in `packages/cap` stays until the
 GitLab Bond replaces its device flow.
 
@@ -289,7 +292,7 @@ OMA implements the OpenMatter host ports with its own services:
 | `OpenMatterStore`    | `matter_*` tables through the OMA `SqlClient`, for SQLite, D1, PostgreSQL, and MySQL |
 | `DurableInbox`       | The same tables and client                                                          |
 | `AgentDriver`        | OMA managed Sessions: create, resume, turn, permission response, cancel, close     |
-| `CredentialResolver` | The Bond service from `@openma/matter-bond`, backed by the `bond_*` tables            |
+| `CredentialResolver` | The Bond service from `@openma/matter/bond`, backed by the `bond_*` tables            |
 | `WorkIntegration`    | The integrations in the distribution's provider list                               |
 
 Details:
@@ -297,8 +300,8 @@ Details:
 - **Store.** OMA does not reuse `store-sqlite` or `store-mysql`. Those bring
   their own drivers and migrations. OMA keeps one schema and one migration
   path per dialect in `packages/db-schema`. The OMA store must pass an
-  OpenMatter store conformance suite, exported from `@openma/matter-store` the
-  same way `bondStoreConformanceCases` is exported from `@openma/matter-bond`.
+  OpenMatter store conformance suite, exported from `@openma/matter/store` the
+  same way `bondStoreConformanceCases` is exported from `@openma/matter/bond`.
   That suite does not exist yet and is part of the delivery plan.
 - **Agent driver.** The driver calls the managed-agents application services
   directly, not the HTTP API. A turn is a `user.message` event; the driver
@@ -314,7 +317,7 @@ Details:
 - **Leases.** The OpenMatter runtime takes event and Session leases through
   the store. On Node they are rows with an expiry, so any replica may process
   any event. On Cloudflare the host uses a Durable Object per project, as
-  `@openma/matter-host-cloudflare` does.
+  OpenMatter's Cloudflare host does.
 
 ### Loop definitions and instances
 
@@ -345,7 +348,7 @@ version, after its configuration validates against that version's schema.
 
 The code contract is the OpenMatter `defineLoop(definition, install)` API. A
 Loop module is an ES module whose default export is a Loop. `defineLoop` lives
-in `@openma/matter-runtime` today; a small guest package, `@openma/matter-loop`,
+in `@openma/matter/runtime` today; a small guest package, `@openma/matter-loop`,
 will export it without the host runtime:
 
 ```ts
@@ -407,9 +410,9 @@ Configuration must not hold secrets. Credentials come only from Bonds.
 
 The two ways to build a Loop share one runtime:
 
-- **From a template.** Each integration package ships built-in Loop
-  definitions; the first are `feishu-chat` in `integration-feishu`, and
-  `gitlab-mr-review` and `gitlab-mention` in `integration-gitlab`. OMA lists
+- **From a template.** Each provider package ships built-in Loop
+  definitions; the first are `feishu-chat` in `@openma/matter-feishu`, and
+  `gitlab-mr-review` and `gitlab-mention` in `@openma/matter-gitlab`. OMA lists
   the templates of the registered providers. The console renders
   a form from `configSchema`. Saving the form creates a Loop instance. No code
   is involved.
@@ -481,13 +484,13 @@ match its schema, is rejected.
 | ----------------------------------------- | ------------------------------------------------------------------------------ |
 | App credentials on `feishu_publications`  | A Feishu Bond installation; the tenant access token is the app principal      |
 | A publication                             | An instance of the built-in `feishu-chat` Loop                                 |
-| Publish wizard                            | The generic Bond install form from the `bond-feishu` manifest, then the `feishu-chat` instance form: chat filter, Session granularity, persona |
+| Publish wizard                            | The generic Bond install form from the Feishu Binding manifest, then the `feishu-chat` instance form: chat filter, Session granularity, persona |
 | `feishu_thread_sessions`                  | WorkThread to Session binding in the OpenMatter store                          |
 | `feishu_webhook_events` deduplication     | WorkEvent claim in the OpenMatter store                                        |
 | Long-connection runner, single replica    | A host event source holding a lease per installation; any replica may hold it  |
 | One-shot reply through the stream hub     | A reply Effect with a recorded delivery receipt                                |
 | Owner-only Sessions                       | `runAs: requester` through a Feishu user link                                  |
-| `mcp__feishu__*` tools in `main-node`     | Agent tools exported by `integration-feishu`, offered to agents whose grant covers the operation |
+| `mcp__feishu__*` tools in `main-node`     | Agent tools exported by `@openma/matter-feishu`, offered to agents whose grant covers the operation |
 
 New pieces:
 
@@ -523,12 +526,12 @@ Cutover:
 
 The GitLab Bond follows ADR 0010. This ADR adds:
 
-- **`@openma/matter-integration-gitlab`.** It ingests project and group webhooks
+- **GitLab Integration, in `@openma/matter-gitlab/bond`.** It ingests project and group webhooks
   (merge request, note, pipeline). The webhook secret token is compared in
   constant time. Hooks are registered by an administrator, or through the app
   principal when one is configured. Replies are Effects: merge request notes
   and discussion replies.
-- **Templates**, shipped in `integration-gitlab`. `gitlab-mr-review` reviews a merge request when it opens or
+- **Templates**, shipped in `@openma/matter-gitlab`. `gitlab-mr-review` reviews a merge request when it opens or
   changes. `gitlab-mention` answers a note that mentions the agent.
 - **Principal.** GitLab webhooks are unattended, even when the actor has a
   linked account (LOOPS.md). Both templates therefore need the app principal
@@ -541,10 +544,12 @@ The GitLab Bond follows ADR 0010. This ADR adds:
 OMA installs OpenMatter packages from npm at exact versions. It does not
 reference git commits, because some build environments cannot reach GitHub
 archive downloads. OpenMatter adds a release workflow with npm trusted
-publishing. The packages are published under the existing `@openma` scope
-as `@openma/matter-<name>`: the `openmatter` organization on npm belongs to
-someone else. The `matter-` prefix keeps them apart from the other `@openma`
-packages.
+publishing. The packages are published under the existing `@openma` scope:
+the `openmatter` organization on npm belongs to someone else. The kernel is
+`@openma/matter`; the guest SDK and each provider are `@openma/matter-<name>`.
+The `matter` prefix keeps them apart from the other `@openma` packages.
+OMA starts with three: `@openma/matter`, `@openma/matter-loop`, and
+`@openma/matter-gitlab`, then `@openma/matter-feishu`.
 
 ## Compatibility
 
@@ -617,16 +622,17 @@ Each step is one small PR with the evidence report required by
 
 OpenMatter:
 
-1. `docs(bonds): distribute packages through npm`, and a release workflow.
+1. `refactor!: fold the kernel into @openma/matter`, and a release workflow
+   that publishes to npm.
 2. `feat(bond): add the binding manifest and resource catalog`, implemented
-   by `bond-gitlab`.
+   by the GitLab Binding.
 3. `feat(store): export store and inbox conformance suites`.
 4. `feat(runtime): add configSchema, requiredBonds, and runAs to Loop definitions`.
 5. `feat(runtime): split host and guest so a Loop runs behind a capability stub`,
    adding the `@openma/matter-loop` guest package.
-6. `feat(integration-gitlab): add webhook ingest, note delivery, and the GitLab templates`.
-7. `feat(bond-feishu): add Feishu app installation, OAuth user link, and resource catalog`.
-8. `feat(integration-feishu): add message ingest, the long-connection source,
+6. `feat(gitlab): add webhook ingest, note delivery, and the GitLab templates`.
+7. `feat(feishu): add Feishu app installation, OAuth user link, and resource catalog`.
+8. `feat(feishu): add message ingest, the long-connection source,
    reply delivery, agent tools, and the feishu-chat template`.
 
 OMA:

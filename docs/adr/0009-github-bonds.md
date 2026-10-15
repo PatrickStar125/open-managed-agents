@@ -336,8 +336,9 @@ deployment:
 
 - Users link once. Picking a repository replaces pasting a token, and access
   can never exceed what the user already has.
-- OMA depends on `@openma/matter-bond` and `@openma/matter-bond-github`.
-  These packages pull in Effect and Octokit, but not the OpenMatter runtime.
+- OMA depends on `@openma/matter` (for `/bond`) and `@openma/matter-github`.
+  They pull in Effect and Octokit, but not the OpenMatter runtime: importing
+  `/bond` loads no runtime code.
   They are installed from npm at one shared version, like `@openma/common`
   (see ADR 0011). A version bump is a reviewed lockfile change.
 - The control plane must be reachable from sandboxes for the credential helper,
