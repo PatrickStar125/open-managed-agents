@@ -428,7 +428,15 @@ export async function buildTools(
       prompt: string;
       kind: "one_shot" | "cron";
     }>;
-  }
+  },
+  options?: {
+    /**
+     * Strip `execute` from `always_ask` tools so the harness pauses them for confirmation
+     * (default true). The confirmation handler passes false: the user has already approved the
+     * call and needs the executable tool.
+     */
+    enforcePermissions?: boolean;
+  },
 ): Promise<Record<string, any>> {
   const enabled = getEnabledTools(agentConfig.tools);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1291,6 +1299,7 @@ export async function buildTools(
 
   // Strip execute from always_ask tools so AI SDK returns them as pending calls
   // requiring user confirmation before execution
+  if (options?.enforcePermissions === false) return tools;
   for (const [name, t] of Object.entries(tools)) {
     if (getToolPermission(agentConfig, name) === "always_ask") {
       tools[name] = tool({
