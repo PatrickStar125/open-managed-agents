@@ -6,26 +6,18 @@ import { SqlEventLog } from "@open-managed-agents/event-log/sql";
 import { generateEventId } from "@open-managed-agents/shared";
 import type { SessionEvent } from "@open-managed-agents/shared";
 
-import type { RealtimeFanoutConfig } from "./realtime-fanout.js";
-import type { NodeDatabase } from "./database.js";
-import { InProcessEventStreamHub, type EventStreamHub } from "./lib/event-stream-hub.js";
-import { PgEventStreamHub } from "./lib/pg-event-stream-hub.js";
-import { SqlPollingEventStreamHub } from "./lib/sql-polling-event-stream-hub.js";
+import {
+  InProcessEventStreamHub,
+  SqlPollingEventStreamHub,
+  type EventStreamHub,
+  type NodeDatabase,
+  type NodeRealtime,
+  type RealtimeFanoutConfig,
+} from "@open-managed-agents/control-plane-node";
 
-export interface NodeRealtime {
-  /** Fanout for legacy /v1/oma event streams. */
-  hub: EventStreamHub;
-  /**
-   * How official /v1 Session streams see events produced on other replicas:
-   * null means this is the only replica and the in-memory runtime stream is
-   * complete; otherwise each replica also tails the canonical SQL projection
-   * at this interval.
-   */
-  replicaSync: { pollIntervalMs: number } | null;
-  /** Shown in /health as backends.hub. */
-  description: string;
-  stop?(): Promise<void> | void;
-}
+import { PgEventStreamHub } from "./lib/pg-event-stream-hub.js";
+
+export type { NodeRealtime };
 
 export async function createNodeRealtime(
   config: RealtimeFanoutConfig,

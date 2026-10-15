@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { SandboxExecutor } from "@open-managed-agents/sandbox";
 import type { Session } from "@open-managed-agents/managed-agents-application";
 
-import { NodeManagedSessionInputPreparer } from "../src/lib/node-managed-session-inputs.js";
-import * as nodeManagedInputs from "../src/lib/node-managed-session-inputs.js";
+import { NodeManagedSessionInputPreparer } from "../../../packages/control-plane-node/src/lib/node-managed-session-inputs.js";
+import * as nodeManagedInputs from "../../../packages/control-plane-node/src/lib/node-managed-session-inputs.js";
 
 const bytes = (value: string) => new TextEncoder().encode(value);
 

@@ -23,7 +23,7 @@ import {
   normalizeSourceUrl,
   parseAllowHosts,
   SourceBlockedError,
-} from "../src/lib/skill-sources";
+} from "../../../packages/control-plane-node/src/lib/skill-sources";
 
 const created: NodeControlPlane[] = [];
 const servers: Server[] = [];
