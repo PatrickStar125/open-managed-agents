@@ -112,8 +112,8 @@ code. All provider knowledge lives in OpenMatter provider packages:
 
 | Package                         | Owns                                                                                   |
 | ------------------------------- | -------------------------------------------------------------------------------------- |
-| `@openmatter/bond-<provider>`   | Install and link flows, token minting and refresh, the resource catalog, a manifest    |
-| `@openmatter/integration-<provider>` | Event ingest, event sources, Effect delivery, agent tools, built-in Loop templates |
+| `@openma/matter-bond-<provider>`   | Install and link flows, token minting and refresh, the resource catalog, a manifest    |
+| `@openma/matter-integration-<provider>` | Event ingest, event sources, Effect delivery, agent tools, built-in Loop templates |
 
 The Bond binding manifest declares what the console needs to render
 generically:
@@ -151,7 +151,7 @@ Two exceptions are allowed:
 
 ### Package layout
 
-OpenMatter, published to npm:
+OpenMatter, published to npm as `@openma/matter-<name>`:
 
 | Package                         | Status   | Depends on                                         |
 | ------------------------------- | -------- | -------------------------------------------------- |
@@ -289,7 +289,7 @@ OMA implements the OpenMatter host ports with its own services:
 | `OpenMatterStore`    | `matter_*` tables through the OMA `SqlClient`, for SQLite, D1, PostgreSQL, and MySQL |
 | `DurableInbox`       | The same tables and client                                                          |
 | `AgentDriver`        | OMA managed Sessions: create, resume, turn, permission response, cancel, close     |
-| `CredentialResolver` | The Bond service from `@openmatter/bond`, backed by the `bond_*` tables            |
+| `CredentialResolver` | The Bond service from `@openma/matter-bond`, backed by the `bond_*` tables            |
 | `WorkIntegration`    | The integrations in the distribution's provider list                               |
 
 Details:
@@ -297,8 +297,8 @@ Details:
 - **Store.** OMA does not reuse `store-sqlite` or `store-mysql`. Those bring
   their own drivers and migrations. OMA keeps one schema and one migration
   path per dialect in `packages/db-schema`. The OMA store must pass an
-  OpenMatter store conformance suite, exported from `@openmatter/store` the
-  same way `bondStoreConformanceCases` is exported from `@openmatter/bond`.
+  OpenMatter store conformance suite, exported from `@openma/matter-store` the
+  same way `bondStoreConformanceCases` is exported from `@openma/matter-bond`.
   That suite does not exist yet and is part of the delivery plan.
 - **Agent driver.** The driver calls the managed-agents application services
   directly, not the HTTP API. A turn is a `user.message` event; the driver
@@ -314,7 +314,7 @@ Details:
 - **Leases.** The OpenMatter runtime takes event and Session leases through
   the store. On Node they are rows with an expiry, so any replica may process
   any event. On Cloudflare the host uses a Durable Object per project, as
-  `@openmatter/host-cloudflare` does.
+  `@openma/matter-host-cloudflare` does.
 
 ### Loop definitions and instances
 
@@ -345,11 +345,11 @@ version, after its configuration validates against that version's schema.
 
 The code contract is the OpenMatter `defineLoop(definition, install)` API. A
 Loop module is an ES module whose default export is a Loop. `defineLoop` lives
-in `@openmatter/runtime` today; a small guest package, `@openmatter/loop`,
+in `@openma/matter-runtime` today; a small guest package, `@openma/matter-loop`,
 will export it without the host runtime:
 
 ```ts
-import { defineLoop } from "@openmatter/loop";
+import { defineLoop } from "@openma/matter-loop";
 
 export default defineLoop(
   {
@@ -523,7 +523,7 @@ Cutover:
 
 The GitLab Bond follows ADR 0010. This ADR adds:
 
-- **`@openmatter/integration-gitlab`.** It ingests project and group webhooks
+- **`@openma/matter-integration-gitlab`.** It ingests project and group webhooks
   (merge request, note, pipeline). The webhook secret token is compared in
   constant time. Hooks are registered by an administrator, or through the app
   principal when one is configured. Replies are Effects: merge request notes
@@ -541,8 +541,10 @@ The GitLab Bond follows ADR 0010. This ADR adds:
 OMA installs OpenMatter packages from npm at exact versions. It does not
 reference git commits, because some build environments cannot reach GitHub
 archive downloads. OpenMatter adds a release workflow with npm trusted
-publishing. The npm scope needs an `openmatter` organization on npm; the
-fallback is publishing under the existing `@openma` scope.
+publishing. The packages are published under the existing `@openma` scope
+as `@openma/matter-<name>`: the `openmatter` organization on npm belongs to
+someone else. The `matter-` prefix keeps them apart from the other `@openma`
+packages.
 
 ## Compatibility
 
@@ -621,7 +623,7 @@ OpenMatter:
 3. `feat(store): export store and inbox conformance suites`.
 4. `feat(runtime): add configSchema, requiredBonds, and runAs to Loop definitions`.
 5. `feat(runtime): split host and guest so a Loop runs behind a capability stub`,
-   adding the `@openmatter/loop` guest package.
+   adding the `@openma/matter-loop` guest package.
 6. `feat(integration-gitlab): add webhook ingest, note delivery, and the GitLab templates`.
 7. `feat(bond-feishu): add Feishu app installation, OAuth user link, and resource catalog`.
 8. `feat(integration-feishu): add message ingest, the long-connection source,
@@ -647,7 +649,6 @@ OMA:
 
 ## Open questions
 
-- npm scope for OpenMatter: a new `openmatter` organization, or `@openma`.
 - Whether a GitLab note from a linked user that mentions the agent should
   count as attended. LOOPS.md says no today.
 - The JSON Schema subset and widget list for `configSchema`.

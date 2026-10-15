@@ -467,7 +467,7 @@ Negative:
   defaults, and OMA does not rotate them yet. An administrator replaces
   them by hand.
 - Private instances constrain where OMA can be deployed.
-- OMA depends on `@openmatter/bond` and `@openmatter/bond-gitlab`, installed
+- OMA depends on `@openma/matter-bond` and `@openma/matter-bond-gitlab`, installed
   from npm at the same version as the GitHub packages in ADR 0009.
 - Personal access tokens are long-lived and are not rotated by OMA. A stolen
   one stays valid until it expires or is revoked. The lifetime cap and
@@ -617,8 +617,8 @@ The test merge request, branch, label, and tokens were removed afterwards.
 
 ### OpenMatter Bond run
 
-A fourth run on 2026-10-12 drove `@openmatter/bond` with
-`@openmatter/bond-gitlab` through the loopback example in OpenMatter
+A fourth run on 2026-10-12 drove `@openma/matter-bond` with
+`@openma/matter-bond-gitlab` through the loopback example in OpenMatter
 (`examples/gitlab-bond-local`). All 11 checks passed:
 
 - instance discovery succeeded and reported no device flow;
