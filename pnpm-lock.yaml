@@ -849,6 +849,18 @@ importers:
       '@open-managed-agents/model-cards-store':
         specifier: workspace:*
         version: link:../../packages/model-cards-store
+      '@open-managed-agents/node-database':
+        specifier: workspace:*
+        version: link:../../packages/node-database
+      '@open-managed-agents/node-database-mysql':
+        specifier: workspace:*
+        version: link:../../packages/node-database-mysql
+      '@open-managed-agents/node-database-postgres':
+        specifier: workspace:*
+        version: link:../../packages/node-database-postgres
+      '@open-managed-agents/node-database-sqlite':
+        specifier: workspace:*
+        version: link:../../packages/node-database-sqlite
       '@open-managed-agents/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -2999,6 +3011,99 @@ importers:
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@5.20260929.1)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@9.6.0)(@types/pg@8.20.0)(better-sqlite3@13.0.3)(kysely@0.28.16)(mysql2@3.24.4(@types/node@26.6.3))(pg@8.20.0)(postgres@3.4.9)
+
+  packages/node-database:
+    dependencies:
+      '@open-managed-agents/db-schema':
+        specifier: workspace:*
+        version: link:../db-schema
+      '@open-managed-agents/sql-client':
+        specifier: workspace:*
+        version: link:../sql-client
+
+  packages/node-database-mysql:
+    dependencies:
+      '@open-managed-agents/db-schema':
+        specifier: workspace:*
+        version: link:../db-schema
+      '@open-managed-agents/node-database':
+        specifier: workspace:*
+        version: link:../node-database
+      '@open-managed-agents/sql-client':
+        specifier: workspace:*
+        version: link:../sql-client
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260929.1)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@9.6.0)(@types/pg@8.20.0)(better-sqlite3@13.0.3)(kysely@0.28.16)(mysql2@3.24.4(@types/node@26.6.3))(pg@8.20.0)(postgres@3.4.9)
+      mysql2:
+        specifier: ^3.24.4
+        version: 3.24.4(@types/node@26.6.3)
+      vitest:
+        specifier: ^4.1.3
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@26.6.3)(@vitest/coverage-v8@4.1.4)(jiti@2.6.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.14.6(@types/node@26.6.3)(typescript@7.0.2))(tsx@4.21.0)(yaml@2.9.1)
+
+  packages/node-database-postgres:
+    dependencies:
+      '@open-managed-agents/db-schema':
+        specifier: workspace:*
+        version: link:../db-schema
+      '@open-managed-agents/node-database':
+        specifier: workspace:*
+        version: link:../node-database
+      '@open-managed-agents/sql-client':
+        specifier: workspace:*
+        version: link:../sql-client
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      '@types/pg':
+        specifier: ^8.20.0
+        version: 8.20.0
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260929.1)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@9.6.0)(@types/pg@8.20.0)(better-sqlite3@13.0.3)(kysely@0.28.16)(mysql2@3.24.4(@types/node@26.6.3))(pg@8.20.0)(postgres@3.4.9)
+      pg:
+        specifier: ^8.20.0
+        version: 8.20.0
+      postgres:
+        specifier: ^3.4.0
+        version: 3.4.9
+      vitest:
+        specifier: ^4.1.3
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@26.6.3)(@vitest/coverage-v8@4.1.4)(jiti@2.6.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.14.6(@types/node@26.6.3)(typescript@7.0.2))(tsx@4.21.0)(yaml@2.9.1)
+
+  packages/node-database-sqlite:
+    dependencies:
+      '@open-managed-agents/db-schema':
+        specifier: workspace:*
+        version: link:../db-schema
+      '@open-managed-agents/node-database':
+        specifier: workspace:*
+        version: link:../node-database
+      '@open-managed-agents/sql-client':
+        specifier: workspace:*
+        version: link:../sql-client
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      better-sqlite3:
+        specifier: ^13.0.3
+        version: 13.0.3
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260929.1)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@9.6.0)(@types/pg@8.20.0)(better-sqlite3@13.0.3)(kysely@0.28.16)(mysql2@3.24.4(@types/node@26.6.3))(pg@8.20.0)(postgres@3.4.9)
+      vitest:
+        specifier: ^4.1.3
+        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@26.6.3)(@vitest/coverage-v8@4.1.4)(jiti@2.6.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.14.6(@types/node@26.6.3)(typescript@7.0.2))(tsx@4.21.0)(yaml@2.9.1)
 
   packages/observability:
     dependencies:

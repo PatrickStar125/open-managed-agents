@@ -223,6 +223,15 @@ const cp = await createNodeControlPlane(await nodeDefaults(config, {
 }));
 ```
 
+The database splits the same way as the sandbox providers. The contract
+`@open-managed-agents/node-database` defines `NodeDatabase`: the SqlClient,
+the Drizzle handle, `applyMigrations` and `openAuthDatabase` for Better Auth.
+`node-database-sqlite`, `node-database-postgres` and `node-database-mysql`
+implement it. Each declares its driver and Drizzle as optional peers, and the
+architecture check holds them to that. `openNodeDatabase(config)` loads only
+the adapter the config names; a composition root may also call an adapter
+such as `openMysqlDatabase({ url })` directly.
+
 `apps/main-node/src/control-plane.ts` is the side-effect-free public export
 for `createNodeControlPlane(components)` and its handle types. Its assembly
 lives in `src/modules/`: `node-assembly.ts` owns the lifecycle and scheduler;
