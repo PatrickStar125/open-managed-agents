@@ -16,7 +16,7 @@ import {
   NodeSessionExecutionWorker,
   type NodeSessionExecutionRuntime,
   type RunNodeSessionExecution,
-} from "../src/lib/node-session-execution-worker";
+} from "../../../packages/control-plane-node/src/lib/node-session-execution-worker";
 
 const session: Session = {
   id: "session_01",

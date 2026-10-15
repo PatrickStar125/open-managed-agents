@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { ApiKeyResolution } from "@open-managed-agents/auth";
 import type { Logger } from "@open-managed-agents/observability";
 import type { NodeComponents } from "../components.js";
-import type { NodeProcessMode } from "../process-mode.js";
+import type { NodeProcessMode } from "../config.js";
 import { setDbBoundaryLogger } from "@open-managed-agents/sql-client";
 import { Disposables } from "../lifecycle.js";
 import { installDbUnhandledRejectionNet } from "../lib/db-unhandled-rejection.js";

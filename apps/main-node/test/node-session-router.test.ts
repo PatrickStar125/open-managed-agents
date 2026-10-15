@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NodeSessionRouter } from "../src/lib/node-session-router";
+import { NodeSessionRouter } from "../../../packages/control-plane-node/src/lib/node-session-router";
 
 describe("NodeSessionRouter", () => {
   it("publishes session.error when session initialization fails", async () => {

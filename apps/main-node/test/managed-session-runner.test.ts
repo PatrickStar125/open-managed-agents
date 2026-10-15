@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { withReportedArtifactPublication } from "../src/openai-artifact-publication";
+import { withReportedArtifactPublication } from "../../../packages/control-plane-node/src/openai-artifact-publication";
 import type { SandboxExecutor } from "@open-managed-agents/sandbox";
 import type { SessionEvent } from "@open-managed-agents/shared";
 import type {
@@ -11,7 +11,7 @@ import type {
 import type {
   NodeManagedSessionRunner,
   NodeManagedSessionRunnerAcceptInput,
-} from "../src/lib/node-managed-session-runtime.js";
+} from "../../../packages/control-plane-node/src/lib/node-managed-session-runtime.js";
 
 const session: Session = {
   id: "session_01",
@@ -161,7 +161,7 @@ interface RunnerConstructor {
 
 describe("DefaultNodeManagedSessionRunner", () => {
   it("prepares Session inputs after sandbox creation and before it becomes executable", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -215,7 +215,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("destroys a new sandbox when Session input preparation fails", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -244,7 +244,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("replaces a prepared sandbox when the Session resource snapshot changes", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -303,7 +303,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("runs a user message between official lifecycle events", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath).catch(
       () => ({}),
     ) as { DefaultNodeManagedSessionRunner?: RunnerConstructor };
@@ -448,7 +448,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   async function failingHarnessTurn(run: (context: { runtime: { broadcast(event: unknown): void } }) => Promise<void>) {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -523,7 +523,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("reports a failed fenced final collection as exhausted and goes idle", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -610,7 +610,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
       toolUseId: "event_custom_tool_01",
     },
   ])("resumes one turn for $type", async (result) => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -706,7 +706,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
       expectedExecutions: 0,
     },
   ])("handles a $result tool confirmation before resuming", async (verdict) => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -811,7 +811,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("runs and evaluates a defined outcome through official spans", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -938,7 +938,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("revises an outcome until max_iterations_reached", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -1037,7 +1037,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("interrupts the active turn without starting another harness run", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -1134,7 +1134,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("does not report a failed turn when the execution lease was lost (another owner takes over)", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -1176,7 +1176,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("owns and destroys sandboxes by workspace and session scope", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -1226,7 +1226,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("aborts sandbox acquisition when startup is cancelled and destroys a late sandbox", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };
@@ -1269,7 +1269,7 @@ describe("DefaultNodeManagedSessionRunner", () => {
   });
 
   it("cancels an in-flight sandbox acquisition through runner.cancel", async () => {
-    const modulePath = "../src/lib/node-managed-session-runner.ts";
+    const modulePath = new URL("../../../packages/control-plane-node/src/lib/node-managed-session-runner.ts", import.meta.url).href;
     const runnerModule = await import(/* @vite-ignore */ modulePath) as {
       DefaultNodeManagedSessionRunner: RunnerConstructor;
     };

@@ -14,10 +14,10 @@ import type { UserMessageEvent } from "@open-managed-agents/shared";
 import { createScriptedMcpServer } from "../../../test/fakes/scripted-mcp-server";
 import { loadNodeConfig } from "../src/config";
 import { nodeDefaults } from "../src/components";
-import { Disposables } from "../src/lifecycle";
-import { NodeInstallBridge } from "../src/lib/node-install-bridge.js";
-import { mountNodeHttp } from "../src/modules/node-http";
-import { createNodeRuntime } from "../src/modules/node-runtime";
+import { Disposables } from "../../../packages/control-plane-node/src/lifecycle";
+import { NodeInstallBridge } from "../../../packages/control-plane-node/src/lib/node-install-bridge.js";
+import { mountNodeHttp } from "../../../packages/control-plane-node/src/modules/node-http";
+import { createNodeRuntime } from "../../../packages/control-plane-node/src/modules/node-runtime";
 
 const TENANT = "tn_live_resume";
 const USER = "usr_live_resume";

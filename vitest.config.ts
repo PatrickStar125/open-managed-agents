@@ -453,6 +453,7 @@ export default defineConfig({
       "apps/agent/build-*/**",
       "apps/console/**",
       "apps/main-node/**",
+      "packages/control-plane-node/**",
       "apps/main-fly/**",
       "apps/main-vercel/**",
       "packages/auth/**",

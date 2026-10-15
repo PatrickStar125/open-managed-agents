@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { loadNodeConfig } from "../src/config";
 import { createNodeControlPlane, type NodeControlPlane } from "../src/control-plane";
 import { nodeDefaults } from "../src/components";
-import { brandIndexHtml, loadConsoleBranding } from "../src/lib/console-branding";
+import { brandIndexHtml, loadConsoleBranding } from "../../../packages/control-plane-node/src/lib/console-branding";
 
 const created: NodeControlPlane[] = [];
 const dirs: string[] = [];

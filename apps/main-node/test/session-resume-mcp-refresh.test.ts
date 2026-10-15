@@ -12,7 +12,7 @@ import { createSqliteCredentialService } from "@open-managed-agents/credentials-
 import { createSqliteSessionService } from "@open-managed-agents/sessions-store";
 import { createSqliteVaultService } from "@open-managed-agents/vaults-store";
 import { SessionResumeNotIdleError } from "@open-managed-agents/integrations-core";
-import { NodeInstallBridge } from "../src/lib/node-install-bridge.js";
+import { NodeInstallBridge } from "../../../packages/control-plane-node/src/lib/node-install-bridge.js";
 import { bootstrapTestDb } from "./_helpers/bootstrap-test-db";
 
 const SECRET = "test-platform-root-secret-padded-to-thirtytwo";

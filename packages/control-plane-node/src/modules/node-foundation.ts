@@ -208,16 +208,15 @@ export async function createNodeFoundation(
   if (ownsLongLivedProcesses && s3MemoryConfig) {
     // memory_blob_poller_lease lives in the consolidated baseline already; no
     // separate schema bootstrap needed here.
+    const startPoller = components.blobs.memory.startPoller;
+    if (!startPoller) {
+      throw new Error(
+        "blobs.memory.s3 is set but blobs.memory.startPoller is not: a remote memory store needs a change poller "
+          + "so replicas see each other's writes (the default S3 memory blobs supply one).",
+      );
+    }
     const replicaId = `replica_${process.pid}_${Math.floor(Math.random() * 1e9).toString(36)}`;
-    const { startS3MemoryPoller } = await import("../lib/s3-memory-poller.js");
-    s3Poller = await startS3MemoryPoller({
-      sql,
-      sqlDialect: dialect,
-      memoryRepo,
-      replicaId,
-      intervalMs: s3MemoryConfig.pollIntervalMs,
-      s3: s3MemoryConfig,
-    });
+    s3Poller = await startPoller({ sql, sqlDialect: dialect, memoryRepo, replicaId });
     disposables.add("s3_poller", () => s3Poller?.stop());
   }
 
