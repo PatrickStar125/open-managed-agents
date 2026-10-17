@@ -66,6 +66,10 @@ class PlacementAcpRuntime implements AcpRuntime {
   }
 
   async start(options: SessionOptions): Promise<AcpSession> {
+    // Placement owns the turn deadline. The common engine also implements
+    // perTurnTimeoutMs, but it ends the stream on its own timer without proving
+    // the child stopped, which would bypass the SIGKILL escalation below.
+    const { perTurnTimeoutMs, ...engineOptions } = options;
     let child: ChildHandle | undefined;
     const runtime = new AcpRuntimeImpl({
       spawn: async (spec) => {
@@ -76,12 +80,12 @@ class PlacementAcpRuntime implements AcpRuntime {
         return child;
       },
     });
-    const session = await runtime.start(options);
+    const session = await runtime.start(engineOptions);
     if (!child) {
       await session.dispose().catch(() => undefined);
       throw new Error("ACP runtime initialized without a child process");
     }
-    return withChildLiveness(session, child, this.cancelGraceMs);
+    return withChildLiveness(session, child, this.cancelGraceMs, perTurnTimeoutMs);
   }
 }
 
@@ -89,6 +93,7 @@ function withChildLiveness(
   session: AcpSession,
   child: ChildHandle,
   cancelGraceMs: number,
+  perTurnTimeoutMs: number | undefined,
 ): AcpSession {
   const liveness = { alive: true };
   let disposal: Promise<void> | null = null;
@@ -99,6 +104,11 @@ function withChildLiveness(
 
   return new Proxy(session, {
     get(target, property) {
+      if (property === "options") {
+        return perTurnTimeoutMs === undefined
+          ? target.options
+          : { ...target.options, perTurnTimeoutMs };
+      }
       if (property === "isAlive") {
         return () => liveness.alive && target.isAlive();
       }
@@ -112,6 +122,7 @@ function withChildLiveness(
           input,
           options,
           cancelGraceMs,
+          perTurnTimeoutMs,
           () => { liveness.alive = false; },
         );
       }
@@ -164,6 +175,7 @@ async function* supervisedPrompt(
   input: Parameters<AcpSession["prompt"]>[0],
   options: Parameters<AcpSession["prompt"]>[1],
   cancelGraceMs: number,
+  turnTimeoutMs: number | undefined,
   markDead: () => void,
 ): AsyncIterable<unknown> {
   const turnController = new AbortController();
@@ -171,7 +183,6 @@ async function* supervisedPrompt(
   if (options?.abortSignal?.aborted) forwardAbort();
   else options?.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
 
-  const turnTimeoutMs = session.options.perTurnTimeoutMs;
   const timeout = turnTimeoutMs === undefined
     ? undefined
     : setTimeout(

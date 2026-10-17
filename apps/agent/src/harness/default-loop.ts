@@ -8,6 +8,7 @@ import { eventsToMessagesAsync } from "../runtime/history";
 import { SummarizeCompactionStrategy, resolveCompactionStrategy } from "./compaction";
 import type { CompactionStrategy } from "./compaction";
 import { ALL_TOOLS } from "./tools";
+import { MCP_INVOKE_TOOL_NAME, resolveProxiedToolCall } from "./tool-proxy";
 import { llmLoggingMiddleware, llmLogKey } from "./llm-logging-middleware";
 import { readHarnessAgentModelSettings } from "./agent-model-settings";
 import { warnAiSdkHarnessDeprecatedOnce } from "./ai-sdk-deprecation";
@@ -18,13 +19,19 @@ import { warnAiSdkHarnessDeprecatedOnce } from "./ai-sdk-deprecation";
 // `cancel_schedule`, and `list_schedules` to mis-emit as
 // `agent.custom_tool_use` instead of `agent.tool_use`.
 const BUILTIN_TOOLS = new Set(ALL_TOOLS);
-export const isMcpTool = (name: string) => name.startsWith("mcp_");
+// `mcp_invoke` shares the legacy `mcp_` prefix but is the harness proxy for MCP
+// tools, not one itself: it is projected like the tool the model called.
+export const isMcpTool = (name: string) =>
+  name.startsWith("mcp_") && name !== MCP_INVOKE_TOOL_NAME;
 // Exported so tests can assert classification directly. Returning true here
 // makes `runtime.broadcast` emit `agent.tool_use`; false routes to
 // `agent.custom_tool_use`. Down-stream consumers (Console UI, SDK event
 // filters, billing dashboards) split on those event types.
 export const isBuiltinTool = (name: string): boolean =>
-  BUILTIN_TOOLS.has(name) || isMcpTool(name) || name.startsWith("call_agent_");
+  BUILTIN_TOOLS.has(name)
+  || isMcpTool(name)
+  || name === MCP_INVOKE_TOOL_NAME
+  || name.startsWith("call_agent_");
 
 
 /** Extract the MCP server name from current and legacy projected tool names. */
@@ -102,7 +109,9 @@ function emitToolCallEvent(
       name: toolName,
       input: callInput,
     };
-    if (!tools[toolName]?.execute) event.evaluated_permission = "ask";
+    // A proxied call needs confirmation when its target does.
+    const target = resolveProxiedToolCall(toolName, callInput);
+    if (!tools[target.toolName]?.execute) event.evaluated_permission = "ask";
     runtime.broadcast(event);
   } else {
     runtime.broadcast({

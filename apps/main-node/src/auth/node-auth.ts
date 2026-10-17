@@ -1,53 +1,26 @@
-// Auth component. The control plane needs three things from an identity
-// provider: a handler for /auth/*, session resolution from request headers,
-// and a user lookup for membership listings. better-auth is the default
-// adapter; a deployment can pass any object with this shape.
-
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+// The default auth component: better-auth behind the control plane's NodeAuth
+// contract (see @open-managed-agents/control-plane-node). A deployment can
+// pass any object with that shape instead.
 
 import { applyBetterAuthSchema } from "@open-managed-agents/schema";
 import {
   buildBetterAuth,
-  ensureTenantSqlite,
   validateOidcSignInProviders,
   type OidcSignInProvider,
 } from "@open-managed-agents/auth-config";
-import type { SignInProviderInfo } from "@open-managed-agents/shared";
+import { ensureTenantSqlite } from "@open-managed-agents/control-plane-node";
 import type { EmailSender } from "@open-managed-agents/email";
-import type { SqlClient } from "@open-managed-agents/sql-client";
+import type {
+  NodeAuth,
+  NodeConfig,
+  NodeDatabase,
+} from "@open-managed-agents/control-plane-node";
 
-import type { NodeConfig } from "../config.js";
-import type { NodeDatabase } from "../database.js";
-import { loadBetterSqlite3 } from "../lib/better-sqlite3.js";
-
-export interface NodeAuthSession {
-  userId: string;
-  email: string | null;
-  name: string | null;
-}
-
-/** Sign-in methods an auth component offers; /auth-info reports them. */
-export interface NodeSignInMethods {
-  /** Email and password sign-in and sign-up. */
-  emailPassword: boolean;
-  /** Deployment-configured OpenID Connect providers. */
-  oidc: SignInProviderInfo[];
-}
-
-export interface NodeAuth {
-  /** Shown in /health as `auth`. */
-  description: string;
-  /** When present, /auth-info reports these instead of the config defaults. */
-  signInMethods?: NodeSignInMethods;
-  /** Serves everything under /auth/*. */
-  handler(request: Request): Promise<Response> | Response;
-  /** The signed-in user for a request, or null. */
-  resolveSession(headers: Headers): Promise<NodeAuthSession | null>;
-  /** Display fields for a user id (tenant membership listings). */
-  findUser(userId: string): Promise<{ name: string | null; email: string | null } | null>;
-  stop?(): Promise<void>;
-}
+export type {
+  NodeAuth,
+  NodeAuthSession,
+  NodeSignInMethods,
+} from "@open-managed-agents/control-plane-node";
 
 export interface BetterAuthComponentOptions {
   config: Pick<NodeConfig, "auth" | "http">;
@@ -91,34 +64,16 @@ export async function createBetterAuthComponent(
       ensureTenantSqlite(sql, u.id, u.name, u.email),
   };
 
-  let auth: ReturnType<typeof buildBetterAuth>;
-  let stop: (() => Promise<void>) | undefined;
-  const driver = database.driver;
-  if (database.dialect === "postgres") {
-    if (driver?.kind !== "postgres") throw missingDriver("postgres");
-    const { Pool } = (await import("pg")) as typeof import("pg");
-    const pool = new Pool({ connectionString: driver.connectionString });
-    await applyBetterAuthSchema({ sql, dialect: "postgres" });
-    auth = buildBetterAuth({ ...shared, database: pool });
-    stop = async () => {
-      await pool.end();
-    };
-  } else if (database.dialect === "mysql") {
-    if (driver?.kind !== "mysql") throw missingDriver("mysql");
-    await applyBetterAuthSchema({ sql, dialect: "mysql" });
-    auth = buildBetterAuth({ ...shared, database: driver.pool });
-  } else {
-    // SQLite keeps Better Auth in its own file, separate from the main database.
-    const authDbPath = config.auth.databasePath;
-    mkdirSync(dirname(authDbPath), { recursive: true });
-    const BetterSqlite3 = await loadBetterSqlite3();
-    const authDb = new BetterSqlite3(authDbPath);
-    await applyBetterAuthSchema({ sql: betterSqliteAsSqlClient(authDb), dialect: "sqlite" });
-    auth = buildBetterAuth({ ...shared, database: authDb });
-    stop = async () => {
-      authDb.close();
-    };
+  if (!database.openAuthDatabase) {
+    throw new Error(
+      "The default Better Auth adapter needs NodeDatabase.openAuthDatabase(); "
+        + "pass your own NodeAuth (or auth: null) when supplying a database without it.",
+    );
   }
+  const authDatabase = await database.openAuthDatabase({ sqlitePath: config.auth.databasePath });
+  await applyBetterAuthSchema({ sql: authDatabase.sql, dialect: database.dialect });
+  const auth = buildBetterAuth({ ...shared, database: authDatabase.database });
+  const stop = authDatabase.stop;
 
   return {
     description: `better-auth-${database.dialect === "postgres" ? "pg" : database.dialect}`,
@@ -146,33 +101,9 @@ export async function createBetterAuthComponent(
   };
 }
 
-function missingDriver(dialect: string): Error {
-  return new Error(
-    `The default Better Auth adapter needs the ${dialect} driver handle from openNodeDatabase(); `
-      + "pass your own NodeAuth (or auth: null) when supplying a custom NodeDatabase.",
-  );
-}
-
 function randomSecret(onMissing: (() => void) | undefined): string {
   onMissing?.();
   return Array.from(crypto.getRandomValues(new Uint8Array(32)))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-}
-
-/**
- * Lightweight SqlClient shim around a better-sqlite3 Database, used only to
- * run the better-auth schema apply against the auth db (a separate
- * connection from the main SqlClient). Only .exec() is needed.
- */
-function betterSqliteAsSqlClient(db: import("better-sqlite3").Database): SqlClient {
-  return {
-    exec: async (s: string) => {
-      db.exec(s);
-    },
-    prepare: () => {
-      throw new Error("not implemented");
-    },
-    batch: async () => [],
-  } as SqlClient;
 }

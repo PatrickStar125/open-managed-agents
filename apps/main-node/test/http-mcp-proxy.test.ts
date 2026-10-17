@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNodeHttpMcpProxyRoutes,
   createNodeMcpProxyBinding,
-} from "../src/lib/http-mcp-proxy";
+} from "../../../packages/control-plane-node/src/lib/http-mcp-proxy";
 
 describe("Node HTTP MCP proxy", () => {
   it("provides an in-process binding for the host harness without exposing vault credentials", async () => {

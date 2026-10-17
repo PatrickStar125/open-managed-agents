@@ -17,7 +17,7 @@ import { createSqliteSessionService } from "@open-managed-agents/sessions-store"
 import {
   buildIntegrationsGatewayRoutes,
 } from "@open-managed-agents/http-routes";
-import { NodeInstallBridge, buildNodeProvidersForRequest } from "../src/lib/node-install-bridge.js";
+import { NodeInstallBridge, buildNodeProvidersForRequest } from "../../../packages/control-plane-node/src/lib/node-install-bridge.js";
 
 const SECRET = "test-platform-root-secret-padded-to-thirtytwo";
 const TENANT = "tn_smoke";

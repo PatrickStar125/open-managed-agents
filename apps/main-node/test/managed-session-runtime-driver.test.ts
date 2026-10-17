@@ -12,7 +12,7 @@ import type {
 } from "@open-managed-agents/session-realtime";
 import type { SessionExecutionFence } from "@open-managed-agents/session-runtime-contract/coordination";
 import { MemorySessionRealtimeHub } from "@open-managed-agents/session-realtime-memory";
-import * as runtimeModule from "../src/lib/node-managed-session-runtime.js";
+import * as runtimeModule from "../../../packages/control-plane-node/src/lib/node-managed-session-runtime.js";
 
 const session: Session = {
   id: "session_01",

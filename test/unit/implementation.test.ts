@@ -191,6 +191,17 @@ describe("Permission policy enforcement", () => {
     expect(tools.bash.description).toBeTruthy();
     expect(tools.bash.inputSchema).toBeDefined();
   });
+
+  it("keeps execute on always_ask tools when permissions are not enforced (approved confirmation)", async () => {
+    const config = makeAgentConfig({
+      tools: [{
+        type: "agent_toolset_20260401",
+        configs: [{ name: "bash", enabled: true, permission_policy: { type: "always_ask" } }],
+      }],
+    });
+    const tools = await buildTools(config, new TestSandbox(), undefined, { enforcePermissions: false });
+    expect(tools.bash.execute).toBeDefined();
+  });
 });
 
 // ============================================================

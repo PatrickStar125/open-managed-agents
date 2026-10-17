@@ -4,9 +4,9 @@ import type { Environment, Session, SessionEventView } from "@open-managed-agent
 import type { SandboxExecutor } from "@open-managed-agents/sandbox";
 import { decodeRuntimeProducedSessionEvent } from "@open-managed-agents/managed-agents-adapters-runtime";
 import { MemorySessionThreadStore } from "../../../packages/session-thread-store-memory/src/index";
-import { DefaultNodeManagedSessionRunner, type DefaultNodeManagedSessionRunnerDependencies } from "../src/lib/node-managed-session-runner";
-import type { ManagedNodeSubagentControl } from "../src/lib/node-managed-subagents";
-import type { ManagedNodeHarnessRuntime } from "../src/lib/node-managed-harness-runtime";
+import { DefaultNodeManagedSessionRunner, type DefaultNodeManagedSessionRunnerDependencies } from "../../../packages/control-plane-node/src/lib/node-managed-session-runner";
+import type { ManagedNodeSubagentControl } from "../../../packages/control-plane-node/src/lib/node-managed-subagents";
+import type { ManagedNodeHarnessRuntime } from "../../../packages/control-plane-node/src/lib/node-managed-harness-runtime";
 
 const session: Session = {
   id: "session_children", agent: { id: "parent", description: null, mcpServers: [],

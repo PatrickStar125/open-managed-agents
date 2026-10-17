@@ -453,6 +453,7 @@ export default defineConfig({
       "apps/agent/build-*/**",
       "apps/console/**",
       "apps/main-node/**",
+      "packages/control-plane-node/**",
       "apps/main-fly/**",
       "apps/main-vercel/**",
       "packages/auth/**",
@@ -486,6 +487,7 @@ export default defineConfig({
       // not be loaded by the workerd pool used by this root project.
       "packages/environment-activation-*/**",
       "packages/environment-dispatch-*/**",
+      "packages/node-database-*/**",
       "packages/sandbox-adapter-boxrun/**",
       "packages/sandbox-adapter-daytona/**",
       "packages/sandbox-adapter-e2b/**",

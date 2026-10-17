@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "@open-managed-agents/managed-agents-application";
-import * as managedAgentCodec from "../src/lib/node-managed-agent-codec.js";
+import * as managedAgentCodec from "../../../packages/control-plane-node/src/lib/node-managed-agent-codec.js";
 import {
   allowAllLegacyHarnessTools,
   toLegacyHarnessAgentConfig,
-} from "../src/lib/node-managed-agent-codec.js";
+} from "../../../packages/control-plane-node/src/lib/node-managed-agent-codec.js";
 
 const session: Session = {
   id: "session_01",

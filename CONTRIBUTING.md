@@ -119,7 +119,7 @@ Dependabot 和手工 lockfile 更新都要做兼容性检查。CI 变绿只是�
 发布之后，下游另开 bump PR，把依赖改到刚发布的版本，并跑下游自己的 CI：
 
 - Martty 的 `npm/package.json` 依赖 `@openma/deepseek-harness-acp`。CHANGELOG 记录过随 0.4.29、0.4.31 的升级；#135 跟上了 0.4.35 的打包修复。
-- openma-common 打 tag 之后，两个消费仓库改到新 tag 并提交 lockfile（该仓库 `CONTRIBUTING.md` 的 release checklist）。
+- openma-common 打 tag 并发布到 npm 之后，消费仓库把 `@openma/common` 改到新版本并提交 lockfile（该仓库 `CONTRIBUTING.md` 的 release checklist）。
 
 ## 发布 / Release
 
@@ -131,7 +131,7 @@ Dependabot 和手工 lockfile 更新都要做兼容性检查。CI 变绿只是�
 2. dsh 与 Martty 在 `main` 上的发版提交主题为 `release: vX.Y.Z`（dsh `v0.4.36`、Martty `v0.3.0`）。openma-common 是发版 PR 合并后再打同名 tag。
 3. `git tag vX.Y.Z && git push origin vX.Y.Z`。tag 指向 `main` 上的那次提交。
 4. tag 触发发布：dsh `release.yml` 先确认 tag 在 `main` 上，再跑测试、dsh 兼容矩阵和 standalone smoke，然后用 npm OIDC 发布。Martty `package-npm.yml` 监听 `v*.*.*`。
-5. openma-common 是 `private: true` 的 git 依赖：打 tag 后更新消费方，不发 npm。
+5. openma-common 的 `v*` tag 由 `release-tag.yml` 校验后用 npm OIDC 发布 `@openma/common`；发布后再更新消费方。
 
 **Changesets。** 用来发布 `@openma/cli` / `@openma/sdk`。步骤在「本仓库」。本仓库的 `version-pr` 会跑 MySQL 集成，但没有 `Enable KVM for Litebox`；没有 `/dev/kvm` 时 Litebox 用例会失败。
 

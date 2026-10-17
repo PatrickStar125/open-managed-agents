@@ -23,7 +23,7 @@ import {
   normalizeSourceUrl,
   parseAllowHosts,
   SourceBlockedError,
-} from "../src/lib/skill-sources";
+} from "../../../packages/control-plane-node/src/lib/skill-sources";
 
 const created: NodeControlPlane[] = [];
 const servers: Server[] = [];
@@ -39,6 +39,11 @@ const enc = new TextEncoder();
 const sha = (bytes: Uint8Array) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const skillMd = (name: string, body: string) =>
   enc.encode(`---\nname: ${name}\ndescription: ${name} for tests\n---\n# ${name}\n${body}\n`);
+
+/** Fixed archive timestamp. fflate defaults to the current time, which would
+ * change an unchanged archive's digest whenever two publishes straddle a
+ * second (gzip) or a two-second DOS tick (zip). */
+const FIXTURE_MTIME = new Date("2026-01-01T00:00:00Z");
 
 /** A one-file POSIX tar, gzipped, for the archive path that is not zip. */
 function tarGz(files: Record<string, Uint8Array>): Uint8Array {
@@ -66,7 +71,7 @@ function tarGz(files: Record<string, Uint8Array>): Uint8Array {
     out.set(b, at);
     at += b.byteLength;
   }
-  return gzipSync(out);
+  return gzipSync(out, { mtime: FIXTURE_MTIME });
 }
 
 interface Source {
@@ -100,10 +105,13 @@ async function startSource(): Promise<Source> {
 
 /** v2 index under /team with a zip skill, a tar.gz skill, and a bare SKILL.md. */
 function publishV2(source: Source, version: string, extra: { name: string; type: "skill-md" }[] = []) {
-  const zip = zipSync({
-    "SKILL.md": skillMd("code-review", `review rules ${version}`),
-    "checklists/style.md": enc.encode(`style ${version}`),
-  });
+  const zip = zipSync(
+    {
+      "SKILL.md": skillMd("code-review", `review rules ${version}`),
+      "checklists/style.md": enc.encode(`style ${version}`),
+    },
+    { mtime: FIXTURE_MTIME },
+  );
   const tgz = tarGz({ "SKILL.md": skillMd("release-notes", "notes"), "templates/notes.md": enc.encode("tmpl") });
   const md = skillMd("triage", "triage");
   // Relative artifact URLs resolve against the index URL, as in the CLI.

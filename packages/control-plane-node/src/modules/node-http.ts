@@ -54,7 +54,7 @@ import { nodeOutputsAdapter } from "../lib/node-outputs-adapter.js";
 import { createFsSessionOutputSource } from "../lib/fs-session-output-source.js";
 
 import { createAuthMiddleware as buildAuthMw, type ApiKeyResolution } from "@open-managed-agents/auth";
-import { ensureTenantSqlite } from "@open-managed-agents/auth-config";
+import { ensureTenantSqlite } from "../tenants.js";
 
 import { join, relative } from "node:path";
 import { readFileSync } from "node:fs";
