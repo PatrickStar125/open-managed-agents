@@ -32,6 +32,15 @@ runtime decides. SQLite needs only `DATABASE_PATH`; server databases use
 uses the selected server database; only SQLite mode uses a separate
 `auth.db`.
 
+`better-sqlite3` is an optional dependency of `main-node` and `oma-vault`:
+it is installed by default, but a Postgres or MySQL image does not need its
+native addon. If it is missing or failed to build, a server-database
+deployment still starts, and SQLite mode refuses to start with a message
+naming the dependency. Installs use the prebuilt addon that `better-sqlite3`
+ships for Linux (glibc and musl), macOS and Windows on x64 and arm64; the
+workspace does not compile it (`allowBuilds` in `pnpm-workspace.yaml`), so an
+image build needs neither a C++ toolchain nor access to `nodejs.org`.
+
 ## Quickstart (Docker, SQLite)
 
 ```bash

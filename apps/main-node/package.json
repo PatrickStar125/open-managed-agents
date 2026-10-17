@@ -57,6 +57,9 @@
     "prom-client": "^15.1.3",
     "turndown": "^7.2.0"
   },
+  "optionalDependencies": {
+    "better-sqlite3": "^13.0.3"
+  },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.120.0",
     "@earendil-works/pi-ai": "1.1.0",
@@ -95,7 +98,6 @@
     "@types/pg": "^8.20.0",
     "@types/turndown": "^5.0.5",
     "ai": "^7.0.123",
-    "better-sqlite3": "^13.0.3",
     "fflate": "^0.8.2",
     "hono": "^4.7.0",
     "mysql2": "^3.24.4",

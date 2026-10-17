@@ -21,9 +21,9 @@
 # ─── Stage 1: deps (and native compile) ────────────────────────────────────
 FROM node:22-slim AS deps
 
-# better-sqlite3 ships a prebuilt binary for common targets but on
-# arm64-glibc-Linux it falls back to compiling from source. python3 +
-# build-essential cover both.
+# better-sqlite3 loads its bundled prebuilt addon (pnpm-workspace.yaml
+# disables its source build). python3 + build-essential stay for native
+# modules a deployment adds on top.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 build-essential \
   && rm -rf /var/lib/apt/lists/*

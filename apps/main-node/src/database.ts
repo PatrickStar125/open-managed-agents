@@ -9,6 +9,7 @@ import { ensureSchema as ensureEventLogSchema } from "@open-managed-agents/event
 import type { NodeDatabase } from "@open-managed-agents/node-database";
 
 import type { DatabaseConfig } from "./config.js";
+import { loadBetterSqlite3 } from "./lib/better-sqlite3.js";
 import { reconcilePiModelConfigMigration } from "./lib/reconcile-pi-model-config-migration.js";
 
 export type {
@@ -41,6 +42,9 @@ async function connect(config: DatabaseConfig): Promise<NodeDatabase> {
     const { openMysqlDatabase } = await import("@open-managed-agents/node-database-mysql");
     return openMysqlDatabase({ url: config.url });
   }
+  // better-sqlite3 is optional; resolve it first so a missing install fails
+  // with an actionable message instead of the adapter's bare import error.
+  await loadBetterSqlite3();
   const { openSqliteDatabase } = await import("@open-managed-agents/node-database-sqlite");
   return openSqliteDatabase({ path: config.path });
 }
