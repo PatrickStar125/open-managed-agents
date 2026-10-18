@@ -1,0 +1,292 @@
+/**
+ * OpenMatter Agent connector for OpenMA Agents, over the public OpenMA API.
+ *
+ * One OpenMatter Agent Session is one OpenMA session; one Turn is one
+ * `user.message` and ends at the next terminal status. The Agent reaches
+ * OpenMatter operations (for example the Feishu reply tool) through the
+ * Matter MCP server configured on the Agent; the connector turns those tool
+ * calls into operation-call callbacks (see `tool-bridge.ts`).
+ */
+
+import {
+  agentEventEnvelope,
+  callbackFingerprint,
+  createAgentSessionHandle,
+  createOpenMAEvent,
+  isTurnTerminalEvent,
+  type AgentCapabilities,
+  type AgentCommand,
+  type AgentContent,
+  type AgentSessionHandle,
+  type AgentSessionInput,
+  type AgentTurnInput,
+  type OpenMAAgentConnector,
+  type OpenMAEvent,
+} from "@openma/common/agent-contract";
+import { managedEventToOpenMA } from "@openma/common/agent-contract/managed";
+import { OPERATION_CALL_METHOD, type AgentTool } from "@openma/matter/agent";
+import type { OmaClient, OmaEvent } from "./oma-client.js";
+import {
+  mcpToolName,
+  type JsonValue,
+  type OperationCallBridge,
+} from "./tool-bridge.js";
+
+export const OPENMA_CONNECTOR_ID = "openma";
+
+/** Prefix of an OpenMatter-created session title; the rest is the
+ * idempotency key, so a replayed `open` finds the session it created. */
+export const SESSION_TITLE_PREFIX = "openmatter:";
+
+const MCP_INVOKE_TOOL = "mcp_invoke";
+
+export class OmaSessionUnavailableError extends Error {
+  constructor(sessionId: string) {
+    super(`OpenMA session ${sessionId} is missing or archived`);
+    this.name = "OmaSessionUnavailableError";
+  }
+}
+
+/** Pass as `isSessionUnavailable` to `makeConnectorAgentDriver`. */
+export const isOmaSessionUnavailable = (cause: unknown): boolean =>
+  cause instanceof OmaSessionUnavailableError;
+
+export interface OpenMAConnectorOptions {
+  readonly client: OmaClient;
+  readonly bridge: OperationCallBridge;
+  /** Name of the Matter MCP server in the Agent's `mcp_servers`. */
+  readonly mcpServerName: string;
+  /** Required by OpenMA for cloud Agents. */
+  readonly environmentId?: string;
+  /** Vaults attached to a new session, for example the one holding the
+   * Matter MCP bearer for this session. */
+  readonly vaultIds?: (input: AgentSessionInput) => Promise<readonly string[]>;
+  readonly id?: string;
+  readonly now?: () => Date;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const SOURCE = { kind: "harness", harness: "openma", adapter: "matter" } as const;
+
+/** The tools the kernel passed for this Turn, by MCP tool name. */
+const turnTools = (input: AgentTurnInput): ReadonlyMap<string, AgentTool> => {
+  const tools = isRecord(input.metadata?.openmatter)
+    ? (input.metadata.openmatter as Record<string, unknown>).tools
+    : undefined;
+  const map = new Map<string, AgentTool>();
+  if (!Array.isArray(tools)) return map;
+  for (const tool of tools as AgentTool[]) {
+    if (typeof tool?.name === "string") map.set(mcpToolName(tool.name), tool);
+  }
+  return map;
+};
+
+/** The Matter MCP tool an event calls, if any. */
+const matterToolCall = (
+  event: OmaEvent,
+  serverName: string,
+): { readonly id: string; readonly tool: string; readonly input: unknown } | undefined => {
+  if (typeof event.id !== "string") return undefined;
+  const prefix = `mcp__${serverName}__`;
+  if (event.type === "agent.mcp_tool_use") {
+    if (event.mcp_server_name !== serverName) return undefined;
+    const name = typeof event.name === "string" ? event.name : "";
+    return {
+      id: event.id,
+      tool: name.startsWith(prefix) ? name.slice(prefix.length) : name,
+      input: event.input ?? {},
+    };
+  }
+  if (event.type === "agent.tool_use" && event.name === MCP_INVOKE_TOOL) {
+    const args = isRecord(event.input) ? event.input : {};
+    const target = typeof args.tool_name === "string" ? args.tool_name : "";
+    if (!target.startsWith(prefix)) return undefined;
+    return {
+      id: event.id,
+      tool: target.slice(prefix.length),
+      input: isRecord(args.arguments) ? args.arguments : {},
+    };
+  }
+  return undefined;
+};
+
+const userMessage = (content: AgentContent): Record<string, unknown> => ({
+  type: "user.message",
+  content:
+    typeof content === "string" ? [{ type: "text", text: content }] : content,
+});
+
+export const createOpenMAConnector = (
+  options: OpenMAConnectorOptions,
+): OpenMAAgentConnector => {
+  const id = options.id ?? OPENMA_CONNECTOR_ID;
+  const now = options.now ?? (() => new Date());
+  const { client, bridge, mcpServerName } = options;
+  /** First OpenMA sequence of each Turn, so a repeated turnId replays it. */
+  const turnStarts = new Map<string, number>();
+
+  const handleFor = (sessionId: string): AgentSessionHandle =>
+    createAgentSessionHandle({
+      connectorId: id,
+      externalSessionId: sessionId,
+      placement: "managed",
+    });
+
+  const capabilities = async (): Promise<AgentCapabilities> => ({
+    sessionPersistence: "persistent",
+    streaming: true,
+    cancellation: true,
+    permissions: false,
+    elicitation: false,
+    customTools: true,
+    mcp: true,
+  });
+
+  const open = async (input: AgentSessionInput): Promise<AgentSessionHandle> => {
+    if (input.resume !== undefined) {
+      const session = await client.getSession(input.resume.externalSessionId);
+      if (session === null || session.archived_at) {
+        throw new OmaSessionUnavailableError(input.resume.externalSessionId);
+      }
+      return handleFor(session.id);
+    }
+    const title = `${SESSION_TITLE_PREFIX}${input.idempotencyKey}`;
+    const existing = (await client.findSessions(input.agentId, title)).find(
+      (session) => session.title === title && !session.archived_at,
+    );
+    if (existing !== undefined) return handleFor(existing.id);
+    const vaultIds = (await options.vaultIds?.(input)) ?? [];
+    const created = await client.createSession({
+      agentId: input.agentId,
+      title,
+      ...(options.environmentId === undefined
+        ? {}
+        : { environmentId: options.environmentId }),
+      vaultIds,
+    });
+    return handleFor(created.id);
+  };
+
+  async function* execute(
+    session: AgentSessionHandle,
+    input: AgentTurnInput,
+  ): AsyncGenerator<OpenMAEvent> {
+    const omaSessionId = session.externalSessionId;
+    const tools = turnTools(input);
+    const abort = new AbortController();
+    const known = turnStarts.get(input.turnId);
+    const events = await client.streamEvents(omaSessionId, {
+      ...(known === undefined ? {} : { afterSeq: known - 1 }),
+      signal: abort.signal,
+    });
+    if (known === undefined) {
+      await client.sendEvents(omaSessionId, [userMessage(input.content)]);
+    }
+    let started = known !== undefined;
+    let seq = 0;
+    const context = (event: OmaEvent, suffix = "") => ({
+      eventId: `${omaSessionId}:${String(event.seq ?? "")}${suffix}`,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      occurredAt:
+        typeof event.processed_at === "string"
+          ? event.processed_at
+          : now().toISOString(),
+      seq: ++seq,
+    });
+    try {
+      for await (const event of events) {
+        if (!started) {
+          // The stream opened before the message was sent; the Turn starts
+          // at the echo of that message.
+          if (event.type !== "user.message" || typeof event.seq !== "number") {
+            continue;
+          }
+          turnStarts.set(input.turnId, event.seq);
+          started = true;
+        }
+        if (event.type === "user.message") continue;
+        const mapped = managedEventToOpenMA(
+          event as Parameters<typeof managedEventToOpenMA>[0],
+          context(event),
+        );
+        if (mapped.type === "session.terminated") {
+          throw new OmaSessionUnavailableError(omaSessionId);
+        }
+        yield mapped;
+        const call = matterToolCall(event, mcpServerName);
+        const tool = call === undefined ? undefined : tools.get(call.tool);
+        if (call !== undefined && tool !== undefined) {
+          const ctx = context(event, ":operation");
+          const params = {
+            integrationId: tool.integrationId,
+            operation: tool.operation,
+            input: call.input as JsonValue,
+          };
+          bridge.announce(omaSessionId, call.id, call.tool, call.input);
+          yield createOpenMAEvent({
+            ...agentEventEnvelope(ctx, SOURCE),
+            type: "callback.requested",
+            data: {
+              callback_id: call.id,
+              fingerprint: callbackFingerprint(
+                ctx,
+                "extension",
+                OPERATION_CALL_METHOD,
+                call.id,
+                params,
+              ),
+              method: OPERATION_CALL_METHOD,
+              category: "extension",
+              params,
+            },
+          }) as OpenMAEvent;
+        }
+        if (isTurnTerminalEvent(mapped)) {
+          turnStarts.delete(input.turnId);
+          return;
+        }
+      }
+      throw new Error(
+        `OpenMA event stream for session ${omaSessionId} ended before the Turn finished`,
+      );
+    } finally {
+      abort.abort();
+      bridge.release(omaSessionId);
+    }
+  }
+
+  const send = async (
+    session: AgentSessionHandle,
+    command: AgentCommand,
+  ): Promise<void> => {
+    switch (command.type) {
+      case "callback.respond":
+        bridge.resolve(
+          command.callbackId,
+          command.error === undefined
+            ? { ok: true, result: (command.result ?? null) as JsonValue }
+            : { ok: false, error: command.error as JsonValue },
+        );
+        return;
+      case "turn.cancel":
+        await client.sendEvents(session.externalSessionId, [
+          { type: "user.interrupt" },
+        ]);
+        return;
+      case "turn.steer":
+        await client.sendEvents(session.externalSessionId, [
+          userMessage(command.content),
+        ]);
+        return;
+    }
+  };
+
+  const close = async (session: AgentSessionHandle): Promise<void> => {
+    await client.archiveSession(session.externalSessionId);
+  };
+
+  return { id, capabilities, open, execute, send, close };
+};
