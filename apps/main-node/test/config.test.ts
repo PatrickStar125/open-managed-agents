@@ -169,15 +169,17 @@ describe("redactNodeConfig", () => {
       SMTP_HOST: "smtp", SMTP_PASS: "smtp-pass",
       METRICS_BIND_TOKEN: "mt", INTEGRATIONS_INTERNAL_TOKEN: "it", OMA_MANAGED_AGENTS_WEBHOOK_SIGNING_KEY: "wk",
       E2B_API_KEY: "e2b-secret",
+      MATTER_URL: "http://matter:4720", MATTER_PROXY_SECRET: "matter-proxy-secret",
     });
 
     const redacted = JSON.stringify(redactNodeConfig(config));
 
-    for (const secret of ["supersecret", "auth-secret", "root-secret", "static-key", "gsecret", "sk-ant", "\"sk\"", "smtp-pass", "\"mt\"", "\"it\"", "\"wk\"", "e2b-secret"]) {
+    for (const secret of ["supersecret", "auth-secret", "root-secret", "static-key", "gsecret", "sk-ant", "\"sk\"", "smtp-pass", "\"mt\"", "\"it\"", "\"wk\"", "e2b-secret", "matter-proxy-secret"]) {
       expect(redacted).not.toContain(secret);
     }
     expect(redacted).toContain("mysql://qa:***@db.internal:3306/openma");
     expect(redacted).toContain("https://llm");
+    expect(redacted).toContain("http://matter:4720");
     expect(redacted).toContain("\"bucket\":\"mem\"");
     expect(redacted).toContain("\"gid\"");
     expect(redacted).toContain("\"kind\":\"mysql\"");

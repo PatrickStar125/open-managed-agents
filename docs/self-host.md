@@ -297,6 +297,24 @@ both sides).
 The backends pass the same crash-recovery test surface (55 tests across
 adapter / recovery-logic / SIGKILL bootstrap / CF DO eviction).
 
+## Feishu (OpenMatter)
+
+The Console's **Integrations → Feishu** page connects an Agent to Feishu by
+scanning a QR code. It talks to the OpenMatter service (`apps/matter`) through
+the control plane, which proxies `/matter/*` to it after signing the user in:
+
+```bash
+# .env of the control plane
+MATTER_URL=http://matter:4720          # where the Matter service listens
+MATTER_PROXY_SECRET=<random string>    # the same value is given to Matter
+```
+
+Without `MATTER_URL`, `/matter/*` answers `404 {"error":"matter_not_configured"}`
+and the page says Feishu is not set up. The proxy never forwards the user's
+cookies, `Authorization` or `x-api-key`; Matter learns the tenant and user from
+`x-oma-tenant-id` / `x-oma-user-id`, which it trusts only together with the
+secret.
+
 ## Operator gotchas
 
 Things I'd document if I were the on-call who got paged:

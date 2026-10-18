@@ -8,7 +8,7 @@
  * The registration's device code and the app secret never reach the browser.
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   beginFeishuAppRegistration,
   checkFeishuAppSetup,
@@ -31,6 +31,21 @@ export interface RegisteredFeishuApp {
   readonly openId?: string;
 }
 
+/** Who started a registration, as the host's `authorize` reports it. */
+export interface FeishuConnectPrincipal {
+  readonly tenantId: string;
+  readonly userId?: string;
+}
+
+/** What the host stores when a registration completes. */
+export interface FeishuConnection {
+  readonly app: RegisteredFeishuApp;
+  readonly tenantId: string;
+  readonly userId?: string;
+  /** The OpenMA Agent the user chose to answer in Feishu, if any. */
+  readonly agentId?: string;
+}
+
 export type FeishuConnectStatus =
   | { readonly status: "pending"; readonly url: string; readonly qrSvg: string; readonly expiresAt: string }
   | { readonly status: "expired" }
@@ -48,7 +63,7 @@ export type FeishuConnectStatus =
 
 export interface FeishuConnectOptions {
   /** Store the new app (seal the secret). Called once per registration. */
-  readonly onRegistered: (app: RegisteredFeishuApp) => Promise<void>;
+  readonly onRegistered: (connection: FeishuConnection) => Promise<void>;
   /** Pre-filled app name and description on the confirmation page. */
   readonly appName?: string;
   readonly appDescription?: string;
@@ -67,6 +82,8 @@ const openOrigin = (brand: FeishuBrand) =>
 
 interface Registration {
   status: FeishuConnectStatus;
+  readonly principal: FeishuConnectPrincipal;
+  readonly agentId?: string;
   readonly deviceCode: string;
   readonly expiresAtMs: number;
   interval: number;
@@ -94,7 +111,10 @@ export class FeishuConnectService {
   }
 
   /** Start a registration; poll it in the background. */
-  async begin(): Promise<{ readonly id: string; readonly status: FeishuConnectStatus }> {
+  async begin(input: {
+    readonly principal: FeishuConnectPrincipal;
+    readonly agentId?: string;
+  }): Promise<{ readonly id: string; readonly status: FeishuConnectStatus }> {
     this.prune();
     const registration = await Effect.runPromise(
       beginFeishuAppRegistration({
@@ -116,6 +136,8 @@ export class FeishuConnectService {
         qrSvg: await QRCode.toString(registration.url, { type: "svg", margin: 1 }),
         expiresAt: registration.expiresAt,
       },
+      principal: input.principal,
+      ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
       deviceCode: registration.deviceCode,
       expiresAtMs: Date.parse(registration.expiresAt),
       interval: registration.interval,
@@ -126,8 +148,10 @@ export class FeishuConnectService {
     return { id, status: entry.status };
   }
 
-  status(id: string): FeishuConnectStatus | undefined {
-    return this.registrations.get(id)?.status;
+  /** A registration's status, readable only by the tenant that started it. */
+  status(id: string, tenantId: string): FeishuConnectStatus | undefined {
+    const entry = this.registrations.get(id);
+    return entry?.principal.tenantId === tenantId ? entry.status : undefined;
   }
 
   /** One poll; reschedules itself while the registration is pending. */
@@ -173,7 +197,14 @@ export class FeishuConnectService {
           ...(result.openId === undefined ? {} : { openId: result.openId }),
         };
         try {
-          await this.options.onRegistered(app);
+          await this.options.onRegistered({
+            app,
+            tenantId: entry.principal.tenantId,
+            ...(entry.principal.userId === undefined
+              ? {}
+              : { userId: entry.principal.userId }),
+            ...(entry.agentId === undefined ? {} : { agentId: entry.agentId }),
+          });
         } catch {
           this.finish(entry, {
             status: "failed",
@@ -227,9 +258,9 @@ export class FeishuConnectService {
 
 export interface FeishuConnectHandlerOptions {
   readonly service: FeishuConnectService;
-  /** Who may connect an app, for example an OpenMA session or API key check.
-   * Requests it rejects get 401. */
-  readonly authorize: (request: Request) => Promise<boolean>;
+  /** Who is asking, for example from an OpenMA session or a trusted proxy
+   * (`trustedProxyPrincipal`). Requests it rejects (null) get 401. */
+  readonly authorize: (request: Request) => Promise<FeishuConnectPrincipal | null>;
   /** Path the handler is mounted at (default `/connect/feishu`). */
   readonly basePath?: string;
 }
@@ -243,7 +274,8 @@ export const createFeishuConnectHandler = (options: FeishuConnectHandlerOptions)
   return async (request: Request): Promise<Response | undefined> => {
     const path = new URL(request.url).pathname.replace(/\/+$/, "");
     if (path !== base && !path.startsWith(`${base}/`)) return undefined;
-    if (!(await options.authorize(request))) {
+    const principal = await options.authorize(request);
+    if (principal === null) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
     const rest = path.slice(base.length);
@@ -258,8 +290,22 @@ export const createFeishuConnectHandler = (options: FeishuConnectHandlerOptions)
       });
     }
     if (rest === "/registrations" && request.method === "POST") {
+      const body: unknown = await request.json().catch(() => ({}));
+      const agentId =
+        typeof body === "object" && body !== null && !Array.isArray(body)
+          ? (body as { agentId?: unknown }).agentId
+          : undefined;
+      if (agentId !== undefined && (typeof agentId !== "string" || agentId === "")) {
+        return Response.json({ error: "agentId must be a non-empty string" }, { status: 400 });
+      }
       try {
-        return Response.json(await options.service.begin(), { status: 201 });
+        return Response.json(
+          await options.service.begin({
+            principal,
+            ...(agentId === undefined ? {} : { agentId }),
+          }),
+          { status: 201 },
+        );
       } catch {
         return Response.json(
           { error: "Feishu did not start the registration. Try again." },
@@ -269,7 +315,7 @@ export const createFeishuConnectHandler = (options: FeishuConnectHandlerOptions)
     }
     const match = /^\/registrations\/([A-Za-z0-9_-]+)$/.exec(rest);
     if (match?.[1] !== undefined && request.method === "GET") {
-      const status = options.service.status(match[1]);
+      const status = options.service.status(match[1], principal.tenantId);
       return status === undefined
         ? Response.json({ error: "not found" }, { status: 404 })
         : Response.json(status, { headers: { "cache-control": "no-store" } });
@@ -277,6 +323,33 @@ export const createFeishuConnectHandler = (options: FeishuConnectHandlerOptions)
     return Response.json({ error: "not found" }, { status: 404 });
   };
 };
+
+/** Headers a trusted reverse proxy (the OpenMA control plane serving the
+ * Console) sets after authenticating the user. */
+export const MATTER_PROXY_HEADERS = {
+  secret: "x-matter-proxy-secret",
+  tenant: "x-oma-tenant-id",
+  user: "x-oma-user-id",
+} as const;
+
+const digest = (value: string) => createHash("sha256").update(value, "utf8").digest();
+
+/**
+ * `authorize` for a Matter service reached only through the OpenMA control
+ * plane: trusts the tenant and user headers when the request carries the
+ * shared proxy secret.
+ */
+export const trustedProxyPrincipal =
+  (secret: string) =>
+  async (request: Request): Promise<FeishuConnectPrincipal | null> => {
+    if (secret.length === 0) return null;
+    const given = request.headers.get(MATTER_PROXY_HEADERS.secret) ?? "";
+    if (!timingSafeEqual(digest(given), digest(secret))) return null;
+    const tenantId = request.headers.get(MATTER_PROXY_HEADERS.tenant);
+    if (tenantId === null || tenantId === "") return null;
+    const userId = request.headers.get(MATTER_PROXY_HEADERS.user);
+    return userId === null || userId === "" ? { tenantId } : { tenantId, userId };
+  };
 
 const MESSAGES = {
   "zh-CN": {
