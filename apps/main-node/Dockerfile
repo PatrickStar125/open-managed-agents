@@ -34,6 +34,7 @@ WORKDIR /app
 # pnpm install cache.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpm-approve-builds.json ./
 COPY apps/main-node/package.json apps/main-node/
+COPY apps/matter/package.json apps/matter/
 COPY apps/main-fly/package.json apps/main-fly/
 COPY apps/main/package.json apps/main/
 COPY apps/agent/package.json apps/agent/
@@ -50,6 +51,9 @@ RUN corepack enable \
 
 # Now bring in the source code (cache-busts only on src changes, not deps).
 COPY apps/main-node apps/main-node
+# The OpenMatter service (Feishu). Same image; run it with
+# `working_dir: /app/apps/matter` (see the `matter` service in docker-compose.yml).
+COPY apps/matter apps/matter
 COPY apps/main-fly apps/main-fly
 COPY apps/main apps/main
 COPY apps/agent apps/agent

@@ -315,6 +315,37 @@ cookies, `Authorization` or `x-api-key`; Matter learns the tenant and user from
 `x-oma-tenant-id` / `x-oma-user-id`, which it trusts only together with the
 secret.
 
+### Running the Matter service
+
+`docker compose --profile feishu up -d` starts it next to `oma-server`, from
+the same image. Add to `.env`:
+
+```bash
+MATTER_URL=http://matter:4720
+MATTER_PROXY_SECRET=<openssl rand -hex 32>   # shared with oma-server
+MATTER_SECRET_KEY=<openssl rand -hex 32>     # seals Feishu app secrets at rest
+MATTER_OMA_API_KEY=<API key of the workspace Matter serves>
+MATTER_OMA_ENVIRONMENT_ID=<environment chat sessions run in>
+PLATFORM_ROOT_SECRET=<...>                   # Vault credentials need it
+```
+
+Outside compose, run `pnpm --filter @open-managed-agents/matter start` with
+`MATTER_PROXY_SECRET`, `MATTER_SECRET_KEY`, `OMA_URL`, `OMA_API_KEY` and
+`OMA_ENVIRONMENT_ID` set (optional: `MATTER_HOST`, `MATTER_PORT` (4720),
+`MATTER_DATA_DIR` (`./data/matter`), `MATTER_MCP_URL`, `OMA_TENANT_ID`
+(`default`)). It exits with code 2 and lists every missing setting.
+
+One Matter process serves one workspace (the tenant of its API key). For each
+connected Feishu app it keeps a long connection to Feishu — no public webhook
+URL is needed — and its own SQLite store and inbox under
+`MATTER_DATA_DIR/apps/<appId>/`. App secrets are encrypted with
+`MATTER_SECRET_KEY`; the per-chat MCP tokens are stored only as hashes.
+
+Connecting an app adds an `openmatter` MCP server (URL `MATTER_MCP_URL`) and
+its `mcp_toolset` to the chosen Agent, with `always_allow`: no one is there to
+approve a tool call made from a chat. Each chat gets a session whose Vault
+holds the bearer for that server; replies go out as the bot.
+
 ## Operator gotchas
 
 Things I'd document if I were the on-call who got paged:

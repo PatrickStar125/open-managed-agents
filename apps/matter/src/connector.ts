@@ -56,8 +56,8 @@ export interface OpenMAConnectorOptions {
   readonly bridge: OperationCallBridge;
   /** Name of the Matter MCP server in the Agent's `mcp_servers`. */
   readonly mcpServerName: string;
-  /** Required by OpenMA for cloud Agents. */
-  readonly environmentId?: string;
+  /** The environment new sessions run in; OpenMA requires one. */
+  readonly environmentId: string;
   /** Vaults attached to a new session, for example the one holding the
    * Matter MCP bearer for this session. */
   readonly vaultIds?: (input: AgentSessionInput) => Promise<readonly string[]>;
@@ -161,9 +161,7 @@ export const createOpenMAConnector = (
     const created = await client.createSession({
       agentId: input.agentId,
       title,
-      ...(options.environmentId === undefined
-        ? {}
-        : { environmentId: options.environmentId }),
+      environmentId: options.environmentId,
       vaultIds,
     });
     return handleFor(created.id);
