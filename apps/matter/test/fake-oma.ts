@@ -28,6 +28,15 @@ export type Responder = (
 export class FakeOma {
   readonly sessions = new Map<string, Session>();
   readonly vaults = new Map<string, { name: string; credentials: unknown[] }>();
+  readonly agents = new Map<
+    string,
+    {
+      id: string;
+      version: number;
+      mcp_servers: Record<string, unknown>[];
+      tools?: Record<string, unknown>[];
+    }
+  >();
   readonly requests: { method: string; path: string; body?: unknown }[] = [];
   apiKey = "test-key";
   responder: Responder = () => undefined;
@@ -72,8 +81,12 @@ export class FakeOma {
     const parts = url.pathname.split("/").filter(Boolean);
     if (parts[0] === "v1" && parts[1] === "vaults" && method === "POST") {
       if (parts.length === 2) {
+        const displayName = (body as { display_name?: unknown }).display_name;
+        if (typeof displayName !== "string" || displayName.length === 0) {
+          return Response.json({ error: "display_name is required" }, { status: 400 });
+        }
         const id = `vlt_${++this.next}`;
-        this.vaults.set(id, { name: (body as { name: string }).name, credentials: [] });
+        this.vaults.set(id, { name: displayName, credentials: [] });
         return Response.json({ id }, { status: 201 });
       }
       const vault = this.vaults.get(parts[2] ?? "");
@@ -82,6 +95,37 @@ export class FakeOma {
       }
       vault.credentials.push(body);
       return Response.json({ id: `cred_${++this.next}` }, { status: 201 });
+    }
+    if (parts[0] === "v1" && parts[1] === "agents" && parts[2] !== undefined) {
+      if (headers.get("anthropic-beta") !== "managed-agents-2026-04-01") {
+        return Response.json({ error: "beta required" }, { status: 400 });
+      }
+      const agent = this.agents.get(parts[2]);
+      if (agent === undefined) return Response.json({ error: "Agent not found" }, { status: 404 });
+      if (method === "GET") return Response.json(agent);
+      const b = body as {
+        version: number;
+        mcp_servers: Record<string, unknown>[];
+        tools?: Record<string, unknown>[];
+      };
+      if (b.version !== agent.version) {
+        return Response.json({ error: "version conflict" }, { status: 409 });
+      }
+      const tools = b.tools ?? agent.tools ?? [];
+      const referenced = new Set(
+        tools.filter((t) => t.type === "mcp_toolset").map((t) => t.mcp_server_name),
+      );
+      const unreferenced = b.mcp_servers.filter((m) => !referenced.has(m.name));
+      if (unreferenced.length > 0) {
+        return Response.json(
+          { error: "every MCP server must be referenced by an mcp_toolset" },
+          { status: 400 },
+        );
+      }
+      agent.version += 1;
+      agent.mcp_servers = b.mcp_servers;
+      agent.tools = tools;
+      return Response.json(agent);
     }
     if (parts[0] !== "v1" || parts[1] !== "sessions") {
       return Response.json({ error: "not found" }, { status: 404 });
@@ -95,6 +139,9 @@ export class FakeOma {
           environment_id?: string;
           vault_ids?: string[];
         };
+        if (typeof b.environment_id !== "string" || b.environment_id === "") {
+          return Response.json({ error: "environment_id is required" }, { status: 400 });
+        }
         const sid = this.createSession(b.title, b.agent);
         const session = this.sessions.get(sid)!;
         if (b.environment_id !== undefined) session.environment_id = b.environment_id;

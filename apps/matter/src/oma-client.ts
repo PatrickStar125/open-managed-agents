@@ -5,6 +5,9 @@
  * next to any OpenMA deployment.
  */
 
+/** The OpenMA Managed Agents API beta this client speaks. */
+export const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
+
 export interface OmaClientOptions {
   /** OpenMA API origin, for example `https://openma.example.com`. */
   readonly baseUrl: string;
@@ -42,7 +45,7 @@ export class OmaHttpError extends Error {
 export interface CreateSessionInput {
   readonly agentId: string;
   readonly title: string;
-  readonly environmentId?: string;
+  readonly environmentId: string;
   readonly vaultIds?: readonly string[];
 }
 
@@ -54,7 +57,40 @@ export interface CreateBearerCredentialInput {
   readonly token: string;
 }
 
+/** A remote MCP server on an Agent (`mcp_servers`). */
+export interface OmaMcpServer {
+  readonly name: string;
+  readonly type: string;
+  readonly url?: string;
+  readonly [key: string]: unknown;
+}
+
+/** An Agent tool as the API returns it; only `mcp_toolset` is read here. */
+export interface OmaAgentTool {
+  readonly type: string;
+  readonly mcp_server_name?: string;
+  readonly [key: string]: unknown;
+}
+
+export interface OmaAgent {
+  readonly id: string;
+  readonly version: number;
+  readonly mcp_servers?: readonly OmaMcpServer[];
+  readonly tools?: readonly OmaAgentTool[];
+}
+
 export interface OmaClient {
+  getAgent(agentId: string): Promise<OmaAgent | null>;
+  /** Replace the Agent's MCP servers and tools (each server needs an
+   * `mcp_toolset`); fails with 409 on a stale version. */
+  updateAgentMcp(
+    agentId: string,
+    version: number,
+    update: {
+      readonly mcp_servers: readonly OmaMcpServer[];
+      readonly tools: readonly OmaAgentTool[];
+    },
+  ): Promise<OmaAgent>;
   createVault(name: string): Promise<{ readonly id: string }>;
   createBearerCredential(
     input: CreateBearerCredentialInput,
@@ -90,6 +126,9 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
   ): Promise<Response | null> => {
     const headers = new Headers(init.headers);
     headers.set("x-api-key", options.apiKey);
+    // Managed Agents routes (agents, environments, …) require the beta flag;
+    // the rest ignore it.
+    headers.set("anthropic-beta", MANAGED_AGENTS_BETA);
     if (init.body !== undefined && !headers.has("content-type")) {
       headers.set("content-type", "application/json");
     }
@@ -113,11 +152,24 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
     response === null ? null : ((await response.json()) as T);
 
   return {
+    getAgent: async (agentId) =>
+      json<OmaAgent>(
+        await request(`/v1/agents/${encodeURIComponent(agentId)}`, {
+          allow404: true,
+        }),
+      ),
+    updateAgentMcp: async (agentId, version, update) =>
+      (await json<OmaAgent>(
+        await request(`/v1/agents/${encodeURIComponent(agentId)}`, {
+          method: "POST",
+          body: JSON.stringify({ version, ...update }),
+        }),
+      )) as OmaAgent,
     createVault: async (name) =>
       (await json<{ id: string }>(
         await request("/v1/vaults", {
           method: "POST",
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ display_name: name }),
         }),
       )) as { id: string },
     createBearerCredential: async (input) =>
@@ -144,9 +196,7 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
           body: JSON.stringify({
             agent: input.agentId,
             title: input.title,
-            ...(input.environmentId === undefined
-              ? {}
-              : { environment_id: input.environmentId }),
+            environment_id: input.environmentId,
             ...(input.vaultIds === undefined || input.vaultIds.length === 0
               ? {}
               : { vault_ids: input.vaultIds }),
