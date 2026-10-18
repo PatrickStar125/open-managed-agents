@@ -28,7 +28,9 @@ The harness records each MCP call as a session event before running it:
 found through `tool_search`. The connector reads that event from the event log
 and reports it to the kernel as an `openmatter/operation` callback whose id is
 the tool-use id. The MCP endpoint receives the same call over HTTP and waits on
-the bridge until the kernel answers, matching by tool name and arguments.
+the bridge until the kernel answers, matching by tool name and arguments
+within one OpenMatter Agent Session (the endpoint knows the Session from the
+bearer it issued for it).
 Deriving the callback from the log keeps a replayed Turn identical to the
 original.
 

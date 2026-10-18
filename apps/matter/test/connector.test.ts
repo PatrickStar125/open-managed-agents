@@ -223,7 +223,7 @@ describe("execute", () => {
     expect(typeof (callback.data as { fingerprint?: unknown }).fingerprint).toBe("string");
 
     // The MCP endpoint receives the same call; key order does not matter.
-    const mcpCall = bridge.call(id, "feishu_message_reply", { markdown: "done" });
+    const mcpCall = bridge.call("matter-session-1", "feishu_message_reply", { markdown: "done" });
     await connector.send(handle, {
       type: "callback.respond",
       callbackId: "toolu_1",

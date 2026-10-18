@@ -225,7 +225,7 @@ export const createOpenMAConnector = (
             operation: tool.operation,
             input: call.input as JsonValue,
           };
-          bridge.announce(omaSessionId, call.id, call.tool, call.input);
+          bridge.announce(input.sessionId, call.id, call.tool, call.input);
           yield createOpenMAEvent({
             ...agentEventEnvelope(ctx, SOURCE),
             type: "callback.requested",
@@ -254,7 +254,7 @@ export const createOpenMAConnector = (
       );
     } finally {
       abort.abort();
-      bridge.release(omaSessionId);
+      bridge.release(input.sessionId);
     }
   }
 

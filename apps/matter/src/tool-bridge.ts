@@ -11,6 +11,9 @@
  * Deriving the callback from the event log, rather than from the HTTP call,
  * keeps the Agent event stream deterministic: a replayed Turn produces the
  * same callbacks at the same positions.
+ *
+ * Calls are grouped by the OpenMatter Agent Session id, which the MCP endpoint
+ * learns from the bearer it issued for that Session.
  */
 
 export type JsonValue =
