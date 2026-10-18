@@ -25,6 +25,13 @@ This package currently contains the Agent side:
   as a `static_bearer` credential for the MCP server URL. OpenMA attaches it to
   the session's MCP requests, so the MCP server learns the Session from the
   bearer and never from request arguments.
+- `FeishuConnectService` and `createFeishuConnectHandler`: the "Connect
+  Feishu" page. It starts a one-click app registration with the
+  `feishu-agent` preset (scopes and events), shows the link as a QR code,
+  polls in the background, hands the new app's credentials to the host
+  (`onRegistered`) and then shows the app's setup check. The device code and
+  the app secret never reach the browser. The host supplies `authorize`, for
+  example a check of the OpenMA session; the Console only links to the page.
 
 ## Operation calls over MCP
 
