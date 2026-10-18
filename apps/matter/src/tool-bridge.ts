@@ -76,7 +76,16 @@ export interface OperationCallBridgeOptions {
   readonly resultTimeoutMs?: number;
 }
 
+/** An OpenMatter tool as the Matter MCP server lists it. */
+export interface BridgeTool {
+  /** OpenMatter tool name, `${integrationId}.${operation}`. */
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JsonValue;
+}
+
 export class OperationCallBridge {
+  private readonly toolsBySession = new Map<string, readonly BridgeTool[]>();
   private readonly entries = new Map<string, Entry[]>();
   private readonly byCallback = new Map<string, Entry>();
   private readonly waiters = new Map<string, Waiter[]>();
@@ -90,6 +99,17 @@ export class OperationCallBridge {
 
   private static key(toolName: string, input: unknown): string {
     return `${toolName}\u0000${stableJson(input)}`;
+  }
+
+  /** Connector side: the tools the latest Turn of a Session allows. Set
+   * before the Turn's message is sent, so the Agent lists them. */
+  setTools(sessionId: string, tools: readonly BridgeTool[]): void {
+    this.toolsBySession.set(sessionId, tools);
+  }
+
+  /** MCP side: the tools to list for a Session. */
+  tools(sessionId: string): readonly BridgeTool[] {
+    return this.toolsBySession.get(sessionId) ?? [];
   }
 
   /** Connector side: the event log shows the Agent called `toolName`. */

@@ -182,6 +182,7 @@ export const createOpenMAConnector = (
       signal: abort.signal,
     });
     if (known === undefined) {
+      bridge.setTools(input.sessionId, [...tools.values()]);
       await client.sendEvents(omaSessionId, [userMessage(input.content)]);
     }
     let started = known !== undefined;
