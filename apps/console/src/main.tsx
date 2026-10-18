@@ -60,11 +60,7 @@ import {
   IntegrationsSlackWorkspace,
   IntegrationsSlackPublishPage,
 } from "./pages/IntegrationsSlack";
-import {
-  IntegrationsFeishuList,
-  IntegrationsFeishuWorkspace,
-  IntegrationsFeishuPublishPage,
-} from "./pages/IntegrationsFeishu";
+import { IntegrationsFeishuConnect } from "./pages/IntegrationsFeishuConnect";
 import { consolePlugins } from "./plugins/registry";
 
 /**
@@ -240,17 +236,11 @@ const protectedRoutes: RouteObject[] = [
         path: "feishu",
         handle: { crumb: "Feishu" },
         children: [
-          { index: true, element: <IntegrationsFeishuList /> },
-          {
-            path: "publish",
-            element: <IntegrationsFeishuPublishPage />,
-            handle: { crumb: "Publish" },
-          },
-          {
-            path: "installations/:id",
-            element: <IntegrationsFeishuWorkspace />,
-            handle: { crumb: "Workspace" },
-          },
+          { index: true, element: <IntegrationsFeishuConnect /> },
+          // Old links land on the QR-code flow that replaced them;
+          // `publish?agent_id=` keeps preselecting the Agent.
+          { path: "publish", element: <IntegrationsFeishuConnect /> },
+          { path: "*", element: <Navigate to="/integrations/feishu" replace /> },
         ],
       },
     ],

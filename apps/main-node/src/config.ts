@@ -132,6 +132,22 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
   if (workspaceStrategy === "checkpoint_restore" && files.kind !== "s3") {
     problems.push("FILES_S3_* shared storage is required for checkpoint_restore");
   }
+  let matter: NodeConfig["http"]["matter"];
+  if (env.MATTER_URL) {
+    let url: URL | undefined;
+    try {
+      url = new URL(env.MATTER_URL);
+    } catch {
+      problems.push("MATTER_URL must be an absolute http(s) URL");
+    }
+    if (url !== undefined && url.protocol !== "http:" && url.protocol !== "https:") {
+      problems.push("MATTER_URL must be an absolute http(s) URL");
+    } else if (url !== undefined && !env.MATTER_PROXY_SECRET) {
+      problems.push("MATTER_PROXY_SECRET is required with MATTER_URL");
+    } else if (url !== undefined && env.MATTER_PROXY_SECRET) {
+      matter = { url: url.href.replace(/\/+$/, ""), proxySecret: env.MATTER_PROXY_SECRET };
+    }
+  }
   const checkpointIntervalMs = integer("OMA_WORKSPACE_CHECKPOINT_INTERVAL_SEC", 60, { min: 1 }) * 1000;
 
   const memoryQueueRaw = env.MEMORY_QUEUE ?? "auto";
@@ -207,6 +223,7 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
       brandingDir: env.CONSOLE_BRANDING_DIR,
       metricsToken: env.METRICS_BIND_TOKEN,
       apiKey: env.API_KEY,
+      matter,
     },
     tunnels: { domainSuffix: env.TUNNEL_DOMAIN_SUFFIX ?? "tunnels.localhost" },
     skillSources: { allowHosts: skillSourceAllowHosts },

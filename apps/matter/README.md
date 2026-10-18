@@ -30,8 +30,17 @@ This package currently contains the Agent side:
   `feishu-agent` preset (scopes and events), shows the link as a QR code,
   polls in the background, hands the new app's credentials to the host
   (`onRegistered`) and then shows the app's setup check. The device code and
-  the app secret never reach the browser. The host supplies `authorize`, for
-  example a check of the OpenMA session; the Console only links to the page.
+  the app secret never reach the browser. Each registration belongs to the
+  tenant that started it and may carry the OpenMA Agent chosen to answer; the
+  host's `onRegistered` receives both with the app.
+- `trustedProxyPrincipal`: the `authorize` for the usual deployment, where the
+  Console reaches Matter through the OpenMA control plane. The control plane
+  signs the user in, forwards `/matter/*` here (prefix removed), drops the
+  user's cookies and keys, and sets `x-oma-tenant-id` / `x-oma-user-id`
+  together with the shared `x-matter-proxy-secret`. Matter trusts those
+  headers only with that secret. Configure the control plane with
+  `MATTER_URL` and `MATTER_PROXY_SECRET`; the Console's Feishu page then calls
+  `/matter/connect/feishu/...`.
 
 ## Operation calls over MCP
 
