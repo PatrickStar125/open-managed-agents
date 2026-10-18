@@ -168,6 +168,10 @@ describe("execute", () => {
       type: "user.message",
       content: [{ type: "text", text: "hello" }],
     });
+    // The MCP server lists the Turn's tools for this Session.
+    expect(bridge.tools("matter-session-1").map((tool) => tool.name)).toEqual([
+      "feishu.message.reply",
+    ]);
   });
 
   it("ignores events of an earlier Turn already in the log", async () => {

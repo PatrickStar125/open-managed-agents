@@ -46,7 +46,19 @@ export interface CreateSessionInput {
   readonly vaultIds?: readonly string[];
 }
 
+export interface CreateBearerCredentialInput {
+  readonly vaultId: string;
+  readonly displayName: string;
+  /** OpenMA attaches the bearer to MCP requests for this server URL. */
+  readonly mcpServerUrl: string;
+  readonly token: string;
+}
+
 export interface OmaClient {
+  createVault(name: string): Promise<{ readonly id: string }>;
+  createBearerCredential(
+    input: CreateBearerCredentialInput,
+  ): Promise<{ readonly id: string }>;
   createSession(input: CreateSessionInput): Promise<OmaSession>;
   getSession(sessionId: string): Promise<OmaSession | null>;
   /** Sessions of one Agent whose title matches `query` (server-side search). */
@@ -101,6 +113,30 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
     response === null ? null : ((await response.json()) as T);
 
   return {
+    createVault: async (name) =>
+      (await json<{ id: string }>(
+        await request("/v1/vaults", {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        }),
+      )) as { id: string },
+    createBearerCredential: async (input) =>
+      (await json<{ id: string }>(
+        await request(
+          `/v1/vaults/${encodeURIComponent(input.vaultId)}/credentials`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              display_name: input.displayName,
+              auth: {
+                type: "static_bearer",
+                mcp_server_url: input.mcpServerUrl,
+                token: input.token,
+              },
+            }),
+          },
+        ),
+      )) as { id: string },
     createSession: async (input) => {
       const session = await json<OmaSession>(
         await request("/v1/sessions", {

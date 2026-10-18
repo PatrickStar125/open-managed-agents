@@ -27,6 +27,7 @@ export type Responder = (
 
 export class FakeOma {
   readonly sessions = new Map<string, Session>();
+  readonly vaults = new Map<string, { name: string; credentials: unknown[] }>();
   readonly requests: { method: string; path: string; body?: unknown }[] = [];
   apiKey = "test-key";
   responder: Responder = () => undefined;
@@ -69,6 +70,19 @@ export class FakeOma {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
     const parts = url.pathname.split("/").filter(Boolean);
+    if (parts[0] === "v1" && parts[1] === "vaults" && method === "POST") {
+      if (parts.length === 2) {
+        const id = `vlt_${++this.next}`;
+        this.vaults.set(id, { name: (body as { name: string }).name, credentials: [] });
+        return Response.json({ id }, { status: 201 });
+      }
+      const vault = this.vaults.get(parts[2] ?? "");
+      if (vault === undefined || parts[3] !== "credentials") {
+        return Response.json({ error: "Vault not found" }, { status: 404 });
+      }
+      vault.credentials.push(body);
+      return Response.json({ id: `cred_${++this.next}` }, { status: 201 });
+    }
     if (parts[0] !== "v1" || parts[1] !== "sessions") {
       return Response.json({ error: "not found" }, { status: 404 });
     }
