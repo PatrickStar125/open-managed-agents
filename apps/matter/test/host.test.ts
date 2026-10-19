@@ -236,7 +236,7 @@ describe("Matter service", () => {
 
     const posted = await waitFor(() => feishu.replies[0]);
     // The message was acknowledged with a reaction before the Agent answered.
-    expect(feishu.reactions).toEqual([{ messageId: "om_1", emoji: "OnIt" }]);
+    expect(feishu.reactions).toEqual([{ messageId: "om_1", emoji: "Get" }]);
     expect(posted.messageId).toBe("om_1");
     expect(JSON.stringify(posted.body)).toContain("All green.");
     const result = await waitFor(() => mcpResults[0]);
