@@ -12,7 +12,11 @@ export interface OmaClientOptions {
   /** OpenMA API origin, for example `https://openma.example.com`. */
   readonly baseUrl: string;
   /** Workspace API key, sent as `x-api-key`. */
-  readonly apiKey: string;
+  /** A workspace API key. Without it, `headers` must authenticate. */
+  readonly apiKey?: string;
+  /** Sent on every request, for example the trusted-proxy headers that let
+   * the Matter service act in one workspace (`matterTrustHeaders`). */
+  readonly headers?: Readonly<Record<string, string>>;
   readonly fetch?: typeof fetch;
 }
 
@@ -98,6 +102,8 @@ export interface OmaClient {
   ): Promise<{ readonly id: string }>;
   createSession(input: CreateSessionInput): Promise<OmaSession>;
   getSession(sessionId: string): Promise<OmaSession | null>;
+  /** The workspace's environments, newest first. */
+  listEnvironments(): Promise<readonly { readonly id: string; readonly name?: string; readonly archived_at?: string | null }[]>;
   /** Sessions of one Agent whose title matches `query` (server-side search). */
   findSessions(agentId: string, query: string): Promise<readonly OmaSession[]>;
   archiveSession(sessionId: string): Promise<void>;
@@ -131,7 +137,8 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
     init: RequestInit & { readonly allow404?: boolean } = {},
   ): Promise<Response | null> => {
     const headers = new Headers(init.headers);
-    headers.set("x-api-key", options.apiKey);
+    for (const [name, value] of Object.entries(options.headers ?? {})) headers.set(name, value);
+    if (options.apiKey !== undefined) headers.set("x-api-key", options.apiKey);
     // Managed Agents routes (agents, environments, …) require the beta flag;
     // the rest ignore it.
     headers.set("anthropic-beta", MANAGED_AGENTS_BETA);
@@ -158,6 +165,10 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
     response === null ? null : ((await response.json()) as T);
 
   return {
+    listEnvironments: async () =>
+      ((await json<{ data?: { id: string; name?: string; archived_at?: string | null }[] }>(
+        await request("/v1/environments?limit=100"),
+      ))?.data ?? []),
     getAgent: async (agentId) =>
       json<OmaAgent>(
         await request(`/v1/agents/${encodeURIComponent(agentId)}`, {

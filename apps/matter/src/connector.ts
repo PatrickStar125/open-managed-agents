@@ -59,11 +59,14 @@ export interface OpenMAConnectorOptions {
   readonly bridge: OperationCallBridge;
   /** Name of the Matter MCP server in the Agent's `mcp_servers`. */
   readonly mcpServerName: string;
-  /** The environment new sessions run in; OpenMA requires one. */
-  readonly environmentId: string;
+  /** The environment new sessions run in, or how to find it. */
+  readonly environmentId: string | (() => Promise<string>);
   /** Vaults attached to a new session, for example the one holding the
    * Matter MCP bearer for this session. */
   readonly vaultIds?: (input: AgentSessionInput) => Promise<readonly string[]>;
+  /** Rewrites a Turn's content before it is sent, for example to attach
+   * the images of the message (see `images.ts`). */
+  readonly content?: (content: AgentContent) => Promise<AgentContent>;
   readonly id?: string;
   readonly now?: () => Date;
 }
@@ -186,7 +189,8 @@ export const createOpenMAConnector = (
     const created = await client.createSession({
       agentId: input.agentId,
       title,
-      environmentId: options.environmentId,
+      environmentId:
+        typeof options.environmentId === "string" ? options.environmentId : await options.environmentId(),
       vaultIds,
     });
     return handleFor(created.id);
@@ -205,7 +209,8 @@ export const createOpenMAConnector = (
     let backlog: readonly OmaEvent[] = [];
     if (known === undefined) {
       await bridge.setTools(input.sessionId, [...tools.values()]);
-      const sent = await client.sendEvents(omaSessionId, [userMessage(input.content)]);
+      const content = options.content === undefined ? input.content : await options.content(input.content);
+      const sent = await client.sendEvents(omaSessionId, [userMessage(content)]);
       turnStarts.set(input.turnId, sent[0]?.id ?? null);
     } else if (known !== null) {
       backlog = await eventsAfter(omaSessionId, known);
@@ -305,7 +310,7 @@ export const createOpenMAConnector = (
         return;
       case "turn.steer":
         await client.sendEvents(session.externalSessionId, [
-          userMessage(command.content),
+          userMessage(options.content === undefined ? command.content : await options.content(command.content)),
         ]);
         return;
     }

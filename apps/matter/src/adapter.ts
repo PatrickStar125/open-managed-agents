@@ -7,6 +7,7 @@
  */
 
 import type { LongConnectionSource } from "@openma/matter-host-local/runtime";
+import type { ImageLoader } from "./images.js";
 import type { createOpenMatter } from "@openma/matter/runtime";
 
 export type MatterApplication = ReturnType<typeof createOpenMatter>;
@@ -36,6 +37,9 @@ export interface MatterWiring {
   /** Delivers the provider's events; the host persists each in the inbox
    * before the source acknowledges it. */
   readonly source: LongConnectionSource;
+  /** Downloads an image of one of this connection's messages, so the Agent
+   * sees it. Without it the Agent only sees the image's id. */
+  readonly image?: ImageLoader;
 }
 
 export interface MatterAdapter<C extends MatterConnection = MatterConnection> {

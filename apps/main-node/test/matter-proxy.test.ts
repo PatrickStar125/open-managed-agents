@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadNodeConfig } from "../src/config";
 import { createNodeControlPlane, type NodeControlPlane } from "../src/control-plane";
 import { nodeDefaults } from "../src/components";
-import { buildMatterProxyRoutes } from "../../../packages/control-plane-node/src/lib/matter-proxy";
+import { buildMatterProxyRoutes, buildMatterWebhookRoutes, matterTrustedAuth } from "../../../packages/control-plane-node/src/lib/matter-proxy";
 
 const created: NodeControlPlane[] = [];
 const servers: Server[] = [];
@@ -181,5 +181,60 @@ describe("MATTER_* config", () => {
       proxySecret: "s",
     });
     expect(loadNodeConfig(base).http.matter).toBeUndefined();
+  });
+});
+
+describe("matterTrustedAuth", () => {
+  const app = () => {
+    const a = new Hono<{ Variables: { tenant_id: string; user_id?: string } }>();
+    a.use("*", matterTrustedAuth("s3cret", async (c) => c.json({ fallback: true }, 401)));
+    a.get("/v1/agents", (c) => c.json({ tenant: c.var.tenant_id }));
+    return a;
+  };
+
+  it("lets Matter act in the workspace it names with the shared secret", async () => {
+    const res = await app().request("/v1/agents", {
+      headers: { "x-matter-proxy-secret": "s3cret", "x-oma-tenant-id": "tn_7" },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ tenant: "tn_7" });
+  });
+
+  it("refuses a wrong secret or a missing tenant, and leaves other requests to the normal auth", async () => {
+    expect((await app().request("/v1/agents", { headers: { "x-matter-proxy-secret": "nope", "x-oma-tenant-id": "tn_7" } })).status).toBe(401);
+    expect((await app().request("/v1/agents", { headers: { "x-matter-proxy-secret": "s3cret" } })).status).toBe(401);
+    const plain = await app().request("/v1/agents", { headers: { "x-oma-tenant-id": "tn_7" } });
+    expect(await plain.json()).toEqual({ fallback: true });
+  });
+});
+
+describe("buildMatterWebhookRoutes", () => {
+  it("forwards GitLab webhooks to Matter without credentials or trust headers", async () => {
+    const upstream = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      expect(req.url).toBe("http://matter.internal/base/webhooks/gitlab/gitlab-1");
+      expect(req.headers.get("x-gitlab-token")).toBe("hook-secret");
+      expect(req.headers.get("x-gitlab-event")).toBe("Note Hook");
+      for (const name of ["cookie", "authorization", "x-matter-proxy-secret", "x-oma-tenant-id"]) {
+        expect(req.headers.has(name)).toBe(false);
+      }
+      expect(await req.text()).toBe('{"object_kind":"note"}');
+      return new Response(null, { status: 202 });
+    });
+    const app = new Hono();
+    app.route("/webhooks/gitlab", buildMatterWebhookRoutes({ url: "http://matter.internal/base", proxySecret: "s3cret", fetcher: upstream as typeof fetch }));
+    const res = await app.request("/webhooks/gitlab/gitlab-1", {
+      method: "POST",
+      headers: {
+        "x-gitlab-token": "hook-secret",
+        "x-gitlab-event": "Note Hook",
+        cookie: "session=1",
+        "x-matter-proxy-secret": "forged",
+        "x-oma-tenant-id": "tn_other",
+      },
+      body: '{"object_kind":"note"}',
+    });
+    expect(res.status).toBe(202);
+    expect(upstream).toHaveBeenCalledOnce();
   });
 });

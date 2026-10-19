@@ -341,6 +341,20 @@ connected Feishu app it keeps a long connection to Feishu — no public webhook
 URL is needed — and a store and inbox of its own. App secrets are encrypted
 with `MATTER_SECRET_KEY`; the per-chat MCP tokens are stored only as hashes.
 
+**Workspaces.** With `OMA_API_KEY` the service acts in that key's workspace
+only (`OMA_TENANT_ID`, default `default`). Without it, it serves every
+workspace: it calls the API with the shared `MATTER_PROXY_SECRET` and the
+workspace id (`x-matter-proxy-secret` / `x-oma-tenant-id`), which the control
+plane accepts only when its own `MATTER_URL` and `MATTER_PROXY_SECRET` are
+set. New sessions run in `OMA_ENVIRONMENT_ID`, or else in the workspace's
+newest environment. GitLab webhooks reach Matter through the control plane at
+`/webhooks/gitlab/<id>` as well, so `MATTER_PUBLIC_URL` can be the control
+plane's public URL.
+
+**Images.** Images on a Feishu message are downloaded with the app's
+credentials (scope `im:resource`, part of the app preset) and shown to the
+Agent, up to 5 per message.
+
 **State.** Without `MATTER_DATABASE_URL`, one process keeps everything in
 SQLite under `MATTER_DATA_DIR` (`matter.sqlite`, and `apps/<id>/` per
 connection): fine for compose, a single replica only. With

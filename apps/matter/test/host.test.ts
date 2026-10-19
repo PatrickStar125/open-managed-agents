@@ -382,7 +382,20 @@ describe("persistence", () => {
 
 describe("loadMatterConfig", () => {
   it("lists every problem and applies defaults", () => {
-    expect(() => loadMatterConfig({})).toThrow(/MATTER_PROXY_SECRET is required[\s\S]*MATTER_SECRET_KEY is required[\s\S]*OMA_URL is required[\s\S]*OMA_API_KEY is required[\s\S]*OMA_ENVIRONMENT_ID is required/);
+    expect(() => loadMatterConfig({})).toThrow(/MATTER_PROXY_SECRET is required[\s\S]*MATTER_SECRET_KEY is required[\s\S]*OMA_URL is required/);
+    // Without an API key: any workspace, through the trusted-proxy headers.
+    expect(
+      loadMatterConfig({ MATTER_PROXY_SECRET: "s", MATTER_SECRET_KEY: "a-long-enough-secret", OMA_URL: "http://oma:8787/" }),
+    ).toEqual({
+      host: "127.0.0.1",
+      port: 4720,
+      dataDir: "./data/matter",
+      reconcileMs: 15000,
+      proxySecret: "s",
+      secretKey: "a-long-enough-secret",
+      omaUrl: "http://oma:8787",
+      mcpUrl: "http://127.0.0.1:4720/mcp",
+    });
     expect(() =>
       loadMatterConfig({ MATTER_PROXY_SECRET: "s", MATTER_SECRET_KEY: "short", OMA_URL: "ftp://x", OMA_API_KEY: "k", MATTER_PORT: "x" }),
     ).toThrow(/MATTER_PORT[\s\S]*at least 16[\s\S]*OMA_URL must be/);

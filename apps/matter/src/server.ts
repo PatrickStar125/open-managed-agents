@@ -37,6 +37,7 @@ import {
   type MatterDatabase,
 } from "./persistence.js";
 import { OperationCallBridge } from "./tool-bridge.js";
+import { matterTrustHeaders } from "./feishu-connect.js";
 
 export interface MatterConfig {
   readonly host: string;
@@ -53,14 +54,18 @@ export interface MatterConfig {
   /** Seals app secrets at rest. */
   readonly secretKey: string;
   readonly omaUrl: string;
-  readonly omaApiKey: string;
-  /** The OpenMA workspace the API key belongs to; apps of other workspaces
-   * are refused. */
-  readonly omaTenantId: string;
+  /** A workspace API key (`OMA_API_KEY`): the service acts in that one
+   * workspace. Unset, it acts in any workspace through the control plane's
+   * trusted-proxy headers (the shared `MATTER_PROXY_SECRET`). */
+  readonly omaApiKey?: string;
+  /** The only workspace whose connections are accepted. Defaults to
+   * `default` with an API key; unset without one (every workspace). */
+  readonly omaTenantId?: string;
   /** The MCP endpoint as OpenMA reaches it. */
   readonly mcpUrl: string;
-  /** The OpenMA environment new sessions run in. */
-  readonly environmentId: string;
+  /** The OpenMA environment new sessions run in; unset, each workspace's
+   * newest environment. */
+  readonly environmentId?: string;
   /** Where providers that call in (GitLab webhooks) reach this service;
    * unset, "Connect GitLab" returns the webhook path only. */
   readonly publicUrl?: string;
@@ -123,10 +128,10 @@ export const loadMatterConfig = (env: NodeJS.ProcessEnv): MatterConfig => {
     proxySecret,
     secretKey,
     omaUrl: url("OMA_URL"),
-    omaApiKey: required("OMA_API_KEY"),
-    omaTenantId: env.OMA_TENANT_ID || "default",
+    ...(env.OMA_API_KEY ? { omaApiKey: env.OMA_API_KEY } : {}),
+    ...(env.OMA_TENANT_ID || env.OMA_API_KEY ? { omaTenantId: env.OMA_TENANT_ID || "default" } : {}),
     mcpUrl: url("MATTER_MCP_URL", `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}/mcp`),
-    environmentId: required("OMA_ENVIRONMENT_ID"),
+    ...(env.OMA_ENVIRONMENT_ID ? { environmentId: env.OMA_ENVIRONMENT_ID } : {}),
     ...(env.MATTER_PUBLIC_URL ? { publicUrl: url("MATTER_PUBLIC_URL") } : {}),
   };
   if (problems.length > 0) throw new MatterConfigError(problems);
@@ -174,12 +179,36 @@ export const createMatterService = async (
   } = {},
 ): Promise<MatterService> => {
   const db = overrides.db ?? (await openConfiguredDatabase(config));
-  const oma: OmaClient = createOmaClient({
-    baseUrl: config.omaUrl,
-    apiKey: config.omaApiKey,
-    ...(overrides.omaFetch === undefined ? {} : { fetch: overrides.omaFetch }),
-  });
-  const clientFor = (tenantId: string) => (tenantId === config.omaTenantId ? oma : null);
+  const omaFetch = overrides.omaFetch === undefined ? {} : { fetch: overrides.omaFetch };
+  const accepts = (tenantId: string) => config.omaTenantId === undefined || tenantId === config.omaTenantId;
+  const clients = new Map<string, OmaClient>();
+  const clientFor = (tenantId: string): OmaClient | null => {
+    if (!accepts(tenantId)) return null;
+    let client = clients.get(tenantId);
+    if (client === undefined) {
+      client = createOmaClient({
+        baseUrl: config.omaUrl,
+        ...(config.omaApiKey === undefined
+          ? { headers: matterTrustHeaders(config.proxySecret, tenantId) }
+          : { apiKey: config.omaApiKey }),
+        ...omaFetch,
+      });
+      clients.set(tenantId, client);
+    }
+    return client;
+  };
+  const environments = new Map<string, { id: string; until: number }>();
+  const environmentFor = async (tenantId: string): Promise<string> => {
+    if (config.environmentId !== undefined) return config.environmentId;
+    const cached = environments.get(tenantId);
+    if (cached !== undefined && cached.until > Date.now()) return cached.id;
+    const client = clientFor(tenantId);
+    if (client === null) throw new Error(`No OpenMA access for tenant ${tenantId}`);
+    const found = (await client.listEnvironments()).find((e) => !e.archived_at);
+    if (found === undefined) throw new Error("This workspace has no OpenMA environment; create one first");
+    environments.set(tenantId, { id: found.id, until: Date.now() + 300_000 });
+    return found.id;
+  };
   const bridge = new OperationCallBridge({ store: db.calls });
   const providerFetch = overrides.fetch === undefined ? {} : { fetch: overrides.fetch };
   const gitlab = createGitLabAdapter({ db, ...providerFetch });
@@ -188,7 +217,7 @@ export const createMatterService = async (
     bridge,
     clientFor,
     mcpServerUrl: config.mcpUrl,
-    environmentId: config.environmentId,
+    environmentId: environmentFor,
     adapters: [
       createFeishuAdapter({
         db,
@@ -214,7 +243,7 @@ export const createMatterService = async (
     // Only the workspace this service can act in may connect apps.
     authorize: async (request) => {
       const principal = await proxied(request);
-      return principal?.tenantId === config.omaTenantId ? principal : null;
+      return principal !== null && accepts(principal.tenantId) ? principal : null;
     },
   });
   const connectGitLabHandler = createGitLabConnectHandler({
@@ -226,7 +255,7 @@ export const createMatterService = async (
     db,
     authorize: async (request) => {
       const principal = await proxied(request);
-      return principal?.tenantId === config.omaTenantId ? principal : null;
+      return principal !== null && accepts(principal.tenantId) ? principal : null;
     },
   });
   const gitlabWebhooks = createGitLabWebhookHandler(gitlab, (key) => host.ensure(gitlab.kind, key));
