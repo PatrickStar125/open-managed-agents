@@ -1,7 +1,7 @@
 /**
  * The Matter service process: configuration from the environment, one HTTP
  * listener for the MCP endpoint and the "Connect Feishu" API, and the host
- * that keeps every connected app's long connection open.
+ * that runs every connection (see `adapter.ts`).
  */
 
 import { mkdirSync } from "node:fs";
@@ -11,7 +11,10 @@ import {
   createFeishuConnectHandler,
   FeishuConnectService,
   trustedProxyPrincipal,
+  type FeishuConnection,
 } from "./feishu-connect.js";
+import type { FeishuLongConnectionOptions } from "@openma/matter-feishu/long-connection";
+import { connectFeishuApp, createFeishuAdapter } from "./feishu-adapter.js";
 import { createMatterHost, type MatterHost, type MatterHostOptions } from "./host.js";
 import { createMatterMcpHandler } from "./mcp-server.js";
 import { createOmaClient, type OmaClient } from "./oma-client.js";
@@ -96,13 +99,18 @@ export interface MatterService {
   readonly fetch: (request: Request) => Promise<Response>;
   readonly host: MatterHost;
   readonly db: MatterDatabase;
+  /** What the "Connect Feishu" flow calls with a registered app. */
+  readonly connectFeishu: (connection: FeishuConnection) => Promise<void>;
   close(): Promise<void>;
 }
 
 /** Everything but the listener, so tests drive it with plain Requests. */
 export const createMatterService = (
   config: MatterConfig,
-  overrides: Partial<Pick<MatterHostOptions, "fetch" | "createWsClient" | "onError">> & {
+  overrides: Partial<Pick<MatterHostOptions, "onError">> & {
+    /** Reaches the providers (Feishu); tests pass a fake. */
+    readonly fetch?: typeof fetch;
+    readonly createWsClient?: FeishuLongConnectionOptions["createClient"];
     readonly omaFetch?: typeof fetch;
     readonly feishuConnectFetch?: typeof fetch;
   } = {},
@@ -119,6 +127,7 @@ export const createMatterService = (
   });
   const clientFor = (tenantId: string) => (tenantId === config.omaTenantId ? oma : null);
   const bridge = new OperationCallBridge();
+  const providerFetch = overrides.fetch === undefined ? {} : { fetch: overrides.fetch };
   const host = createMatterHost({
     dataDir: config.dataDir,
     db,
@@ -126,17 +135,23 @@ export const createMatterService = (
     clientFor,
     mcpServerUrl: config.mcpUrl,
     environmentId: config.environmentId,
-    ...(overrides.fetch === undefined ? {} : { fetch: overrides.fetch }),
-    ...(overrides.createWsClient === undefined ? {} : { createWsClient: overrides.createWsClient }),
+    adapters: [
+      createFeishuAdapter({
+        db,
+        ...providerFetch,
+        ...(overrides.createWsClient === undefined ? {} : { createWsClient: overrides.createWsClient }),
+      }),
+    ],
     onError:
       overrides.onError ??
-      ((error, appId) =>
-        console.error(`[matter] app ${appId}:`, error instanceof Error ? error.message : error)),
+      ((error, key) =>
+        console.error(`[matter] ${key}:`, error instanceof Error ? error.message : error)),
   });
+  const connectFeishu = connectFeishuApp(host, { db, ...providerFetch });
   const proxied = trustedProxyPrincipal(config.proxySecret);
   const connect = createFeishuConnectHandler({
     service: new FeishuConnectService({
-      onRegistered: (connection) => host.connect(connection),
+      onRegistered: connectFeishu,
       ...(overrides.feishuConnectFetch === undefined ? {} : { fetch: overrides.feishuConnectFetch }),
     }),
     // Only the workspace this service can act in may connect apps.
@@ -160,6 +175,7 @@ export const createMatterService = (
     fetch: fetchHandler,
     host,
     db,
+    connectFeishu,
     close: async () => {
       await host.stop();
       db.close();
