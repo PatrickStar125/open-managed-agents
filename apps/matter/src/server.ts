@@ -1,6 +1,7 @@
 /**
  * The Matter service process: configuration from the environment, one HTTP
- * listener for the MCP endpoint and the "Connect Feishu" API, and the host
+ * listener for the MCP endpoint, the "Connect Feishu" and "Connect GitLab"
+ * APIs and GitLab webhooks, and the host
  * that runs every connection (see `adapter.ts`).
  */
 
@@ -15,6 +16,12 @@ import {
 } from "./feishu-connect.js";
 import type { FeishuLongConnectionOptions } from "@openma/matter-feishu/long-connection";
 import { connectFeishuApp, createFeishuAdapter } from "./feishu-adapter.js";
+import {
+  connectGitLab,
+  createGitLabAdapter,
+  createGitLabConnectHandler,
+  createGitLabWebhookHandler,
+} from "./gitlab-adapter.js";
 import { createMatterHost, type MatterHost, type MatterHostOptions } from "./host.js";
 import { createMatterMcpHandler } from "./mcp-server.js";
 import { createOmaClient, type OmaClient } from "./oma-client.js";
@@ -38,6 +45,9 @@ export interface MatterConfig {
   readonly mcpUrl: string;
   /** The OpenMA environment new sessions run in. */
   readonly environmentId: string;
+  /** Where providers that call in (GitLab webhooks) reach this service;
+   * unset, "Connect GitLab" returns the webhook path only. */
+  readonly publicUrl?: string;
 }
 
 export class MatterConfigError extends Error {
@@ -90,6 +100,7 @@ export const loadMatterConfig = (env: NodeJS.ProcessEnv): MatterConfig => {
     omaTenantId: env.OMA_TENANT_ID || "default",
     mcpUrl: url("MATTER_MCP_URL", `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}/mcp`),
     environmentId: required("OMA_ENVIRONMENT_ID"),
+    ...(env.MATTER_PUBLIC_URL ? { publicUrl: url("MATTER_PUBLIC_URL") } : {}),
   };
   if (problems.length > 0) throw new MatterConfigError(problems);
   return config;
@@ -108,7 +119,7 @@ export interface MatterService {
 export const createMatterService = (
   config: MatterConfig,
   overrides: Partial<Pick<MatterHostOptions, "onError">> & {
-    /** Reaches the providers (Feishu); tests pass a fake. */
+    /** Reaches the providers (Feishu, GitLab); tests pass a fake. */
     readonly fetch?: typeof fetch;
     readonly createWsClient?: FeishuLongConnectionOptions["createClient"];
     readonly omaFetch?: typeof fetch;
@@ -128,6 +139,7 @@ export const createMatterService = (
   const clientFor = (tenantId: string) => (tenantId === config.omaTenantId ? oma : null);
   const bridge = new OperationCallBridge();
   const providerFetch = overrides.fetch === undefined ? {} : { fetch: overrides.fetch };
+  const gitlab = createGitLabAdapter({ db, ...providerFetch });
   const host = createMatterHost({
     dataDir: config.dataDir,
     db,
@@ -141,6 +153,7 @@ export const createMatterService = (
         ...providerFetch,
         ...(overrides.createWsClient === undefined ? {} : { createWsClient: overrides.createWsClient }),
       }),
+      gitlab,
     ],
     onError:
       overrides.onError ??
@@ -160,6 +173,19 @@ export const createMatterService = (
       return principal?.tenantId === config.omaTenantId ? principal : null;
     },
   });
+  const connectGitLabHandler = createGitLabConnectHandler({
+    connect: connectGitLab(host, {
+      db,
+      ...providerFetch,
+      ...(config.publicUrl === undefined ? {} : { publicUrl: config.publicUrl }),
+    }),
+    db,
+    authorize: async (request) => {
+      const principal = await proxied(request);
+      return principal?.tenantId === config.omaTenantId ? principal : null;
+    },
+  });
+  const gitlabWebhooks = createGitLabWebhookHandler(gitlab);
   const mcp = createMatterMcpHandler({ bridge, tokens: db.tokens });
 
   const fetchHandler = async (request: Request): Promise<Response> => {
@@ -168,7 +194,12 @@ export const createMatterService = (
       return Response.json({ status: "ok", apps: host.running().length });
     }
     if (path === "/mcp") return mcp(request);
-    return (await connect(request)) ?? Response.json({ error: "not found" }, { status: 404 });
+    return (
+      (await gitlabWebhooks(request)) ??
+      (await connectGitLabHandler(request)) ??
+      (await connect(request)) ??
+      Response.json({ error: "not found" }, { status: 404 })
+    );
   };
 
   return {

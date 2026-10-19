@@ -978,6 +978,9 @@ importers:
       '@openma/matter-feishu':
         specifier: 0.2.3
         version: 0.2.3(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@larksuiteoapi/node-sdk@1.76.0)(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter-gitlab':
+        specifier: 0.2.3
+        version: 0.2.3(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-host-local':
         specifier: 0.2.3
         version: 0.2.3(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -6994,6 +6997,11 @@ packages:
     peerDependenciesMeta:
       '@larksuiteoapi/node-sdk':
         optional: true
+
+  '@openma/matter-gitlab@0.2.3':
+    resolution: {integrity: sha512-I3+bLOGettAFwC4qqsY5uXIC085DkbQj1KWKC8smdPac6zelHavc+/T71Q77qGRb01y2rEV8Tbc4tv9+UHyGrw==}
+    peerDependencies:
+      effect: ^3.22.1
 
   '@openma/matter-host-local@0.2.3':
     resolution: {integrity: sha512-B+FMHIhqPBV/VFNgWs95R4MKjVp8YSCnx56GXnk0SfpHc+Aik0u0V92UdMOwj7IW+4MibIDiH6bJUJsURTcTGQ==}
@@ -17012,6 +17020,19 @@ snapshots:
       effect: 3.22.1
     optionalDependencies:
       '@larksuiteoapi/node-sdk': 1.76.0
+    transitivePeerDependencies:
+      - '@anthropic-ai/sdk'
+      - '@types/react'
+      - '@types/react-dom'
+      - react
+      - react-dom
+      - supports-color
+
+  '@openma/matter-gitlab@0.2.3(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      '@openma/matter': 0.2.3(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter-loop': 0.2.3
+      effect: 3.22.1
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
       - '@types/react'

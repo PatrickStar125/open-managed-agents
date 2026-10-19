@@ -346,6 +346,36 @@ its `mcp_toolset` to the chosen Agent, with `always_allow`: no one is there to
 approve a tool call made from a chat. Each chat gets a session whose Vault
 holds the bearer for that server; replies go out as the bot.
 
+### GitLab merge request mentions
+
+The same Matter process answers GitLab merge request comments that mention a
+bot user (the `gitlab-mention` Loop). There is no Console page yet; connect an
+instance through the API (behind the control plane's `/matter/*` proxy):
+
+```bash
+curl -X POST "$OMA/matter/connect/gitlab" -H "x-api-key: $KEY" \
+  -H 'content-type: application/json' \
+  -d '{"baseUrl":"https://gitlab.example.com","token":"<bot token, api scope>",
+       "agentId":"<agent id>","projectIds":[42]}'
+# → {"id":"gitlab-…","username":"<bot>","webhookUrl":"…","webhookSecret":"…"}
+```
+
+Matter checks the token against `/api/v4/user` (the bot's username decides
+which comments mention it), adds the `openmatter` MCP server to the Agent as
+for Feishu, and returns the webhook URL and secret **once**. In each project,
+add a webhook with that URL, the secret as its token, and **Comments** events.
+`GET /matter/connect/gitlab` lists the connections without secrets.
+
+Unlike Feishu, GitLab calls in: `POST /webhooks/gitlab/<id>` must be reachable
+from the GitLab instance, directly on the Matter service (not through the
+Console proxy). Set `MATTER_PUBLIC_URL` to that origin so the returned
+`webhookUrl` is absolute. Each webhook is checked against its connection's
+secret and answered `202` only once it is in that connection's durable inbox
+(`MATTER_DATA_DIR/apps/<id>/`); otherwise `503`, and GitLab retries.
+Redeliveries are answered once. The reply is the Agent's final message, posted
+by the bot in the comment's thread. The token and webhook secret are encrypted
+with `MATTER_SECRET_KEY`.
+
 ## Operator gotchas
 
 Things I'd document if I were the on-call who got paged:

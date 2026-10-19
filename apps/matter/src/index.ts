@@ -6,3 +6,4 @@ export * from "./session-tokens.js";
 export * from "./feishu-connect.js";
 export * from "./adapter.js";
 export * from "./feishu-adapter.js";
+export * from "./gitlab-adapter.js";
