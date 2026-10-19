@@ -97,6 +97,9 @@ export interface NodeConfig {
     metricsToken: string | undefined;
     /** Legacy static API key accepted alongside per-tenant keys. */
     apiKey: string | undefined;
+    /** MATTER_URL + MATTER_PROXY_SECRET: the OpenMatter service the Console
+     * reaches under `/matter/*`. Unset: `/matter/*` answers 404. */
+    matter: { url: string; proxySecret: string } | undefined;
   };
   tunnels: { domainSuffix: string };
   skillSources: {
@@ -168,7 +171,14 @@ export function redactNodeConfig(config: NodeConfig): Record<string, unknown> {
     blobs: { memory: blob(config.blobs.memory), files: blob(config.blobs.files) },
     model: { ...config.model, apiKey: mask(config.model.apiKey) },
     managedWebhooks: { ...config.managedWebhooks, signingKey: mask(config.managedWebhooks.signingKey) },
-    http: { ...config.http, metricsToken: mask(config.http.metricsToken), apiKey: mask(config.http.apiKey) },
+    http: {
+      ...config.http,
+      metricsToken: mask(config.http.metricsToken),
+      apiKey: mask(config.http.apiKey),
+      matter: config.http.matter === undefined
+        ? undefined
+        : { url: maskUrl(config.http.matter.url), proxySecret: "***" },
+    },
     integrationsInternalToken: mask(config.integrationsInternalToken),
     email: config.email === null ? null : { ...config.email, pass: mask(config.email.pass) },
   };

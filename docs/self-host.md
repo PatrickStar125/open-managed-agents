@@ -297,6 +297,115 @@ both sides).
 The backends pass the same crash-recovery test surface (55 tests across
 adapter / recovery-logic / SIGKILL bootstrap / CF DO eviction).
 
+## Feishu (OpenMatter)
+
+The Console's **Integrations → Feishu** page connects an Agent to Feishu by
+scanning a QR code. It talks to the OpenMatter service (`apps/matter`) through
+the control plane, which proxies `/matter/*` to it after signing the user in:
+
+```bash
+# .env of the control plane
+MATTER_URL=http://matter:4720          # where the Matter service listens
+MATTER_PROXY_SECRET=<random string>    # the same value is given to Matter
+```
+
+Without `MATTER_URL`, `/matter/*` answers `404 {"error":"matter_not_configured"}`
+and the page says Feishu is not set up. The proxy never forwards the user's
+cookies, `Authorization` or `x-api-key`; Matter learns the tenant and user from
+`x-oma-tenant-id` / `x-oma-user-id`, which it trusts only together with the
+secret.
+
+### Running the Matter service
+
+`docker compose --profile feishu up -d` starts it next to `oma-server`, from
+the same image. Add to `.env`:
+
+```bash
+MATTER_URL=http://matter:4720
+MATTER_PROXY_SECRET=<openssl rand -hex 32>   # shared with oma-server
+MATTER_SECRET_KEY=<openssl rand -hex 32>     # seals Feishu app secrets at rest
+MATTER_OMA_API_KEY=<API key of the workspace Matter serves>
+MATTER_OMA_ENVIRONMENT_ID=<environment chat sessions run in>
+PLATFORM_ROOT_SECRET=<...>                   # Vault credentials need it
+```
+
+Outside compose, run `pnpm --filter @open-managed-agents/matter start` with
+`MATTER_PROXY_SECRET`, `MATTER_SECRET_KEY`, `OMA_URL`, `OMA_API_KEY` and
+`OMA_ENVIRONMENT_ID` set (optional: `MATTER_HOST`, `MATTER_PORT` (4720),
+`MATTER_DATA_DIR` (`./data/matter`), `MATTER_DATABASE_URL`, `MATTER_RECONCILE_MS`
+(15000), `MATTER_MCP_URL`, `OMA_TENANT_ID` (`default`)). It exits with code 2
+and lists every missing setting.
+
+A Matter service serves one workspace (the tenant of its API key). For each
+connected Feishu app it keeps a long connection to Feishu — no public webhook
+URL is needed — and a store and inbox of its own. App secrets are encrypted
+with `MATTER_SECRET_KEY`; the per-chat MCP tokens are stored only as hashes.
+
+**Workspaces.** With `OMA_API_KEY` the service acts in that key's workspace
+only (`OMA_TENANT_ID`, default `default`). Without it, it serves every
+workspace: it calls the API with the shared `MATTER_PROXY_SECRET` and the
+workspace id (`x-matter-proxy-secret` / `x-oma-tenant-id`), which the control
+plane accepts only when its own `MATTER_URL` and `MATTER_PROXY_SECRET` are
+set. New sessions run in `OMA_ENVIRONMENT_ID`, or else in the workspace's
+newest environment. GitLab webhooks reach Matter through the control plane at
+`/webhooks/gitlab/<id>` as well, so `MATTER_PUBLIC_URL` can be the control
+plane's public URL.
+
+**Images.** Images on a Feishu message are downloaded with the app's
+credentials (scope `im:resource`, part of the app preset) and shown to the
+Agent, up to 5 per message.
+
+**State.** Without `MATTER_DATABASE_URL`, one process keeps everything in
+SQLite under `MATTER_DATA_DIR` (`matter.sqlite`, and `apps/<id>/` per
+connection): fine for compose, a single replica only. With
+`MATTER_DATABASE_URL=mysql://…` the process keeps no state of its own; run
+as many replicas as you like behind one address, with the same
+`MATTER_SECRET_KEY`. The tables (`openmatter_*`) are created on start and
+can share the control plane's database. Every replica runs every connection:
+Feishu delivers each event to one of the app's long connections, the inbox
+hands each stored event to one replica, a "Connect Feishu" registration is
+polled under a lease by one replica at a time, and an MCP tool call may land
+on any replica (the call and its answer meet in the database). A replica picks
+up connections saved by another within `MATTER_RECONCILE_MS`, or at once when
+a GitLab webhook for one arrives.
+
+Connecting an app adds an `openmatter` MCP server (URL `MATTER_MCP_URL`) and
+its `mcp_toolset` to the chosen Agent, with `always_allow`: no one is there to
+approve a tool call made from a chat. Each chat gets a session whose Vault
+holds the bearer for that server; replies go out as the bot.
+
+### GitLab merge request mentions
+
+The same Matter process answers GitLab merge request comments that mention a
+bot user (the `gitlab-mention` Loop). There is no Console page yet; connect an
+instance through the API (behind the control plane's `/matter/*` proxy):
+
+```bash
+curl -X POST "$OMA/matter/connect/gitlab" -H "x-api-key: $KEY" \
+  -H 'content-type: application/json' \
+  -d '{"baseUrl":"https://gitlab.example.com","token":"<bot token, api scope>",
+       "agentId":"<agent id>","projectIds":[42]}'
+# → {"id":"gitlab-…","username":"<bot>","webhookUrl":"…","webhookSecret":"…"}
+```
+
+Matter checks the token against `/api/v4/user` (the bot's username decides
+which comments mention it), adds the `openmatter` MCP server to the Agent as
+for Feishu, and returns the webhook URL and secret **once**. In each project,
+add a webhook with that URL, the secret as its token, and **Comments** events.
+`GET /matter/connect/gitlab` lists the connections without secrets.
+
+Unlike Feishu, GitLab calls in: `POST /webhooks/gitlab/<id>` must be reachable
+from the GitLab instance, directly on the Matter service (not through the
+Console proxy). Set `MATTER_PUBLIC_URL` to that origin so the returned
+`webhookUrl` is absolute. Each webhook is checked against its connection's
+secret and answered `202` only once it is in that connection's durable inbox
+; otherwise `503`, and GitLab retries.
+Redeliveries are answered once. The reply is the Agent's final message, posted
+by the bot in the comment's thread, so the Agent's instructions must not tell
+it to answer through a tool (an Agent written for Feishu, which replies through
+its reply tool, will instead explain that it has no such tool). The token and webhook secret are encrypted
+with `MATTER_SECRET_KEY`.
+
 ## Operator gotchas
 
 Things I'd document if I were the on-call who got paged:

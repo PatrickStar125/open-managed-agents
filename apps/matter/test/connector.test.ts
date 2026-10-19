@@ -168,6 +168,10 @@ describe("execute", () => {
       type: "user.message",
       content: [{ type: "text", text: "hello" }],
     });
+    // The MCP server lists the Turn's tools for this Session.
+    expect((await bridge.tools("matter-session-1")).map((tool) => tool.name)).toEqual([
+      "feishu.message.reply",
+    ]);
   });
 
   it("ignores events of an earlier Turn already in the log", async () => {
@@ -317,6 +321,63 @@ describe("execute", () => {
     expect(replay.at(-1)?.type).toBe("turn.completed");
     const sent = oma.sessions.get(id)!.events.filter((e) => e.type === "user.message");
     expect(sent).toHaveLength(1);
+  });
+
+  it("ignores user events echoed on the stream", async () => {
+    const id = oma.createSession("t");
+    oma.echoUserEvents = true;
+    respondOnMessage([message("hi"), idle]);
+    const events = await collect(
+      makeConnector().execute(
+        { connectorId: "openma", externalSessionId: id, placement: "managed" },
+        turn("turn-1"),
+      ),
+    );
+    expect(events.map((e) => e.type)).toEqual(["agent.message", "turn.completed"]);
+  });
+
+  it("does not repeat an event that is both listed and streamed", async () => {
+    const id = oma.createSession("t");
+    respondOnMessage([running]);
+    const connector = makeConnector();
+    const handle = { connectorId: "openma", externalSessionId: id, placement: "managed" as const };
+    const first = connector.execute(handle, turn("turn-1"))[Symbol.asyncIterator]();
+    await first.next();
+    await first.return?.(undefined);
+    // Appended after the replay's stream opened and before its list answers.
+    oma.onList = (sessionId) => {
+      oma.onList = () => undefined;
+      oma.append(sessionId, message("both"));
+      setTimeout(() => oma.append(sessionId, idle), 0);
+    };
+    const replay = await collect(connector.execute(handle, turn("turn-1")));
+    expect(replay.filter((e) => e.type === "agent.message")).toHaveLength(1);
+    expect(replay.at(-1)?.type).toBe("turn.completed");
+  });
+
+  it("reads a repeated Turn back across pages of the event list", async () => {
+    const id = oma.createSession("t");
+    oma.append(id, { type: "user.message", content: [] });
+    oma.append(id, message("earlier"));
+    oma.append(id, idle);
+    const many = Array.from({ length: 150 }, (_, i) => message(`m${i}`));
+    respondOnMessage([running, ...many]);
+    const connector = makeConnector();
+    const handle = { connectorId: "openma", externalSessionId: id, placement: "managed" as const };
+    const first = connector.execute(handle, turn("turn-1"))[Symbol.asyncIterator]();
+    await first.next();
+    await first.return?.(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    oma.append(id, idle);
+
+    const replay = await collect(connector.execute(handle, turn("turn-1")));
+    const texts = replay
+      .filter((e) => e.type === "agent.message")
+      .map((e) => (e.data as { text?: string }).text);
+    expect(texts).toEqual(many.map((m) => m.content[0]!.text));
+    expect(replay.at(-1)?.type).toBe("turn.completed");
+    const pages = oma.requests.filter((r) => r.method === "GET" && r.path.includes("/events?"));
+    expect(pages.length).toBeGreaterThan(1);
   });
 
   it("fails the Turn when the session is terminated", async () => {

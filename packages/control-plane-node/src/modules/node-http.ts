@@ -16,6 +16,7 @@
  */
 
 import { serveStatic } from "@hono/node-server/serve-static";
+import { buildMatterProxyRoutes, buildMatterWebhookRoutes, matterTrustedAuth } from "../lib/matter-proxy.js";
 import { Hono } from "hono";
 import { OpenAIAgentsProtocolError } from "@open-managed-agents/openai-agents-api";
 import { createArtifactsHandler, createManagedSessionMapping, createResourcesHandler, createSessionsHandler } from "@open-managed-agents/openai-agents-compat";
@@ -292,7 +293,8 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
       auth_credential?: ApiKeyResolution["credential"];
     };
   }>();
-  v1.use("*", authMw);
+  // The Matter service acts in a workspace with the shared proxy secret.
+  v1.use("*", config.http.matter ? matterTrustedAuth(config.http.matter.proxySecret, authMw) : authMw);
 
   v1.post("/oma/sessions/:sessionId/runtime-events", async (c) => {
     const credential = c.get("auth_credential");
@@ -916,6 +918,18 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
       return { execute: request => request.operation.startsWith("sessions.") ? sessions.execute(request) : resources(request) };
     },
   }));
+
+  // ─── OpenMatter (apps/matter), for the Console ──────────────────────────
+  // Signed-in users only; Matter learns the tenant and user from trusted
+  // proxy headers. Unconfigured: a JSON 404 (never the SPA's index.html).
+  app.use("/matter/*", authMw);
+  if (config.http.matter) {
+    app.route("/matter", buildMatterProxyRoutes(config.http.matter));
+    // GitLab calls these directly; Matter checks the per-connection secret.
+    app.route("/webhooks/gitlab", buildMatterWebhookRoutes(config.http.matter));
+  } else {
+    app.all("/matter/*", (c) => c.json({ error: "matter_not_configured" }, 404));
+  }
 
   // ─── Integrations gateway (OAuth callbacks, setup pages, Linear MCP,
   // GitHub internal refresh, webhooks) — mounted on `app` (NOT under /v1)

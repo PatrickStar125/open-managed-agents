@@ -4,7 +4,7 @@ import { useParams, Link, useNavigate } from "react-router";
 import { useApi } from "../lib/api";
 import { useApiQuery, useQueryClient } from "../lib/useApiQuery";
 import { useManagedApi } from "../lib/useManagedApi";
-import { FeishuIcon, GitHubIcon, LinearIcon, SlackIcon } from "../components/icons";
+import { GitHubIcon, LinearIcon, SlackIcon } from "../components/icons";
 import { Page } from "../components/Page";
 import { PageHeader } from "../components/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -72,11 +72,6 @@ export function AgentDetail() {
     undefined,
     { enabled },
   );
-  const { data: feishuRes } = useApiQuery<{ data: Pub[] }>(
-    id ? `/v1/oma/integrations/feishu/agents/${id}/publications` : null,
-    undefined,
-    { enabled },
-  );
 
   // Aux data for the edit dialog pickers — same sources as AgentsList.
   useEffect(() => {
@@ -129,10 +124,6 @@ export function AgentDetail() {
   const slackPubs = useMemo(
     () => (slackRes?.data ?? []).filter((p) => p.status === "live"),
     [slackRes],
-  );
-  const feishuPubs = useMemo(
-    () => (feishuRes?.data ?? []).filter((p) => p.status === "live"),
-    [feishuRes],
   );
 
   const error = agentError instanceof Error ? agentError.message : agentError ? String(agentError) : "";
@@ -236,13 +227,6 @@ export function AgentDetail() {
             pubs={slackPubs}
             agentId={agent.id}
           />
-          <IntegrationFold
-            kind="feishu"
-            label="Feishu"
-            icon={<FeishuIcon className="w-4 h-4" />}
-            pubs={feishuPubs}
-            agentId={agent.id}
-          />
         </div>
       </section>
 
@@ -312,7 +296,7 @@ function IntegrationFold({
   pubs,
   agentId,
 }: {
-  kind: "linear" | "github" | "slack" | "feishu";
+  kind: "linear" | "github" | "slack";
   label: string;
   icon: React.ReactNode;
   pubs: Pub[];

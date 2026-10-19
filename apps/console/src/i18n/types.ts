@@ -265,4 +265,30 @@ export interface Messages {
     noMatchingRuntimes: string;
     noRuntimesYet: string;
   };
+  // Connect Feishu (OpenMatter)
+  feishuConnect: {
+    title: string;
+    intro: string;
+    agent: string;
+    chooseAgent: string;
+    noAgents: string;
+    start: string;
+    restart: string;
+    starting: string;
+    qrAlt: string;
+    openIn: string;
+    waiting: string;
+    created: string;
+    checking: string;
+    checkUnavailable: string;
+    ready: string;
+    fixes: string;
+    expired: string;
+    denied: string;
+    failed: string;
+    statusFailed: string;
+    startFailed: string;
+    notConfigured: string;
+    unavailable: string;
+  };
 }
