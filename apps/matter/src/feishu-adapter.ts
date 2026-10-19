@@ -61,6 +61,9 @@ const tenantTokens = (app: FeishuAppRecord, doFetch?: typeof fetch) => {
 
 export const FEISHU_ADAPTER_KIND = "feishu";
 
+/** Feishu `emoji_type` added to a message when the bot takes it. */
+export const FEISHU_ACKNOWLEDGE_EMOJI = "Get";
+
 export const createFeishuAdapter = (
   options: FeishuAdapterOptions,
 ): MatterAdapter<FeishuAppConnection> => ({
@@ -80,7 +83,12 @@ export const createFeishuAdapter = (
           ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         }),
       },
-      install: (application) => application.loop(feishuAgent, { agentId: app.agentId }),
+      install: (application) =>
+        application.loop(feishuAgent, {
+          agentId: app.agentId,
+          // The "GET" (了解) reaction on a message the bot took.
+          acknowledge: FEISHU_ACKNOWLEDGE_EMOJI,
+        }),
       source: makeFeishuLongConnectionSource({
         baseUrl: app.baseUrl,
         appId: app.appId,
