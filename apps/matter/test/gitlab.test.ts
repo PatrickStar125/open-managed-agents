@@ -66,6 +66,7 @@ let oma: FakeOma;
 let gitlab: FakeGitLab;
 let services: MatterService[];
 let config: MatterConfig;
+let baseEnv: Record<string, string>;
 
 const start = async () => {
   const service = await createMatterService(config, {
@@ -113,7 +114,7 @@ beforeEach(() => {
   oma.agents.set("agent-1", { id: "agent-1", version: 1, mcp_servers: [], tools: [] });
   gitlab = new FakeGitLab();
   services = [];
-  config = loadMatterConfig({
+  baseEnv = {
     MATTER_DATA_DIR: dir,
     MATTER_PROXY_SECRET: "proxy-secret",
     MATTER_SECRET_KEY: "a-long-enough-secret-key",
@@ -122,7 +123,8 @@ beforeEach(() => {
     OMA_ENVIRONMENT_ID: "env_1",
     MATTER_MCP_URL: "https://matter.test/mcp",
     MATTER_PUBLIC_URL: "https://matter.example.com/",
-  });
+  };
+  config = loadMatterConfig(baseEnv);
 });
 
 afterEach(async () => {
@@ -131,6 +133,32 @@ afterEach(async () => {
 });
 
 const valid = { baseUrl: `${BASE}/`, token: TOKEN, agentId: "agent-1", projectIds: [42, "42"] };
+
+describe("without an API key", () => {
+  it("acts in the caller's workspace through the trusted headers and its newest environment", async () => {
+    oma.trustSecret = "proxy-secret";
+    oma.environments = [{ id: "env_old", archived_at: "2026-01-01T00:00:00Z" }, { id: "env_ws" }];
+    const { OMA_API_KEY: _k, OMA_ENVIRONMENT_ID: _e, ...env } = baseEnv;
+    config = loadMatterConfig(env);
+    const service = await start();
+    const created = await connect(service, valid, { ...proxied, "x-oma-tenant-id": "tn_team" });
+    expect(created.status).toBe(201);
+    const result = (await created.json()) as { id: string; webhookSecret: string };
+    oma.responder = (_sessionId, event) =>
+      event.type === "user.message"
+        ? [
+            { type: "agent.message", id: "msg_1", content: [{ type: "text", text: "Hi." }] },
+            { type: "session.status_idle", stop_reason: { type: "end_turn" } },
+          ]
+        : undefined;
+    expect((await webhook(service, `/webhooks/gitlab/${result.id}`, result.webhookSecret, note("@oma-bot hi"))).status).toBe(202);
+    await waitFor(() => gitlab.notes[0]);
+    // Every OpenMA call was made as that workspace, with no API key.
+    expect(oma.requests.length).toBeGreaterThan(0);
+    expect(oma.requests.every((r) => r.tenant === "tn_team")).toBe(true);
+    expect([...oma.sessions.values()][0]).toMatchObject({ environment_id: "env_ws" });
+  });
+});
 
 describe("GitLab connections", () => {
   it("connects an instance, answers a mention from a webhook in the same thread, and survives a restart", async () => {

@@ -5,6 +5,7 @@
  */
 
 import {
+  downloadFeishuMessageResource,
   feishuAgent,
   inspectFeishuApp,
   makeFeishuIntegration,
@@ -90,6 +91,18 @@ export const createFeishuAdapter = (
           // The "GET" (了解) reaction on a message the bot took.
           acknowledge: FEISHU_ACKNOWLEDGE_EMOJI,
         }),
+      image: async (event, image) => {
+        const payload = (event.payload ?? {}) as { messageId?: unknown };
+        if (typeof payload.messageId !== "string") return undefined;
+        return Effect.runPromise(
+          downloadFeishuMessageResource({
+            credentials: () => credentials(),
+            messageId: payload.messageId,
+            fileKey: image.id,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+          }),
+        );
+      },
       source: makeFeishuLongConnectionSource({
         baseUrl: app.baseUrl,
         appId: app.appId,

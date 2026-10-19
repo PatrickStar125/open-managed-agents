@@ -21,6 +21,7 @@ import { isSafeConnectionKey, type MatterAdapter, type MatterConnection } from "
 import { createOpenMAConnector, isOmaSessionUnavailable } from "./connector.js";
 import type { OmaClient, OmaMcpServer } from "./oma-client.js";
 import type { MatterDatabase } from "./persistence.js";
+import { withImages } from "./images.js";
 import { sessionVaults } from "./session-tokens.js";
 import type { OperationCallBridge } from "./tool-bridge.js";
 
@@ -36,8 +37,9 @@ export interface MatterHostOptions {
   /** The Matter MCP endpoint as OpenMA reaches it. */
   readonly mcpServerUrl: string;
   readonly mcpServerName?: string;
-  /** The OpenMA environment new sessions run in. */
-  readonly environmentId: string;
+  /** The OpenMA environment new sessions run in: one for every workspace,
+   * or found per workspace. */
+  readonly environmentId: string | ((tenantId: string) => Promise<string>);
   /** Every kind of connection the service runs. Keys must not collide. */
   readonly adapters: readonly MatterAdapter<MatterConnection>[];
   readonly onError?: (error: unknown, key: string) => void;
@@ -142,7 +144,10 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       return;
     }
     const { store, inbox } = options.db.connectionStorage(key);
+    const wiring = adapter.wire(connection, (error) => report(error, key));
+    const image = wiring.image;
     const connector = createOpenMAConnector({
+      ...(image === undefined ? {} : { content: (content) => withImages(content, image) }),
       client,
       bridge: options.bridge,
       mcpServerName,
@@ -151,9 +156,11 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
         tokens: options.db.tokens,
         mcpServerUrl: options.mcpServerUrl,
       }),
-      environmentId: options.environmentId,
+      environmentId:
+        typeof options.environmentId === "string"
+          ? options.environmentId
+          : () => (options.environmentId as (tenantId: string) => Promise<string>)(connection.tenantId),
     });
-    const wiring = adapter.wire(connection, (error) => report(error, key));
     const application = createOpenMatter({
       store,
       integrations: wiring.integrations,

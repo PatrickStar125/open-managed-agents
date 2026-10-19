@@ -460,6 +460,16 @@ export const MATTER_PROXY_HEADERS = {
 const digest = (value: string) => createHash("sha256").update(value, "utf8").digest();
 
 /**
+ * Headers with which the Matter service calls the OpenMA API as one
+ * workspace, without an API key: the control plane trusts the tenant header
+ * only alongside the shared proxy secret (the same pair it sends to Matter).
+ */
+export const matterTrustHeaders = (secret: string, tenantId: string): Record<string, string> => ({
+  [MATTER_PROXY_HEADERS.secret]: secret,
+  [MATTER_PROXY_HEADERS.tenant]: tenantId,
+});
+
+/**
  * `authorize` for a Matter service reached only through the OpenMA control
  * plane: trusts the tenant and user headers when the request carries the
  * shared proxy secret.

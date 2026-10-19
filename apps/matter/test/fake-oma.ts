@@ -41,7 +41,10 @@ export class FakeOma {
       tools?: Record<string, unknown>[];
     }
   >();
-  readonly requests: { method: string; path: string; body?: unknown }[] = [];
+  readonly requests: { method: string; path: string; body?: unknown; tenant?: string }[] = [];
+  /** Accept the control plane's trusted-proxy headers with this secret. */
+  trustSecret: string | undefined;
+  environments: { id: string; archived_at?: string | null }[] = [{ id: "env_listed" }];
   apiKey = "test-key";
   responder: Responder = () => undefined;
   /** Echo user events on the stream too (the API does not promise either). */
@@ -88,11 +91,17 @@ export class FakeOma {
     const headers = new Headers(init?.headers);
     const body =
       typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined;
-    this.requests.push({ method, path: url.pathname + url.search, body });
-    if (headers.get("x-api-key") !== this.apiKey) {
+    const tenant = headers.get("x-oma-tenant-id") ?? undefined;
+    const trusted =
+      this.trustSecret !== undefined && headers.get("x-matter-proxy-secret") === this.trustSecret && tenant !== undefined;
+    this.requests.push({ method, path: url.pathname + url.search, body, ...(trusted ? { tenant } : {}) });
+    if (!trusted && headers.get("x-api-key") !== this.apiKey) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
     const parts = url.pathname.split("/").filter(Boolean);
+    if (parts[0] === "v1" && parts[1] === "environments" && parts.length === 2 && method === "GET") {
+      return Response.json({ data: this.environments });
+    }
     if (parts[0] === "v1" && parts[1] === "vaults" && method === "POST") {
       if (parts.length === 2) {
         const displayName = (body as { display_name?: unknown }).display_name;
