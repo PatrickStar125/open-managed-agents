@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useScrollFade } from "../hooks/useScrollFade";
 import { useApi } from "../lib/api";
 import { useApiQuery } from "../lib/useApiQuery";
 import { Button } from "@/components/ui/button";
@@ -111,6 +112,7 @@ export function CliLogin() {
   const [authNeeded, setAuthNeeded] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string>("");
+  const listFade = useScrollFade<HTMLDivElement>();
 
   // /v1/oma/me lookup via TQ. `enabled: callbackOk` defers the fetch until
   // we've validated the callback URL — an invalid callback short-circuits
@@ -326,7 +328,10 @@ export function CliLogin() {
                     </Button>
                   </span>
                 </div>
-                <div className="console-cli-workspace-list">
+                <div
+                  ref={listFade.ref}
+                  className={`console-cli-workspace-list console-scroll-fade ${listFade.className}`}
+                >
                   {me.tenants.map((t) => {
                     const isSelected = selected.has(t.id);
                     const display = tenantDisplayName(t);
@@ -407,3 +412,4 @@ function WorkspaceCopy({
     </span>
   );
 }
+

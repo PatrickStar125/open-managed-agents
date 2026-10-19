@@ -4,6 +4,7 @@
 // route is absent the console hides these controls.
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useScrollFade } from "@/hooks/useScrollFade";
 import { Modal } from "./Modal";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -129,6 +130,7 @@ export function InstallFromUrlModal({
   initialUrl?: string;
 }) {
   const { api } = useApi();
+  const listFade = useScrollFade<HTMLUListElement>();
   const [url, setUrl] = useState(initialUrl);
   const [found, setFound] = useState<{ url: string; skills: DiscoveredSkill[] } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -272,7 +274,7 @@ export function InstallFromUrlModal({
                   {allSelected ? "Clear selection" : "Select all"}
                 </Button>
               </div>
-              <ul className="border border-border rounded-lg divide-y divide-border max-h-80 overflow-y-auto">
+              <ul ref={listFade.ref} className={`console-scroll-fade ${listFade.className} border border-border rounded-lg divide-y divide-border max-h-80 overflow-y-auto`}>
                 {found.skills.map((s) => (
                   <li key={s.name}>
                     <Label className="flex items-start gap-3 px-3 py-2 cursor-pointer font-normal hover:bg-bg-surface/60">

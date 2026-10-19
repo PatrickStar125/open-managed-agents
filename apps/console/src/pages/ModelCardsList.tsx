@@ -1,4 +1,5 @@
 import { Input } from "@/components/ui/input";
+import { useScrollFade } from "@/hooks/useScrollFade";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -48,6 +49,7 @@ const INITIAL_FORM = {
 export function ModelCardsList() {
   const { api } = useApi();
   const { t } = useI18n();
+  const suggestFade = useScrollFade<HTMLDivElement>();
   const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ ...INITIAL_FORM });
@@ -463,7 +465,7 @@ export function ModelCardsList() {
               placeholder={form.model_id || "e.g. claude-sonnet-4-6, deepseek-v4-flash, org/model"}
               autoComplete="off" name="model-field" />
             {showModelSuggestions && availableModels.length > 0 && (
-              <div className="absolute z-10 w-full mt-1 bg-bg border border-border rounded-md shadow-lg py-1 max-h-48 overflow-y-auto">
+              <div ref={suggestFade.ref} className={`console-scroll-fade ${suggestFade.className} absolute z-10 w-full mt-1 bg-bg border border-border rounded-md shadow-lg py-1 max-h-48 overflow-y-auto`}>
                 {availableModels
                   .filter((m) => !form.model || m.id.includes(form.model) || m.name.toLowerCase().includes(form.model.toLowerCase()))
                   .map((m) => (
