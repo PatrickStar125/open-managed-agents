@@ -14,12 +14,12 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.76.0",
     "@openma/common": "^0.9.1",
-    "@openma/matter": "0.2.3",
-    "@openma/matter-feishu": "0.2.3",
-    "@openma/matter-gitlab": "0.2.3",
-    "@openma/matter-host-local": "0.2.3",
-    "@openma/matter-inbox-sqlite": "0.2.3",
-    "@openma/matter-store-sqlite": "0.2.3",
+    "@openma/matter": "0.2.4",
+    "@openma/matter-feishu": "0.2.4",
+    "@openma/matter-gitlab": "0.2.4",
+    "@openma/matter-host-local": "0.2.4",
+    "@openma/matter-inbox-sqlite": "0.2.4",
+    "@openma/matter-store-sqlite": "0.2.4",
     "effect": "3.22.1",
     "qrcode": "^1.5.4"
   },
