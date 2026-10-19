@@ -680,3 +680,136 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* CLI authorization page: workspace picker rows mirror the sidebar
+   TenantSwitcher menu instead of the old fixed-height divider list. Short
+   membership lists grow naturally; the stack only scrolls once it exceeds
+   roughly five rows. */
+.console-cli-workspace-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--console-gap-lg);
+  margin-bottom: var(--console-gap-lg);
+  color: var(--fg-muted);
+  font-size: var(--console-type-label);
+  line-height: var(--type-line);
+}
+
+.console-cli-workspace-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--console-gap-sm);
+  color: var(--fg-subtle);
+}
+
+.console-cli-workspace-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: var(--console-type-label);
+  line-height: var(--type-line);
+  cursor: pointer;
+}
+
+.console-cli-workspace-action:hover {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: var(--console-gap-3xs);
+}
+
+.console-cli-workspace-list {
+  display: flex;
+  /* Rows share the TenantSwitcher's --menu-action-row-h; show ~5.5 rows
+     before scrolling so the half-row cue signals more content. */
+  max-height: calc(
+    (var(--menu-action-row-h) + var(--sidebar-pill-gap)) * 5.5 +
+    var(--console-pad-xs) * 2
+  );
+  flex-direction: column;
+  gap: var(--sidebar-pill-gap);
+  overflow-y: auto;
+  padding: var(--console-pad-xs);
+  border: thin solid var(--border-chrome);
+  border-radius: var(--console-radius-card);
+  background: var(--surface-route);
+}
+
+.console-cli-workspace-item {
+  display: flex;
+  width: 100%;
+  height: var(--menu-action-row-h);
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--console-gap-lg);
+  border: 0;
+  border-radius: var(--console-radius-md);
+  padding: 0 var(--console-pad-sm);
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--console-type-body);
+  line-height: var(--type-line);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-quick) var(--ease-soft);
+}
+
+.console-cli-workspace-item:hover {
+  background: var(--surface-row-hover);
+}
+
+.console-cli-workspace-item[data-static="true"] {
+  cursor: default;
+}
+
+.console-cli-workspace-item[data-static="true"]:hover {
+  background: transparent;
+}
+
+.console-cli-workspace-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.console-cli-workspace-name {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--console-type-body);
+  line-height: calc(var(--menu-action-row-h) / 2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-cli-workspace-meta {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--console-gap-sm);
+  color: var(--fg-subtle);
+  font-family: var(--font-sans);
+  font-size: var(--console-type-label);
+  line-height: calc(var(--menu-action-row-h) / 2);
+}
+
+.console-cli-workspace-role {
+  flex: 0 0 auto;
+  color: var(--fg-subtle);
+  font-family: var(--font-sans);
+  font-size: var(--console-type-label);
+}
+
+.console-cli-workspace-id {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--console-type-label);
+  opacity: 0.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
