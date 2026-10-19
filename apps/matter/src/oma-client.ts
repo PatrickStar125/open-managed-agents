@@ -24,9 +24,10 @@ export interface OmaSession {
 }
 
 /** A stored session event as served by `GET /v1/sessions/:id/events`. */
+/** A session event as the Managed Agents API returns it. Events carry an
+ * `id` but no sequence number. */
 export interface OmaEvent {
   readonly type: string;
-  readonly seq?: number;
   readonly id?: string;
   readonly [key: string]: unknown;
 }
@@ -100,19 +101,24 @@ export interface OmaClient {
   /** Sessions of one Agent whose title matches `query` (server-side search). */
   findSessions(agentId: string, query: string): Promise<readonly OmaSession[]>;
   archiveSession(sessionId: string): Promise<void>;
+  /** Append events; resolves with the events as stored (with their ids). */
   sendEvents(
     sessionId: string,
     events: readonly Record<string, unknown>[],
-  ): Promise<void>;
+  ): Promise<readonly OmaEvent[]>;
+  /** One page of the session's event log, oldest first. */
+  listEvents(
+    sessionId: string,
+    options?: { readonly page?: string; readonly limit?: number },
+  ): Promise<{ readonly data: readonly OmaEvent[]; readonly nextPage?: string }>;
   /**
-   * Stream session events. With `afterSeq`, the server replays persisted
-   * events after that sequence before tailing; without it, only events
-   * appended after the stream opened arrive. Resolves once the stream is
-   * open, so a caller can open it before sending the event it waits for.
+   * Stream events appended after the stream opened; nothing is replayed.
+   * Resolves once the stream is open, so a caller can open it before sending
+   * the event it waits for.
    */
   streamEvents(
     sessionId: string,
-    options: { readonly afterSeq?: number; readonly signal?: AbortSignal },
+    options?: { readonly signal?: AbortSignal },
   ): Promise<AsyncIterable<OmaEvent>>;
 }
 
@@ -229,17 +235,33 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
       });
     },
     sendEvents: async (sessionId, events) => {
-      const response = await request(
-        `/v1/sessions/${encodeURIComponent(sessionId)}/events`,
-        { method: "POST", body: JSON.stringify({ events }) },
+      const sent = await json<{ data?: OmaEvent[] }>(
+        await request(`/v1/sessions/${encodeURIComponent(sessionId)}/events`, {
+          method: "POST",
+          body: JSON.stringify({ events }),
+        }),
       );
-      await response?.body?.cancel();
+      return sent?.data ?? [];
     },
-    streamEvents: async (sessionId, { afterSeq, signal }) => {
+    listEvents: async (sessionId, { page, limit } = {}) => {
+      const params = new URLSearchParams({ order: "asc", limit: String(limit ?? 100) });
+      if (page !== undefined) params.set("page", page);
+      const result = await json<{ data?: OmaEvent[]; next_page?: string | null }>(
+        await request(
+          `/v1/sessions/${encodeURIComponent(sessionId)}/events?${params.toString()}`,
+        ),
+      );
+      return {
+        data: result?.data ?? [],
+        ...(typeof result?.next_page === "string" && result.next_page !== ""
+          ? { nextPage: result.next_page }
+          : {}),
+      };
+    },
+    streamEvents: async (sessionId, { signal } = {}) => {
       const headers: Record<string, string> = {
         accept: "text/event-stream",
       };
-      if (afterSeq !== undefined) headers["last-event-id"] = String(afterSeq);
       const response = await request(
         `/v1/sessions/${encodeURIComponent(sessionId)}/events/stream`,
         { headers, ...(signal === undefined ? {} : { signal }) },
@@ -254,7 +276,7 @@ export const createOmaClient = (options: OmaClientOptions): OmaClient => {
 
 /** Parse `data:` frames of a text/event-stream body into JSON events.
  * Comments, `event:`, `id:` and `retry:` lines are ignored; every event
- * carries its own `seq` and `type` in the JSON payload. */
+ * carries its own `id` and `type` in the JSON payload. */
 export async function* parseSse(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<OmaEvent> {
