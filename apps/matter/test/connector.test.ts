@@ -169,7 +169,7 @@ describe("execute", () => {
       content: [{ type: "text", text: "hello" }],
     });
     // The MCP server lists the Turn's tools for this Session.
-    expect(bridge.tools("matter-session-1").map((tool) => tool.name)).toEqual([
+    expect((await bridge.tools("matter-session-1")).map((tool) => tool.name)).toEqual([
       "feishu.message.reply",
     ]);
   });

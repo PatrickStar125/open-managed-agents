@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   createFeishuConnectHandler,
   FeishuConnectService,
+  memoryRegistrationStore,
   type FeishuConnection,
   type RegisteredFeishuApp,
   trustedProxyPrincipal,
@@ -104,6 +105,7 @@ const service = (
 const tick = async (svc: FeishuConnectService, id: string) => {
   const next = scheduled.shift();
   expect(next).toBeDefined();
+  clock += next!.ms;
   await svc.poll(id);
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
@@ -133,7 +135,7 @@ describe("FeishuConnectService", () => {
       REGISTERED,
     ];
     await tick(svc, id);
-    expect(svc.status(id, "t1")?.status).toBe("pending");
+    expect((await svc.status(id, "t1"))?.status).toBe("pending");
     expect(scheduled.map((s) => s.ms)).toEqual([8000]);
 
     await tick(svc, id);
@@ -147,7 +149,7 @@ describe("FeishuConnectService", () => {
         openId: "ou_confirmer",
       },
     ]);
-    const done = svc.status(id, "t1");
+    const done = (await svc.status(id, "t1"));
     expect(done).toMatchObject({
       status: "registered",
       appId: "cli_new",
@@ -175,7 +177,7 @@ describe("FeishuConnectService", () => {
     feishu.polls = [REGISTERED];
     await tick(svc, id);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const status = svc.status(id, "t1");
+    const status = (await svc.status(id, "t1"));
     expect(status?.status === "registered" && status.setup?.ready).toBe(false);
     expect(status?.status === "registered" && status.setup?.missingScopes.length).toBeGreaterThan(0);
   });
@@ -185,12 +187,12 @@ describe("FeishuConnectService", () => {
     const denied = await svc.begin(ME);
     feishu.polls = [{ status: 400, body: { error: "access_denied" } }];
     await tick(svc, denied.id);
-    expect(svc.status(denied.id, "t1")).toEqual({ status: "denied" });
+    expect((await svc.status(denied.id, "t1"))).toEqual({ status: "denied" });
 
     const expired = await svc.begin(ME);
     clock += 301_000;
     await tick(svc, expired.id);
-    expect(svc.status(expired.id, "t1")).toEqual({ status: "expired" });
+    expect((await svc.status(expired.id, "t1"))).toEqual({ status: "expired" });
     expect(saved).toEqual([]);
     expect(scheduled).toHaveLength(0);
   });
@@ -200,10 +202,10 @@ describe("FeishuConnectService", () => {
     const { id } = await svc.begin(ME);
     feishu.polls = [{ status: 500, body: {} }, REGISTERED];
     await tick(svc, id);
-    expect(svc.status(id, "t1")?.status).toBe("pending");
+    expect((await svc.status(id, "t1"))?.status).toBe("pending");
     expect(scheduled).toHaveLength(1);
     await tick(svc, id);
-    expect(svc.status(id, "t1")?.status).toBe("registered");
+    expect((await svc.status(id, "t1"))?.status).toBe("registered");
   });
 
   it("hands the host the tenant, user and chosen Agent with the app", async () => {
@@ -219,8 +221,8 @@ describe("FeishuConnectService", () => {
   it("hides a registration from other tenants", async () => {
     const svc = service();
     const { id } = await svc.begin(ME);
-    expect(svc.status(id, "t1")?.status).toBe("pending");
-    expect(svc.status(id, "t2")).toBeUndefined();
+    expect((await svc.status(id, "t1"))?.status).toBe("pending");
+    expect((await svc.status(id, "t2"))).toBeUndefined();
   });
 
   it("reports a failure when the host cannot save the app", async () => {
@@ -232,8 +234,44 @@ describe("FeishuConnectService", () => {
     const { id } = await svc.begin(ME);
     feishu.polls = [REGISTERED];
     await tick(svc, id);
-    expect(svc.status(id, "t1")).toMatchObject({ status: "failed" });
-    expect(JSON.stringify(svc.status(id, "t1"))).not.toContain("disk full");
+    expect((await svc.status(id, "t1"))).toMatchObject({ status: "failed" });
+    expect(JSON.stringify((await svc.status(id, "t1")))).not.toContain("disk full");
+  });
+
+  it("lets another replica take over a poll its starter abandoned", async () => {
+    const store = memoryRegistrationStore();
+    const make = (ownerId: string) =>
+      new FeishuConnectService({
+        onRegistered: async (connection) => {
+          saved.push(connection.app);
+        },
+        store,
+        ownerId,
+        leaseMs: 30_000,
+        fetch: feishu.fetch,
+        schedule: (task, ms) => scheduled.push({ task, ms }),
+        now: () => clock,
+      });
+    const first = make("replica-a");
+    const second = make("replica-b");
+    const { id } = await first.begin(ME);
+    // Replica B reads the status the browser asks for.
+    expect((await second.status(id, "t1"))?.status).toBe("pending");
+    // Not due yet: nobody polls.
+    await second.sweep();
+    expect(feishu.calls.filter((c) => c.endsWith("/oauth/v1/app/registration"))).toHaveLength(1);
+    // Replica A takes the poll and dies holding it.
+    clock += 3_000;
+    expect(await store.claim(id, "replica-a", clock, clock + 30_000)).toBeDefined();
+    feishu.polls = [REGISTERED];
+    await second.sweep();
+    expect(saved).toHaveLength(0);
+    // Its lease runs out; replica B polls and saves the app.
+    clock += 30_000;
+    await second.sweep();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(saved.map((app) => app.appId)).toEqual(["cli_new"]);
+    expect((await first.status(id, "t1"))?.status).toBe("registered");
   });
 
   it("marks the setup check unavailable when it cannot run", async () => {
@@ -255,7 +293,7 @@ describe("FeishuConnectService", () => {
     await tick(svc, id);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(saved).toHaveLength(1);
-    expect(svc.status(id, "t1")).toMatchObject({ status: "registered", setupUnavailable: true });
+    expect((await svc.status(id, "t1"))).toMatchObject({ status: "registered", setupUnavailable: true });
   });
 });
 

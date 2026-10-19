@@ -3,6 +3,11 @@
  * listener for the MCP endpoint, the "Connect Feishu" and "Connect GitLab"
  * APIs and GitLab webhooks, and the host
  * that runs every connection (see `adapter.ts`).
+ *
+ * With `MATTER_DATABASE_URL` (MySQL) the process keeps no state of its own:
+ * run as many replicas as needed behind one address; any replica serves any
+ * request. Without it, one process keeps everything in SQLite files under
+ * `MATTER_DATA_DIR`.
  */
 
 import { mkdirSync } from "node:fs";
@@ -25,13 +30,24 @@ import {
 import { createMatterHost, type MatterHost, type MatterHostOptions } from "./host.js";
 import { createMatterMcpHandler } from "./mcp-server.js";
 import { createOmaClient, type OmaClient } from "./oma-client.js";
-import { createSecretBox, openMatterDatabase, type MatterDatabase } from "./persistence.js";
+import {
+  createSecretBox,
+  openMysqlMatterDatabase,
+  openSqliteMatterDatabase,
+  type MatterDatabase,
+} from "./persistence.js";
 import { OperationCallBridge } from "./tool-bridge.js";
 
 export interface MatterConfig {
   readonly host: string;
   readonly port: number;
+  /** SQLite files when `databaseUrl` is unset. */
   readonly dataDir: string;
+  /** `mysql://…`: the database every replica shares (`MATTER_DATABASE_URL`). */
+  readonly databaseUrl?: string;
+  /** How often a replica brings its connections in line with the saved
+   * ones (`MATTER_RECONCILE_MS`, default 15 s). */
+  readonly reconcileMs: number;
   /** Shared with the OpenMA control plane (`MATTER_PROXY_SECRET`). */
   readonly proxySecret: string;
   /** Seals app secrets at rest. */
@@ -89,10 +105,21 @@ export const loadMatterConfig = (env: NodeJS.ProcessEnv): MatterConfig => {
   if (secretKey !== "" && secretKey.length < 16) {
     problems.push("MATTER_SECRET_KEY must be at least 16 characters");
   }
+  const databaseUrl = env.MATTER_DATABASE_URL || undefined;
+  if (databaseUrl !== undefined && !/^mysql:\/\//.test(databaseUrl)) {
+    problems.push("MATTER_DATABASE_URL must be a mysql:// URL");
+  }
+  const reconcileRaw = env.MATTER_RECONCILE_MS ?? "15000";
+  const reconcileMs = Number(reconcileRaw);
+  if (!Number.isInteger(reconcileMs) || reconcileMs < 1000) {
+    problems.push(`MATTER_RECONCILE_MS must be at least 1000; received ${JSON.stringify(reconcileRaw)}`);
+  }
   const config: MatterConfig = {
     host,
     port,
     dataDir: env.MATTER_DATA_DIR || "./data/matter",
+    ...(databaseUrl === undefined ? {} : { databaseUrl }),
+    reconcileMs,
     proxySecret,
     secretKey,
     omaUrl: url("OMA_URL"),
@@ -112,11 +139,29 @@ export interface MatterService {
   readonly db: MatterDatabase;
   /** What the "Connect Feishu" flow calls with a registered app. */
   readonly connectFeishu: (connection: FeishuConnection) => Promise<void>;
+  readonly feishuConnect: FeishuConnectService;
+  /** Start every connection, then keep them in line with the database and
+   * poll "Connect Feishu" registrations no replica holds. */
+  start(): Promise<void>;
   close(): Promise<void>;
 }
 
+/** The Matter database `config` names: MySQL, or SQLite under `dataDir`. */
+export const openConfiguredDatabase = async (
+  config: Pick<MatterConfig, "dataDir" | "databaseUrl" | "secretKey">,
+): Promise<MatterDatabase> => {
+  const box = createSecretBox(config.secretKey);
+  if (config.databaseUrl !== undefined) return openMysqlMatterDatabase({ url: config.databaseUrl, box });
+  mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
+  return openSqliteMatterDatabase({
+    filename: join(config.dataDir, "matter.sqlite"),
+    connectionsDir: join(config.dataDir, "apps"),
+    box,
+  });
+};
+
 /** Everything but the listener, so tests drive it with plain Requests. */
-export const createMatterService = (
+export const createMatterService = async (
   config: MatterConfig,
   overrides: Partial<Pick<MatterHostOptions, "onError">> & {
     /** Reaches the providers (Feishu, GitLab); tests pass a fake. */
@@ -124,24 +169,21 @@ export const createMatterService = (
     readonly createWsClient?: FeishuLongConnectionOptions["createClient"];
     readonly omaFetch?: typeof fetch;
     readonly feishuConnectFetch?: typeof fetch;
+    /** An open database instead of the configured one (tests). */
+    readonly db?: MatterDatabase;
   } = {},
-): MatterService => {
-  mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
-  const db = openMatterDatabase({
-    filename: join(config.dataDir, "matter.sqlite"),
-    box: createSecretBox(config.secretKey),
-  });
+): Promise<MatterService> => {
+  const db = overrides.db ?? (await openConfiguredDatabase(config));
   const oma: OmaClient = createOmaClient({
     baseUrl: config.omaUrl,
     apiKey: config.omaApiKey,
     ...(overrides.omaFetch === undefined ? {} : { fetch: overrides.omaFetch }),
   });
   const clientFor = (tenantId: string) => (tenantId === config.omaTenantId ? oma : null);
-  const bridge = new OperationCallBridge();
+  const bridge = new OperationCallBridge({ store: db.calls });
   const providerFetch = overrides.fetch === undefined ? {} : { fetch: overrides.fetch };
   const gitlab = createGitLabAdapter({ db, ...providerFetch });
   const host = createMatterHost({
-    dataDir: config.dataDir,
     db,
     bridge,
     clientFor,
@@ -162,11 +204,13 @@ export const createMatterService = (
   });
   const connectFeishu = connectFeishuApp(host, { db, ...providerFetch });
   const proxied = trustedProxyPrincipal(config.proxySecret);
+  const feishuConnect = new FeishuConnectService({
+    onRegistered: connectFeishu,
+    store: db.registrations,
+    ...(overrides.feishuConnectFetch === undefined ? {} : { fetch: overrides.feishuConnectFetch }),
+  });
   const connect = createFeishuConnectHandler({
-    service: new FeishuConnectService({
-      onRegistered: connectFeishu,
-      ...(overrides.feishuConnectFetch === undefined ? {} : { fetch: overrides.feishuConnectFetch }),
-    }),
+    service: feishuConnect,
     // Only the workspace this service can act in may connect apps.
     authorize: async (request) => {
       const principal = await proxied(request);
@@ -185,7 +229,7 @@ export const createMatterService = (
       return principal?.tenantId === config.omaTenantId ? principal : null;
     },
   });
-  const gitlabWebhooks = createGitLabWebhookHandler(gitlab);
+  const gitlabWebhooks = createGitLabWebhookHandler(gitlab, (key) => host.ensure(gitlab.kind, key));
   const mcp = createMatterMcpHandler({ bridge, tokens: db.tokens });
 
   const fetchHandler = async (request: Request): Promise<Response> => {
@@ -202,14 +246,40 @@ export const createMatterService = (
     );
   };
 
+  const timers: ReturnType<typeof setInterval>[] = [];
+  const every = (ms: number, task: () => Promise<unknown>) => {
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy) return;
+      busy = true;
+      void task()
+        .catch((error: unknown) =>
+          console.error("[matter] background task failed:", error instanceof Error ? error.message : error),
+        )
+        .finally(() => {
+          busy = false;
+        });
+    }, ms);
+    timer.unref?.();
+    timers.push(timer);
+  };
+
   return {
     fetch: fetchHandler,
     host,
     db,
     connectFeishu,
+    feishuConnect,
+    start: async () => {
+      await host.start();
+      every(config.reconcileMs, () => host.reconcile());
+      every(2_000, () => feishuConnect.sweep());
+      every(3_600_000, () => db.calls.prune(Date.now() - 86_400_000));
+    },
     close: async () => {
+      for (const timer of timers.splice(0)) clearInterval(timer);
       await host.stop();
-      db.close();
+      await db.close();
     },
   };
 };

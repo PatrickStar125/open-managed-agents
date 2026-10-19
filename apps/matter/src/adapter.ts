@@ -23,6 +23,9 @@ export interface MatterConnection {
   readonly agentId: string;
   /** Names the connection in logs and errors, for example `Feishu app cli_…`. */
   readonly label: string;
+  /** Changes whenever the saved connection changes; a replica running an
+   * older revision starts the connection again. */
+  readonly revision: string;
 }
 
 /** How one connection is wired into an OpenMatter application. */
@@ -39,14 +42,14 @@ export interface MatterAdapter<C extends MatterConnection = MatterConnection> {
   /** `feishu`, `gitlab`, … */
   readonly kind: string;
   /** Every saved connection of this kind. */
-  list(): readonly C[];
-  get(key: string): C | undefined;
+  list(): Promise<readonly C[]>;
+  get(key: string): Promise<C | undefined>;
   /** `report` receives errors the source sees after it started. */
   wire(connection: C, report: (error: unknown) => void): MatterWiring;
 }
 
 const SAFE_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-/** Whether `key` is safe as a directory name under `<dataDir>/apps/`. */
+/** Whether `key` is safe as a directory name (SQLite) or partition (MySQL). */
 export const isSafeConnectionKey = (key: string): boolean =>
   SAFE_KEY.test(key) && !key.includes("..");

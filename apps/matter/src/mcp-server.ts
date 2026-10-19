@@ -106,7 +106,7 @@ export const createMatterMcpHandler = (options: MatterMcpServerOptions) => {
           jsonrpc: "2.0",
           id,
           result: {
-            tools: options.bridge.tools(sessionId).map((tool) => ({
+            tools: (await options.bridge.tools(sessionId)).map((tool) => ({
               name: mcpToolName(tool.name),
               description: tool.description,
               inputSchema: tool.inputSchema,
@@ -119,9 +119,7 @@ export const createMatterMcpHandler = (options: MatterMcpServerOptions) => {
         if (typeof name !== "string" || !isRecord(args)) {
           return rpcError(id, INVALID_PARAMS, "tools/call needs a name and object arguments");
         }
-        const known = options.bridge
-          .tools(sessionId)
-          .some((tool) => mcpToolName(tool.name) === name);
+        const known = (await options.bridge.tools(sessionId)).some((tool) => mcpToolName(tool.name) === name);
         if (!known) {
           return rpcError(id, INVALID_PARAMS, `Unknown tool ${name}`);
         }

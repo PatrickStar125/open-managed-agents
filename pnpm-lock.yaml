@@ -984,7 +984,13 @@ importers:
       '@openma/matter-host-local':
         specifier: 0.2.4
         version: 0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter-inbox-mysql':
+        specifier: 0.2.4
+        version: 0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-inbox-sqlite':
+        specifier: 0.2.4
+        version: 0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter-store-mysql':
         specifier: 0.2.4
         version: 0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-store-sqlite':
@@ -993,6 +999,9 @@ importers:
       effect:
         specifier: 3.22.1
         version: 3.22.1
+      mysql2:
+        specifier: 3.15.3
+        version: 3.15.3
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -7008,6 +7017,12 @@ packages:
     peerDependencies:
       effect: ^3.22.1
 
+  '@openma/matter-inbox-mysql@0.2.4':
+    resolution: {integrity: sha512-xNlInNnwilLv4rZT7gIje2mgIS27uStfaCaoFeKFaWDfpvQ63Q+cwE6ElqUn9AiqpsYD/f/IXz5g2VO2GTV1CA==}
+    engines: {node: '>=22.13'}
+    peerDependencies:
+      effect: ^3.22.1
+
   '@openma/matter-inbox-sqlite@0.2.4':
     resolution: {integrity: sha512-dQYSKknMg7m9y/YhYNU90ovwx8/JANSI4UYatRhL0OJsFLn6ndyAKGrkb2wum+AJmaetcd+ojk24lAWEiboNLQ==}
     engines: {node: '>=22.5'}
@@ -7016,6 +7031,12 @@ packages:
 
   '@openma/matter-loop@0.2.4':
     resolution: {integrity: sha512-PdlaBwsUsgGkL8N0wiB8yG0EI9oU5GPKPukIGLfLbdyeXg5TaxTwZOPd9IA33wvMcs8HUPiPdtZhsRfhCK6y/A==}
+
+  '@openma/matter-store-mysql@0.2.4':
+    resolution: {integrity: sha512-jAnvAT8IXQKGasbOyO/sD5pkCCjqVromXQHRkKgnORo69CugESvancyQTSNW6Ethu1rK2GhFJQtXGR3nx3JUwA==}
+    engines: {node: '>=22.13'}
+    peerDependencies:
+      effect: ^3.22.1
 
   '@openma/matter-store-sqlite@0.2.4':
     resolution: {integrity: sha512-eb2DsPaBn+mVlGS/62Z7WIfl8bjbd2ucsmEgLV4cAITAiIecCfbmxHfMz6vJC4xZSymw4JlV0EEsiO7rdE+QFw==}
@@ -10389,6 +10410,10 @@ packages:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
     engines: {node: '>=0.4.0'}
 
+  denque@2.1.0:
+    resolution: {integrity: sha512-HVQE3AAb/pxF8fQAoiqpvg9i3evqug3hoiwakOyZAwJm+6vZehbkYXZ0l4JxS+I3QxM97v5aaRNhj8v5oBhekw==}
+    engines: {node: '>=0.10'}
+
   depd@2.0.0:
     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
     engines: {node: '>= 0.8'}
@@ -12153,6 +12178,10 @@ packages:
     resolution: {integrity: sha512-dkEJPVvun4FryqBmZ5KhDo0K9iDXAwn08tMLDinNdRBNPcYEDiWYysLcc6k3mjTMlbP9KyylvRpd4wFtwrT9rw==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
+  mysql2@3.15.3:
+    resolution: {integrity: sha512-FBrGau0IXmuqg4haEZRBfHNWB5mUARw6hNwPDXXGg0XzVJ50mr/9hb267lvpVMnhZ1FON3qNd4Xfcez1rbFwSg==}
+    engines: {node: '>= 8.0'}
+
   mysql2@3.24.4:
     resolution: {integrity: sha512-A2olluVlj0mvgyIRRISMEzXc51m+21mRtcMVjJyIpt2GG98+XrC9m9HzsqcMsX2LcnfccJvY5NB22g8fENBnOA==}
     engines: {node: '>= 8.0'}
@@ -13204,6 +13233,9 @@ packages:
     resolution: {integrity: sha512-1gnZf7DFcoIcajTjTwjwuDjzuz4PPcY2StKPlsGAQ1+YH20IRVrBaXSWmdjowTJ6u8Rc01PoYOGHXfP1mYcZNQ==}
     engines: {node: '>= 18'}
 
+  seq-queue@0.0.5:
+    resolution: {integrity: sha512-hr3Wtp/GZIc/6DAGPDcV4/9WoZhjrkXsi5B/07QgX8tsdc6ilr7BFM6PM6rbdAX1kFSDYeZGLipIZZKyQP0O5Q==}
+
   serve-static@2.2.1:
     resolution: {integrity: sha512-xRXBn0pPqQTVQiC8wyQrKs2MOlX24zQ0POGaj0kultvoOCstBQM5yvOhAVSUwOMjQtTvsPWoNCHfPGwaaQJhTw==}
     engines: {node: '>= 18'}
@@ -13354,6 +13386,10 @@ packages:
   sql-escaper@1.5.1:
     resolution: {integrity: sha512-4toX5E1fQbBrpfXidaHnF0669nkAdETeIPTs2SUjxxD7RRIs9ICG4gtpmfc68JCEKehsdwLFqBu9VlQqZ1P1gg==}
     engines: {bun: '>=1.0.0', deno: '>=2.0.0', node: '>=12.0.0'}
+
+  sqlstring@2.3.3:
+    resolution: {integrity: sha512-qC9iz2FlN7DQl3+wjwn3802RTyjCx7sDvfQEXchwa6CWOx07/WVfh91gBmQ9fahw8snwGEWU3xGzOt4tFyHLxg==}
+    engines: {node: '>= 0.6'}
 
   ssh-remote-port-forward@1.0.4:
     resolution: {integrity: sha512-x0LV1eVDwjf1gmG7TTnfqIzf+3VPRz7vrNIjX6oYLbeCrf/PeVY6hkT68Mg+q02qXxQhrLjB0jfgvhevoCRmLQ==}
@@ -17055,6 +17091,19 @@ snapshots:
       - react-dom
       - supports-color
 
+  '@openma/matter-inbox-mysql@0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      '@openma/matter': 0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      effect: 3.22.1
+      mysql2: 3.15.3
+    transitivePeerDependencies:
+      - '@anthropic-ai/sdk'
+      - '@types/react'
+      - '@types/react-dom'
+      - react
+      - react-dom
+      - supports-color
+
   '@openma/matter-inbox-sqlite@0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
       '@openma/matter': 0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -17068,6 +17117,19 @@ snapshots:
       - supports-color
 
   '@openma/matter-loop@0.2.4': {}
+
+  '@openma/matter-store-mysql@0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      '@openma/matter': 0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      effect: 3.22.1
+      mysql2: 3.15.3
+    transitivePeerDependencies:
+      - '@anthropic-ai/sdk'
+      - '@types/react'
+      - '@types/react-dom'
+      - react
+      - react-dom
+      - supports-color
 
   '@openma/matter-store-sqlite@0.2.4(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
@@ -20882,6 +20944,8 @@ snapshots:
 
   delayed-stream@1.0.0: {}
 
+  denque@2.1.0: {}
+
   depd@2.0.0: {}
 
   dequal@2.0.3: {}
@@ -23147,6 +23211,18 @@ snapshots:
 
   mute-stream@3.0.0: {}
 
+  mysql2@3.15.3:
+    dependencies:
+      aws-ssl-profiles: 1.1.2
+      denque: 2.1.0
+      generate-function: 2.3.1
+      iconv-lite: 0.7.3
+      long: 5.3.2
+      lru.min: 1.1.5
+      named-placeholders: 1.1.6
+      seq-queue: 0.0.5
+      sqlstring: 2.3.3
+
   mysql2@3.24.4(@types/node@26.6.3):
     dependencies:
       '@types/node': 26.6.3
@@ -24279,6 +24355,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  seq-queue@0.0.5: {}
+
   serve-static@2.2.1:
     dependencies:
       encodeurl: 2.0.0
@@ -24556,6 +24634,8 @@ snapshots:
   split2@4.2.0: {}
 
   sql-escaper@1.5.1: {}
+
+  sqlstring@2.3.3: {}
 
   ssh-remote-port-forward@1.0.4:
     dependencies:

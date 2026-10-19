@@ -332,14 +332,28 @@ PLATFORM_ROOT_SECRET=<...>                   # Vault credentials need it
 Outside compose, run `pnpm --filter @open-managed-agents/matter start` with
 `MATTER_PROXY_SECRET`, `MATTER_SECRET_KEY`, `OMA_URL`, `OMA_API_KEY` and
 `OMA_ENVIRONMENT_ID` set (optional: `MATTER_HOST`, `MATTER_PORT` (4720),
-`MATTER_DATA_DIR` (`./data/matter`), `MATTER_MCP_URL`, `OMA_TENANT_ID`
-(`default`)). It exits with code 2 and lists every missing setting.
+`MATTER_DATA_DIR` (`./data/matter`), `MATTER_DATABASE_URL`, `MATTER_RECONCILE_MS`
+(15000), `MATTER_MCP_URL`, `OMA_TENANT_ID` (`default`)). It exits with code 2
+and lists every missing setting.
 
-One Matter process serves one workspace (the tenant of its API key). For each
+A Matter service serves one workspace (the tenant of its API key). For each
 connected Feishu app it keeps a long connection to Feishu — no public webhook
-URL is needed — and its own SQLite store and inbox under
-`MATTER_DATA_DIR/apps/<appId>/`. App secrets are encrypted with
-`MATTER_SECRET_KEY`; the per-chat MCP tokens are stored only as hashes.
+URL is needed — and a store and inbox of its own. App secrets are encrypted
+with `MATTER_SECRET_KEY`; the per-chat MCP tokens are stored only as hashes.
+
+**State.** Without `MATTER_DATABASE_URL`, one process keeps everything in
+SQLite under `MATTER_DATA_DIR` (`matter.sqlite`, and `apps/<id>/` per
+connection): fine for compose, a single replica only. With
+`MATTER_DATABASE_URL=mysql://…` the process keeps no state of its own; run
+as many replicas as you like behind one address, with the same
+`MATTER_SECRET_KEY`. The tables (`openmatter_*`) are created on start and
+can share the control plane's database. Every replica runs every connection:
+Feishu delivers each event to one of the app's long connections, the inbox
+hands each stored event to one replica, a "Connect Feishu" registration is
+polled under a lease by one replica at a time, and an MCP tool call may land
+on any replica (the call and its answer meet in the database). A replica picks
+up connections saved by another within `MATTER_RECONCILE_MS`, or at once when
+a GitLab webhook for one arrives.
 
 Connecting an app adds an `openmatter` MCP server (URL `MATTER_MCP_URL`) and
 its `mcp_toolset` to the chosen Agent, with `always_allow`: no one is there to
@@ -371,7 +385,7 @@ from the GitLab instance, directly on the Matter service (not through the
 Console proxy). Set `MATTER_PUBLIC_URL` to that origin so the returned
 `webhookUrl` is absolute. Each webhook is checked against its connection's
 secret and answered `202` only once it is in that connection's durable inbox
-(`MATTER_DATA_DIR/apps/<id>/`); otherwise `503`, and GitLab retries.
+; otherwise `503`, and GitLab retries.
 Redeliveries are answered once. The reply is the Agent's final message, posted
 by the bot in the comment's thread, so the Agent's instructions must not tell
 it to answer through a tool (an Agent written for Feishu, which replies through

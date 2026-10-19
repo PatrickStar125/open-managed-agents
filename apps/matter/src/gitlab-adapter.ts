@@ -28,6 +28,7 @@ const asConnection = (record: GitLabConnectionRecord): GitLabConnection => ({
   ...record,
   key: record.id,
   label: `GitLab ${record.username}@${new URL(record.baseUrl).host}`,
+  revision: record.connectedAt,
 });
 
 /** Accepts webhooks for the connections that are running. */
@@ -46,9 +47,9 @@ export const createGitLabAdapter = (options: {
   const submitters = new Map<string, Submit>();
   return {
     kind: GITLAB_ADAPTER_KIND,
-    list: () => options.db.gitlab.list().map(asConnection),
-    get: (key) => {
-      const record = options.db.gitlab.get(key);
+    list: async () => (await options.db.gitlab.list()).map(asConnection),
+    get: async (key) => {
+      const record = await options.db.gitlab.get(key);
       return record === undefined ? undefined : asConnection(record);
     },
     submit: async (key, envelope) => (await submitters.get(key)?.(envelope)) ?? false,
@@ -98,7 +99,12 @@ const PATH = /^\/webhooks\/gitlab\/([A-Za-z0-9_-]+)$/;
  * `POST /webhooks/gitlab/<id>`, called by GitLab directly (not through the
  * Console proxy). The connection's webhook secret authenticates it.
  */
-export const createGitLabWebhookHandler = (adapter: GitLabAdapter) =>
+export const createGitLabWebhookHandler = (
+  adapter: GitLabAdapter,
+  /** Start a connection this replica does not run yet (another replica
+   * saved it since the last reconcile); true when it now runs. */
+  ensure?: (key: string) => Promise<boolean>,
+) =>
   async (request: Request): Promise<Response | undefined> => {
     const match = PATH.exec(new URL(request.url).pathname.replace(/\/+$/, ""));
     if (match?.[1] === undefined) return undefined;
@@ -106,7 +112,7 @@ export const createGitLabWebhookHandler = (adapter: GitLabAdapter) =>
       return Response.json({ error: "method not allowed" }, { status: 405 });
     }
     const key = match[1];
-    const connection = adapter.get(key);
+    const connection = await adapter.get(key);
     if (connection === undefined) return Response.json({ error: "not found" }, { status: 404 });
     const decoded = await Effect.runPromise(
       Effect.either(
@@ -120,12 +126,16 @@ export const createGitLabWebhookHandler = (adapter: GitLabAdapter) =>
       return Response.json({ error: decoded.left.message }, { status: decoded.left.status });
     }
     const input = decoded.right;
-    const persisted = await adapter.submit(key, {
+    const envelope = {
       integrationId: "gitlab",
       idempotencyKey: `gitlab:${key}:${input.deliveryId}`,
       eventType: input.eventName,
       body: input,
-    });
+    };
+    let persisted = await adapter.submit(key, envelope);
+    if (!persisted && ensure !== undefined && (await ensure(key).catch(() => false))) {
+      persisted = await adapter.submit(key, envelope);
+    }
     return persisted
       ? new Response(null, { status: 202 })
       : Response.json({ error: "not accepting webhooks right now" }, { status: 503 });
@@ -234,7 +244,7 @@ export const connectGitLab =
       throw error;
     }
     const id = `gitlab-${randomBytes(8).toString("hex")}`;
-    const record = options.db.gitlab.save({
+    const record = await options.db.gitlab.save({
       id,
       baseUrl,
       token,
@@ -273,8 +283,7 @@ export const createGitLabConnectHandler = (options: {
     if (request.method === "GET") {
       return Response.json(
         {
-          data: options.db.gitlab
-            .list()
+          data: (await options.db.gitlab.list())
             .filter((c) => c.tenantId === principal.tenantId)
             .map((c) => ({
               id: c.id,

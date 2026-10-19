@@ -67,8 +67,8 @@ let gitlab: FakeGitLab;
 let services: MatterService[];
 let config: MatterConfig;
 
-const start = () => {
-  const service = createMatterService(config, {
+const start = async () => {
+  const service = await createMatterService(config, {
     omaFetch: oma.fetch as typeof fetch,
     fetch: gitlab.fetch,
     onError: () => {},
@@ -134,7 +134,7 @@ const valid = { baseUrl: `${BASE}/`, token: TOKEN, agentId: "agent-1", projectId
 
 describe("GitLab connections", () => {
   it("connects an instance, answers a mention from a webhook in the same thread, and survives a restart", async () => {
-    const service = start();
+    const service = await start();
     const created = await connect(service, valid);
     expect(created.status).toBe(201);
     const result = (await created.json()) as {
@@ -207,7 +207,7 @@ describe("GitLab connections", () => {
     // Restart: the connection comes back from the database and takes webhooks.
     await service.close();
     services.splice(services.indexOf(service), 1);
-    const again = start();
+    const again = await start();
     await again.host.start();
     expect(again.host.running()).toEqual([result.id]);
     expect((await webhook(again, path, result.webhookSecret, note("@oma-bot and timeouts?"))).status).toBe(202);
@@ -216,7 +216,7 @@ describe("GitLab connections", () => {
   });
 
   it("authenticates every webhook with the connection's own secret", async () => {
-    const service = start();
+    const service = await start();
     const a = (await (await connect(service, valid)).json()) as { id: string; webhookSecret: string };
     const b = (await (await connect(service, valid)).json()) as { id: string; webhookSecret: string };
     expect(a.id).not.toBe(b.id);
@@ -237,15 +237,32 @@ describe("GitLab connections", () => {
     expect(oma.sessions.size).toBe(0);
   });
 
-  it("answers 503 while the connection is not running, so GitLab retries", async () => {
-    const service = start();
+  it("starts a saved connection a replica does not run yet when its webhook arrives", async () => {
+    const service = await start();
     const a = (await (await connect(service, valid)).json()) as { id: string; webhookSecret: string };
     await service.host.stop();
-    expect((await webhook(service, `/webhooks/gitlab/${a.id}`, a.webhookSecret, note("@oma-bot hi"))).status).toBe(503);
+    expect(service.host.running()).toEqual([]);
+    expect((await webhook(service, `/webhooks/gitlab/${a.id}`, a.webhookSecret, note("@oma-bot hi"))).status).toBe(202);
+    expect(service.host.running()).toEqual([a.id]);
+  });
+
+  it("answers 503 when the connection cannot run, so GitLab retries", async () => {
+    const service = await start();
+    const a = (await (await connect(service, valid)).json()) as { id: string; webhookSecret: string };
+    await service.host.stop();
+    // This service cannot act in the connection's workspace any more.
+    const other = await createMatterService({ ...config, omaTenantId: "elsewhere" }, {
+      omaFetch: oma.fetch as typeof fetch,
+      fetch: gitlab.fetch,
+      onError: () => {},
+      db: service.db,
+    });
+    expect((await webhook(other, `/webhooks/gitlab/${a.id}`, a.webhookSecret, note("@oma-bot hi"))).status).toBe(503);
+    await other.host.stop();
   });
 
   it("validates the request, the token and the Agent before saving", async () => {
-    const service = start();
+    const service = await start();
     expect((await connect(service, valid, {})).status).toBe(401);
     expect((await connect(service, valid, { ...proxied, "x-oma-tenant-id": "other" })).status).toBe(401);
     const problem = async (body: unknown) => {
@@ -262,7 +279,7 @@ describe("GitLab connections", () => {
     expect(await problem({ ...valid, agentId: "missing" })).toEqual([404, expect.stringContaining("not found")]);
     gitlab.userStatus = 500;
     expect(await problem(valid)).toEqual([502, "GitLab did not return the token's user"]);
-    expect(service.db.gitlab.list()).toEqual([]);
+    expect(await service.db.gitlab.list()).toEqual([]);
     expect(service.host.running()).toEqual([]);
   });
 });
