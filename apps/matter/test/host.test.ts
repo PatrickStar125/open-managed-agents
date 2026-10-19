@@ -6,6 +6,7 @@ import type {
   FeishuWsClientParams,
 } from "@openma/matter-feishu/long-connection";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isSafeConnectionKey } from "../src/adapter.js";
 import { ensureAgentMcpServer } from "../src/host.js";
 import { createOmaClient } from "../src/oma-client.js";
 import { createSecretBox, openMatterDatabase } from "../src/persistence.js";
@@ -157,7 +158,7 @@ const connection = {
 describe("Matter service", () => {
   it("connects an app, answers a Feishu message through the Agent's tool call, and survives a restart", async () => {
     const service = start();
-    await service.host.connect(connection);
+    await service.connectFeishu(connection);
 
     // The Agent got the Matter MCP server; its other servers stay.
     expect(oma.agents.get("agent-1")?.mcp_servers).toEqual([
@@ -262,8 +263,8 @@ describe("Matter service", () => {
 
   it("refuses apps of a workspace it cannot act in", async () => {
     const service = start();
-    await expect(service.host.connect({ ...connection, tenantId: "other" })).rejects.toThrow(/No OpenMA access/);
-    await expect(service.host.connect({ ...connection, agentId: undefined as never })).rejects.toThrow(/Choose an Agent/);
+    await expect(service.connectFeishu({ ...connection, tenantId: "other" })).rejects.toThrow(/No OpenMA access/);
+    await expect(service.connectFeishu({ ...connection, agentId: undefined as never })).rejects.toThrow(/Choose an Agent/);
     expect(service.db.apps.list()).toEqual([]);
     expect(ws).toHaveLength(0);
     const page = await service.fetch(
@@ -386,5 +387,14 @@ describe("loadMatterConfig", () => {
       mcpUrl: "http://127.0.0.1:4720/mcp",
       environmentId: "env_1",
     });
+  });
+});
+
+describe("isSafeConnectionKey", () => {
+  it("accepts ids that are safe directory names and refuses the rest", () => {
+    for (const key of [APP_ID, "gitlab-1", "a.b_c-d"]) expect(isSafeConnectionKey(key)).toBe(true);
+    for (const key of ["", "..", "a..b", "../x", "a/b", ".hidden", "a b", "x".repeat(129)]) {
+      expect(isSafeConnectionKey(key)).toBe(false);
+    }
   });
 });

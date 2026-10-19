@@ -1,41 +1,31 @@
 /**
- * The running Matter service: one OpenMatter application per connected
- * Feishu app. Each has its own SQLite store and inbox, its own long
- * connection to Feishu, and the `feishu-agent` Loop bound to the OpenMA
- * Agent the user chose. All of them share the MCP endpoint (and its bridge),
- * which tells their Sessions apart by the per-Session bearer.
+ * The running Matter service: one OpenMatter application per connection
+ * (a Feishu app, a GitLab instance, …), whatever its kind. Each has its own
+ * SQLite store and inbox, its adapter's event source and Loops, and an Agent
+ * driver for the OpenMA Agent the user chose. All of them share the MCP
+ * endpoint (and its bridge), which tells their Sessions apart by the
+ * per-Session bearer. What differs per kind lives in a `MatterAdapter`.
  */
 
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { makeConnectorAgentDriver } from "@openma/matter/agent";
 import { createOpenMatter } from "@openma/matter/runtime";
-import {
-  feishuAgent,
-  inspectFeishuApp,
-  makeFeishuIntegration,
-  mintTenantAccessToken,
-  type FeishuCredentials,
-} from "@openma/matter-feishu/bond";
-import {
-  makeFeishuLongConnectionSource,
-  type FeishuLongConnectionOptions,
-} from "@openma/matter-feishu/long-connection";
 import { makeLocalLongConnectionRuntime } from "@openma/matter-host-local/runtime";
 import { makeSqliteInbox } from "@openma/matter-inbox-sqlite";
 import { makeSqliteStore } from "@openma/matter-store-sqlite";
 import { Effect } from "effect";
+import { isSafeConnectionKey, type MatterAdapter, type MatterConnection } from "./adapter.js";
 import { createOpenMAConnector, isOmaSessionUnavailable } from "./connector.js";
-import type { FeishuConnection } from "./feishu-connect.js";
 import type { OmaClient, OmaMcpServer } from "./oma-client.js";
-import type { FeishuAppRecord, MatterDatabase } from "./persistence.js";
+import type { MatterDatabase } from "./persistence.js";
 import { sessionVaults } from "./session-tokens.js";
 import type { OperationCallBridge } from "./tool-bridge.js";
 
 export const DEFAULT_MCP_SERVER_NAME = "openmatter";
 
 export interface MatterHostOptions {
-  /** Where each app's store and inbox live (`<dataDir>/apps/<appId>/`). */
+  /** Where each connection's store and inbox live (`<dataDir>/apps/<key>/`). */
   readonly dataDir: string;
   readonly db: MatterDatabase;
   readonly bridge: OperationCallBridge;
@@ -47,19 +37,20 @@ export interface MatterHostOptions {
   readonly mcpServerName?: string;
   /** The OpenMA environment new sessions run in. */
   readonly environmentId: string;
-  readonly fetch?: typeof fetch;
-  /** Builds the Feishu WebSocket client; tests pass a fake. */
-  readonly createWsClient?: FeishuLongConnectionOptions["createClient"];
-  readonly onError?: (error: unknown, appId: string) => void;
+  /** Every kind of connection the service runs. Keys must not collide. */
+  readonly adapters: readonly MatterAdapter<MatterConnection>[];
+  readonly onError?: (error: unknown, key: string) => void;
 }
 
 export interface MatterHost {
-  /** Start every connected app. */
+  /** Start every saved connection of every adapter. */
   start(): Promise<void>;
-  /** `onRegistered` for `FeishuConnectService`: store the app, give the
-   * Agent the Matter MCP server, and start answering. */
-  connect(connection: FeishuConnection): Promise<void>;
-  /** Apps currently connected to Feishu. */
+  /** Start one saved connection, or start it again after it changed. */
+  restart(kind: string, key: string): Promise<void>;
+  /** Give an Agent the Matter MCP server before a connection uses it.
+   * Throws when this service cannot act in the tenant. */
+  prepareAgent(tenantId: string, agentId: string): Promise<void>;
+  /** Keys of the connections currently running. */
   running(): readonly string[];
   stop(): Promise<void>;
 }
@@ -114,29 +105,6 @@ export const ensureAgentMcpServer = async (
   throw new Error(`OpenMA Agent ${agentId} kept changing; try again`);
 };
 
-/** Tenant tokens for one app, minted on demand and reused until shortly
- * before they expire. Never persisted. */
-const tenantTokens = (app: FeishuAppRecord, doFetch?: typeof fetch) => {
-  let cached: { token: string; refreshAt: number } | undefined;
-  return async (): Promise<FeishuCredentials> => {
-    if (cached === undefined || Date.now() >= cached.refreshAt) {
-      const minted = await Effect.runPromise(
-        mintTenantAccessToken({
-          baseUrl: app.baseUrl,
-          appId: app.appId,
-          appSecret: app.appSecret,
-          ...(doFetch === undefined ? {} : { fetch: doFetch }),
-        }),
-      );
-      cached = {
-        token: minted.token,
-        refreshAt: Date.parse(minted.expiresAt) - 5 * 60_000,
-      };
-    }
-    return { baseUrl: app.baseUrl, token: cached.token };
-  };
-};
-
 interface Running {
   readonly stop: () => Promise<void>;
 }
@@ -144,22 +112,30 @@ interface Running {
 export const createMatterHost = (options: MatterHostOptions): MatterHost => {
   const mcpServerName = options.mcpServerName ?? DEFAULT_MCP_SERVER_NAME;
   const running = new Map<string, Running>();
-  const report = (error: unknown, appId: string) =>
-    options.onError?.(error, appId);
+  const report = (error: unknown, key: string) => options.onError?.(error, key);
+  const adapterOf = (kind: string) => {
+    const adapter = options.adapters.find((a) => a.kind === kind);
+    if (adapter === undefined) throw new Error(`No adapter for ${kind}`);
+    return adapter;
+  };
 
-  const startApp = async (app: FeishuAppRecord): Promise<void> => {
-    await running.get(app.appId)?.stop();
-    running.delete(app.appId);
-    const client = options.clientFor(app.tenantId);
+  const startConnection = async (
+    adapter: MatterAdapter<MatterConnection>,
+    connection: MatterConnection,
+  ): Promise<void> => {
+    const { key } = connection;
+    if (!isSafeConnectionKey(key)) throw new Error(`Unsafe connection key ${JSON.stringify(key)}`);
+    await running.get(key)?.stop();
+    running.delete(key);
+    const client = options.clientFor(connection.tenantId);
     if (client === null) {
-      report(new Error(`No OpenMA access for tenant ${app.tenantId}`), app.appId);
+      report(new Error(`No OpenMA access for tenant ${connection.tenantId}`), key);
       return;
     }
-    const dir = join(options.dataDir, "apps", app.appId);
+    const dir = join(options.dataDir, "apps", key);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const store = makeSqliteStore({ filename: join(dir, "store.sqlite") });
     const inbox = makeSqliteInbox({ filename: join(dir, "inbox.sqlite") });
-    const credentials = tenantTokens(app, options.fetch);
     const connector = createOpenMAConnector({
       client,
       bridge: options.bridge,
@@ -171,42 +147,25 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       }),
       environmentId: options.environmentId,
     });
+    const wiring = adapter.wire(connection, (error) => report(error, key));
     const application = createOpenMatter({
       store,
-      integrations: {
-        feishu: makeFeishuIntegration({
-          // Every event of this application carries this app as authority.
-          credentials: () => credentials(),
-          ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        }),
-      },
+      integrations: wiring.integrations,
       agents: {
-        [app.agentId]: makeConnectorAgentDriver({
+        [connection.agentId]: makeConnectorAgentDriver({
           connector,
-          agentId: app.agentId,
+          agentId: connection.agentId,
           isSessionUnavailable: isOmaSessionUnavailable,
         }),
       },
     });
-    application.loop(feishuAgent, { agentId: app.agentId });
+    wiring.install(application);
     const runtime = makeLocalLongConnectionRuntime({
-      source: makeFeishuLongConnectionSource({
-        baseUrl: app.baseUrl,
-        appId: app.appId,
-        appSecret: app.appSecret,
-        authority: app.appId,
-        ...(app.botOpenId === undefined ? {} : { botOpenId: app.botOpenId }),
-        ...(options.createWsClient === undefined
-          ? {}
-          : { createClient: options.createWsClient }),
-        onState: (state) => {
-          if (state.state === "failed") report(state.error, app.appId);
-        },
-      }),
+      source: wiring.source,
       application,
       inbox,
-      connectionLabel: `Feishu app ${app.appId}`,
-      onError: (error) => report(error, app.appId),
+      connectionLabel: connection.label,
+      onError: (error) => report(error, key),
     });
     try {
       await runtime.start();
@@ -215,7 +174,7 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       await Effect.runPromise(Effect.either(store.close));
       throw error;
     }
-    running.set(app.appId, {
+    running.set(key, {
       stop: async () => {
         await runtime.stop();
         await Effect.runPromise(Effect.either(inbox.close));
@@ -226,43 +185,29 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
 
   return {
     start: async () => {
-      for (const app of options.db.apps.list()) {
-        try {
-          await startApp(app);
-        } catch (error) {
-          report(error, app.appId);
+      for (const adapter of options.adapters) {
+        for (const connection of adapter.list()) {
+          try {
+            await startConnection(adapter, connection);
+          } catch (error) {
+            report(error, connection.key);
+          }
         }
       }
     },
-    connect: async (connection) => {
-      if (connection.agentId === undefined) {
-        throw new Error("Choose an Agent to answer in Feishu");
-      }
-      const client = options.clientFor(connection.tenantId);
-      if (client === null) {
-        throw new Error(`No OpenMA access for tenant ${connection.tenantId}`);
-      }
-      await ensureAgentMcpServer(client, connection.agentId, {
+    restart: async (kind, key) => {
+      const adapter = adapterOf(kind);
+      const connection = adapter.get(key);
+      if (connection === undefined) throw new Error(`No ${kind} connection ${key}`);
+      await startConnection(adapter, connection);
+    },
+    prepareAgent: async (tenantId, agentId) => {
+      const client = options.clientFor(tenantId);
+      if (client === null) throw new Error(`No OpenMA access for tenant ${tenantId}`);
+      await ensureAgentMcpServer(client, agentId, {
         name: mcpServerName,
         url: options.mcpServerUrl,
       });
-      // The bot's open_id decides which group messages mention it. Without
-      // it the long connection still delivers direct messages.
-      const info = await Effect.runPromise(
-        Effect.either(
-          inspectFeishuApp({
-            baseUrl: connection.app.baseUrl,
-            appId: connection.app.appId,
-            appSecret: connection.app.appSecret,
-            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-          }),
-        ),
-      );
-      const record = options.db.apps.save(
-        { ...connection, agentId: connection.agentId },
-        info._tag === "Right" ? { botOpenId: info.right.botOpenId } : {},
-      );
-      await startApp(record);
     },
     running: () => [...running.keys()],
     stop: async () => {

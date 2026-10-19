@@ -4,3 +4,5 @@ export * from "./tool-bridge.js";
 export * from "./mcp-server.js";
 export * from "./session-tokens.js";
 export * from "./feishu-connect.js";
+export * from "./adapter.js";
+export * from "./feishu-adapter.js";

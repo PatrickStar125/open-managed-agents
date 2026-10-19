@@ -20,7 +20,7 @@ const main = async () => {
   await service.host.start();
   const server = await listen(service, config);
   console.log(
-    `[matter] listening on ${config.host}:${config.port}; ${service.host.running().length} Feishu app(s) connected`,
+    `[matter] listening on ${config.host}:${config.port}; ${service.host.running().length} connection(s) running`,
   );
   let stopping = false;
   const shutdown = (signal: string) => {
