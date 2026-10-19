@@ -307,21 +307,23 @@ export function CliLogin() {
                     Workspaces ({selected.size}/{me.tenants.length})
                   </span>
                   <span className="console-cli-workspace-actions">
-                    <button
+                    <Button
+                      variant="ghost"
                       type="button"
                       onClick={selectAll}
                       className="console-cli-workspace-action"
                     >
                       All
-                    </button>
+                    </Button>
                     <span aria-hidden="true">·</span>
-                    <button
+                    <Button
+                      variant="ghost"
                       type="button"
                       onClick={selectNone}
                       className="console-cli-workspace-action"
                     >
                       None
-                    </button>
+                    </Button>
                   </span>
                 </div>
                 <div className="console-cli-workspace-list">
@@ -329,7 +331,8 @@ export function CliLogin() {
                     const isSelected = selected.has(t.id);
                     const display = tenantDisplayName(t);
                     return (
-                      <button
+                      <Button
+                        variant="ghost"
                         key={t.id}
                         type="button"
                         role="checkbox"
@@ -345,7 +348,7 @@ export function CliLogin() {
                         />
                         <Avatar name={display} size="xs" squared />
                         <WorkspaceCopy tenant={t} display={display} />
-                      </button>
+                      </Button>
                     );
                   })}
                 </div>

@@ -704,8 +704,10 @@
 }
 
 .console-cli-workspace-action {
+  height: auto;
   border: 0;
   padding: 0;
+  font-weight: normal;
   background: transparent;
   color: var(--fg-muted);
   font-family: var(--font-sans);
@@ -715,6 +717,7 @@
 }
 
 .console-cli-workspace-action:hover {
+  background: transparent;
   color: var(--fg);
   text-decoration: underline;
   text-underline-offset: var(--console-gap-3xs);
@@ -743,6 +746,8 @@
   height: var(--menu-action-row-h);
   flex: 0 0 auto;
   align-items: center;
+  justify-content: flex-start;
+  font-weight: normal;
   gap: var(--console-gap-lg);
   border: 0;
   border-radius: var(--console-radius-md);
