@@ -373,7 +373,9 @@ Console proxy). Set `MATTER_PUBLIC_URL` to that origin so the returned
 secret and answered `202` only once it is in that connection's durable inbox
 (`MATTER_DATA_DIR/apps/<id>/`); otherwise `503`, and GitLab retries.
 Redeliveries are answered once. The reply is the Agent's final message, posted
-by the bot in the comment's thread. The token and webhook secret are encrypted
+by the bot in the comment's thread, so the Agent's instructions must not tell
+it to answer through a tool (an Agent written for Feishu, which replies through
+its reply tool, will instead explain that it has no such tool). The token and webhook secret are encrypted
 with `MATTER_SECRET_KEY`.
 
 ## Operator gotchas
