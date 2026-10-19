@@ -730,8 +730,11 @@
   display: flex;
   /* Rows use the same height and gap as console table rows; show ~5.5 rows
      before scrolling so the half-row cue signals more content. */
+  /* Exactly five full rows + gaps, then half of the sixth as a scroll
+     cue. Rows have an explicit height (border-box) so this is exact. */
   max-height: calc(
-    var(--cli-workspace-row-h) * 5.5 + var(--data-row-gap) * 5
+    (var(--cli-workspace-row-h) + var(--data-row-gap)) * 5 +
+    var(--cli-workspace-row-h) * 0.5
   );
   flex-direction: column;
   gap: var(--data-row-gap);
@@ -747,20 +750,25 @@
   justify-content: flex-start;
   font-weight: normal;
   gap: var(--console-gap-lg);
-  border: 0;
+  box-sizing: border-box;
+  border: thin solid var(--pill-border);
   border-radius: var(--console-radius-row);
   padding: var(--console-pad-xs) var(--console-pad-sm);
-  background: var(--data-row-bg);
+  background: var(--pill-bg);
+  background-clip: padding-box;
   color: var(--fg);
   font-family: var(--font-sans);
   font-size: var(--console-type-body);
   line-height: var(--type-line);
   text-align: left;
   cursor: pointer;
-  transition: background var(--dur-quick) var(--ease-soft);
+  transition:
+    background-color var(--dur-quick) var(--ease-soft),
+    border-color var(--dur-quick) var(--ease-soft);
 }
 
 .console-cli-workspace-item:hover {
+  border-color: var(--border-strong);
   background: var(--pill-hover-bg);
 }
 
@@ -769,7 +777,8 @@
 }
 
 .console-cli-workspace-item[data-static="true"]:hover {
-  background: var(--data-row-bg);
+  border-color: var(--pill-border);
+  background: var(--pill-bg);
 }
 
 .console-cli-workspace-copy {
