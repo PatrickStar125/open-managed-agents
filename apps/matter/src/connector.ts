@@ -2,7 +2,10 @@
  * OpenMatter Agent connector for OpenMA Agents, over the public OpenMA API.
  *
  * One OpenMatter Agent Session is one OpenMA session; one Turn is one
- * `user.message` and ends at the next terminal status. The Agent reaches
+ * `user.message` and ends at the next terminal status. Events have ids but
+ * no sequence numbers, and the stream only carries events appended after it
+ * opened: a Turn is the events that follow its `user.message`, and a
+ * repeated Turn is read back from the event list. The Agent reaches
  * OpenMatter operations (for example the Feishu reply tool) through the
  * Matter MCP server configured on the Agent; the connector turns those tool
  * calls into operation-call callbacks (see `tool-bridge.ts`).
@@ -124,8 +127,30 @@ export const createOpenMAConnector = (
   const id = options.id ?? OPENMA_CONNECTOR_ID;
   const now = options.now ?? (() => new Date());
   const { client, bridge, mcpServerName } = options;
-  /** First OpenMA sequence of each Turn, so a repeated turnId replays it. */
-  const turnStarts = new Map<string, number>();
+  /** The `user.message` event that started each Turn, so a repeated turnId
+   * replays it; null when the server returned no id for it. */
+  const turnStarts = new Map<string, string | null>();
+
+  /** The logged events after `eventId`, oldest first. */
+  const eventsAfter = async (
+    sessionId: string,
+    eventId: string,
+  ): Promise<readonly OmaEvent[]> => {
+    const after: OmaEvent[] = [];
+    let found = false;
+    let page: string | undefined;
+    do {
+      const result = await client.listEvents(sessionId, {
+        ...(page === undefined ? {} : { page }),
+      });
+      for (const event of result.data) {
+        if (found) after.push(event);
+        else if (event.id === eventId) found = true;
+      }
+      page = result.nextPage;
+    } while (page !== undefined);
+    return after;
+  };
 
   const handleFor = (sessionId: string): AgentSessionHandle =>
     createAgentSessionHandle({
@@ -175,18 +200,20 @@ export const createOpenMAConnector = (
     const tools = turnTools(input);
     const abort = new AbortController();
     const known = turnStarts.get(input.turnId);
-    const events = await client.streamEvents(omaSessionId, {
-      ...(known === undefined ? {} : { afterSeq: known - 1 }),
-      signal: abort.signal,
-    });
+    // Open the stream before sending, so no event of this Turn is missed.
+    const stream = await client.streamEvents(omaSessionId, { signal: abort.signal });
+    let backlog: readonly OmaEvent[] = [];
     if (known === undefined) {
       bridge.setTools(input.sessionId, [...tools.values()]);
-      await client.sendEvents(omaSessionId, [userMessage(input.content)]);
+      const sent = await client.sendEvents(omaSessionId, [userMessage(input.content)]);
+      turnStarts.set(input.turnId, sent[0]?.id ?? null);
+    } else if (known !== null) {
+      backlog = await eventsAfter(omaSessionId, known);
     }
-    let started = known !== undefined;
+    const seen = new Set<string>();
     let seq = 0;
     const context = (event: OmaEvent, suffix = "") => ({
-      eventId: `${omaSessionId}:${String(event.seq ?? "")}${suffix}`,
+      eventId: `${omaSessionId}:${event.id ?? `#${seq + 1}`}${suffix}`,
       sessionId: input.sessionId,
       turnId: input.turnId,
       occurredAt:
@@ -195,18 +222,19 @@ export const createOpenMAConnector = (
           : now().toISOString(),
       seq: ++seq,
     });
+    async function* turnEvents(): AsyncGenerator<OmaEvent> {
+      yield* backlog;
+      yield* stream;
+    }
     try {
-      for await (const event of events) {
-        if (!started) {
-          // The stream opened before the message was sent; the Turn starts
-          // at the echo of that message.
-          if (event.type !== "user.message" || typeof event.seq !== "number") {
-            continue;
-          }
-          turnStarts.set(input.turnId, event.seq);
-          started = true;
+      for await (const event of turnEvents()) {
+        if (typeof event.id === "string") {
+          if (seen.has(event.id)) continue;
+          seen.add(event.id);
         }
-        if (event.type === "user.message") continue;
+        // User events are inputs (this Turn's message, steering); the
+        // stream may or may not echo them.
+        if (event.type.startsWith("user.")) continue;
         const mapped = managedEventToOpenMA(
           event as Parameters<typeof managedEventToOpenMA>[0],
           context(event),
