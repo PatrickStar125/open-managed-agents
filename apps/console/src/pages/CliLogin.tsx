@@ -4,6 +4,7 @@ import { useApi } from "../lib/api";
 import { useApiQuery } from "../lib/useApiQuery";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import { Avatar } from "../components/Avatar";
 import { Logo } from "../components/Logo";
 
@@ -336,24 +337,19 @@ export function CliLogin() {
                     const isSelected = selected.has(t.id);
                     const display = tenantDisplayName(t);
                     return (
-                      <Button
-                        variant="ghost"
+                      <Label
                         key={t.id}
-                        type="button"
-                        role="checkbox"
-                        aria-checked={isSelected}
-                        onClick={() => toggle(t.id)}
                         className="console-cli-workspace-item"
+                        data-selected={isSelected ? "true" : undefined}
                       >
                         <Checkbox
                           checked={isSelected}
-                          aria-hidden="true"
-                          tabIndex={-1}
-                          className="pointer-events-none"
+                          onCheckedChange={() => toggle(t.id)}
+                          aria-label={`${display} (${t.role})`}
                         />
                         <Avatar name={display} size="xs" squared />
                         <WorkspaceCopy tenant={t} display={display} />
-                      </Button>
+                      </Label>
                     );
                   })}
                 </div>

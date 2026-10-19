@@ -772,6 +772,10 @@
   background: var(--pill-hover-bg);
 }
 
+.console-cli-workspace-item:has(:focus-visible) {
+  border-color: var(--fg-muted);
+}
+
 .console-cli-workspace-item[data-static="true"] {
   cursor: default;
 }
