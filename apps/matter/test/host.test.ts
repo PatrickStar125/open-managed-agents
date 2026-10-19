@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isSafeConnectionKey } from "../src/adapter.js";
 import { ensureAgentMcpServer } from "../src/host.js";
 import { createOmaClient } from "../src/oma-client.js";
-import { createSecretBox, openMatterDatabase } from "../src/persistence.js";
+import { createSecretBox, openSqliteMatterDatabase } from "../src/persistence.js";
 import {
   createMatterService,
   loadMatterConfig,
@@ -112,8 +112,8 @@ let ws: FakeWsClient[];
 let services: MatterService[];
 let config: MatterConfig;
 
-const start = () => {
-  const service = createMatterService(config, {
+const start = async () => {
+  const service = await createMatterService(config, {
     omaFetch: oma.fetch as typeof fetch,
     fetch: feishu.fetch,
     createWsClient: (params) => {
@@ -164,7 +164,7 @@ const connection = {
 
 describe("Matter service", () => {
   it("connects an app, answers a Feishu message through the Agent's tool call, and survives a restart", async () => {
-    const service = start();
+    const service = await start();
     await service.connectFeishu(connection);
 
     // The Agent got the Matter MCP server; its other servers stay.
@@ -261,7 +261,7 @@ describe("Matter service", () => {
     await service.close();
     services.splice(services.indexOf(service), 1);
     expect(ws[0]?.closed).toBeGreaterThan(0);
-    const again = start();
+    const again = await start();
     await again.host.start();
     expect(again.host.running()).toEqual([APP_ID]);
     expect(ws).toHaveLength(2);
@@ -271,10 +271,10 @@ describe("Matter service", () => {
   });
 
   it("refuses apps of a workspace it cannot act in", async () => {
-    const service = start();
+    const service = await start();
     await expect(service.connectFeishu({ ...connection, tenantId: "other" })).rejects.toThrow(/No OpenMA access/);
     await expect(service.connectFeishu({ ...connection, agentId: undefined as never })).rejects.toThrow(/Choose an Agent/);
-    expect(service.db.apps.list()).toEqual([]);
+    expect(await service.db.apps.list()).toEqual([]);
     expect(ws).toHaveLength(0);
     const page = await service.fetch(
       new Request("https://matter.test/connect/feishu/registrations", {
@@ -289,7 +289,7 @@ describe("Matter service", () => {
   });
 
   it("answers unknown paths with 404 and rejects MCP calls without a bearer", async () => {
-    const service = start();
+    const service = await start();
     expect((await service.fetch(new Request("https://matter.test/nope"))).status).toBe(404);
     const mcp = await service.fetch(
       new Request("https://matter.test/mcp", {
@@ -359,20 +359,24 @@ describe("persistence", () => {
 
   it("replaces an app connected again and resolves only issued tokens", async () => {
     dir = mkdtempSync(join(tmpdir(), "matter-db-"));
-    const db = openMatterDatabase({ filename: join(dir, "m.sqlite"), box: createSecretBox("first-secret-key-0001") });
-    db.apps.save(connection);
-    db.apps.save({ ...connection, agentId: "agent-2", userId: undefined as never }, { botOpenId: "ou_bot" });
-    expect(db.apps.list()).toEqual([
+    const db = openSqliteMatterDatabase({
+      filename: join(dir, "m.sqlite"),
+      connectionsDir: join(dir, "apps"),
+      box: createSecretBox("first-secret-key-0001"),
+    });
+    await db.apps.save(connection);
+    await db.apps.save({ ...connection, agentId: "agent-2", userId: undefined as never }, { botOpenId: "ou_bot" });
+    expect(await db.apps.list()).toEqual([
       expect.objectContaining({ appId: APP_ID, appSecret: APP_SECRET, agentId: "agent-2", botOpenId: "ou_bot", tenantId: "default" }),
     ]);
-    expect(db.apps.get(APP_ID)?.userId).toBeUndefined();
-    expect(db.apps.get("cli_other")).toBeUndefined();
+    expect((await db.apps.get(APP_ID))?.userId).toBeUndefined();
+    expect(await db.apps.get("cli_other")).toBeUndefined();
     const token = await db.tokens.issue("session-1");
     expect(token).toMatch(/^omt_/);
     expect(await db.tokens.resolve(token)).toBe("session-1");
     expect(await db.tokens.resolve(`${token}x`)).toBeNull();
     expect(await db.tokens.resolve("")).toBeNull();
-    db.close();
+    await db.close();
   });
 });
 
@@ -388,6 +392,7 @@ describe("loadMatterConfig", () => {
       host: "127.0.0.1",
       port: 4720,
       dataDir: "./data/matter",
+      reconcileMs: 15000,
       proxySecret: "s",
       secretKey: "a-long-enough-secret",
       omaUrl: "http://oma:8787",

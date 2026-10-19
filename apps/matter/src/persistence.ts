@@ -1,7 +1,12 @@
 /**
- * Durable state of the Matter service that OpenMatter's own stores do not
- * cover: the Feishu apps and GitLab instances users connected (secrets
- * sealed), and the hashes of the per-Session MCP bearers. One SQLite file (`node:sqlite`).
+ * Durable state of the Matter service. With MySQL (`MATTER_DATABASE_URL`)
+ * every replica shares it, so any replica can serve any request: the
+ * connections users made (secrets sealed), the hashes of per-Session MCP
+ * bearers, "Connect Feishu" registrations in progress, the tools of each
+ * Session's latest Turn, and the operation calls an Agent made through MCP.
+ * Each connection's OpenMatter store and inbox live in the same database,
+ * partitioned by connection key. Without MySQL the same tables live in one
+ * SQLite file for a single local process.
  */
 
 import {
@@ -11,14 +16,30 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { FeishuBrand } from "@openma/matter-feishu/bond";
-import type { FeishuConnection } from "./feishu-connect.js";
+import type { DurableInbox } from "@openma/matter/inbox";
+import type { OpenMatterStore } from "@openma/matter/store";
+import { makeMysqlInbox } from "@openma/matter-inbox-mysql";
+import { makeSqliteInbox } from "@openma/matter-inbox-sqlite";
+import { makeMysqlStore } from "@openma/matter-store-mysql";
+import { makeSqliteStore } from "@openma/matter-store-sqlite";
+import type { Effect } from "effect";
+import { createPool, type Pool, type ResultSetHeader } from "mysql2/promise";
+import type {
+  FeishuConnection,
+  FeishuConnectStatus,
+  RegistrationRecord,
+  RegistrationStore,
+} from "./feishu-connect.js";
 import type { SessionTokenStore } from "./session-tokens.js";
+import type { CallStore } from "./tool-bridge.js";
 
 /** AES-256-GCM with a key derived from the operator's secret. The purpose is
  * bound as additional data, so a sealed value cannot be moved to another
- * column or app. */
+ * column or row. */
 export interface SecretBox {
   seal(plaintext: string, purpose: string): string;
   open(sealed: string, purpose: string): string;
@@ -35,9 +56,9 @@ export const createSecretBox = (secret: string): SecretBox => {
       const cipher = createCipheriv("aes-256-gcm", key, iv);
       cipher.setAAD(Buffer.from(purpose, "utf8"));
       const data = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-      return ["v1", iv, cipher.getAuthTag(), data].map((p) =>
-        typeof p === "string" ? p : p.toString("base64url"),
-      ).join(".");
+      return ["v1", iv, cipher.getAuthTag(), data]
+        .map((p) => (typeof p === "string" ? p : p.toString("base64url")))
+        .join(".");
     },
     open: (sealed, purpose) => {
       const [version, iv, tag, data] = sealed.split(".");
@@ -47,10 +68,9 @@ export const createSecretBox = (secret: string): SecretBox => {
       const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"));
       decipher.setAAD(Buffer.from(purpose, "utf8"));
       decipher.setAuthTag(Buffer.from(tag, "base64url"));
-      return Buffer.concat([
-        decipher.update(Buffer.from(data, "base64url")),
-        decipher.final(),
-      ]).toString("utf8");
+      return Buffer.concat([decipher.update(Buffer.from(data, "base64url")), decipher.final()]).toString(
+        "utf8",
+      );
     },
   };
 };
@@ -96,67 +116,142 @@ export interface MatterDatabase {
     save(
       connection: FeishuConnection & { readonly agentId: string },
       extra?: { readonly botOpenId?: string },
-    ): FeishuAppRecord;
-    list(): readonly FeishuAppRecord[];
-    get(appId: string): FeishuAppRecord | undefined;
+    ): Promise<FeishuAppRecord>;
+    list(): Promise<readonly FeishuAppRecord[]>;
+    get(appId: string): Promise<FeishuAppRecord | undefined>;
   };
   readonly gitlab: {
     /** Insert or replace by id. */
-    save(connection: GitLabConnectionInput): GitLabConnectionRecord;
-    list(): readonly GitLabConnectionRecord[];
-    get(id: string): GitLabConnectionRecord | undefined;
+    save(connection: GitLabConnectionInput): Promise<GitLabConnectionRecord>;
+    list(): Promise<readonly GitLabConnectionRecord[]>;
+    get(id: string): Promise<GitLabConnectionRecord | undefined>;
   };
   readonly tokens: SessionTokenStore;
-  close(): void;
+  readonly registrations: RegistrationStore;
+  /** Operation calls an Agent made through MCP, shared by every replica:
+   * the replica running the Turn announces and answers them; the replica
+   * that received the MCP request claims one and waits for its answer. */
+  readonly calls: CallStore & {
+    /** Drop calls and Session tool lists older than `beforeMs`. */
+    prune(beforeMs: number): Promise<void>;
+  };
+  /** One connection's OpenMatter store and inbox. */
+  connectionStorage(key: string): {
+    readonly store: OpenMatterStore & { readonly close: Effect.Effect<void, unknown> };
+    readonly inbox: DurableInbox & { readonly close: Effect.Effect<void, unknown> };
+  };
+  readonly kind: "sqlite" | "mysql";
+  close(): Promise<void>;
 }
+
+/** The two SQL engines, behind the few operations this file needs. */
+interface SqlDriver {
+  readonly kind: "sqlite" | "mysql";
+  rows<T>(sql: string, params?: readonly unknown[]): Promise<T[]>;
+  /** Number of changed rows. */
+  run(sql: string, params?: readonly unknown[]): Promise<number>;
+}
+
+const sqliteDriver = (db: DatabaseSync): SqlDriver => ({
+  kind: "sqlite",
+  rows: async <T>(sql: string, params: readonly unknown[] = []) =>
+    db.prepare(sql).all(...(params as never[])) as T[],
+  run: async (sql, params = []) => Number(db.prepare(sql).run(...(params as never[])).changes),
+});
+
+const mysqlDriver = (pool: Pool): SqlDriver => ({
+  kind: "mysql",
+  rows: async <T>(sql: string, params: readonly unknown[] = []) => {
+    const [rows] = await pool.query(sql, params as unknown[]);
+    return rows as T[];
+  },
+  run: async (sql, params = []) => {
+    const [result] = await pool.query(sql, params as unknown[]);
+    return (result as ResultSetHeader).affectedRows;
+  },
+});
+
+/** Tables, written once for both engines: keys are VARCHAR(191) (MySQL
+ * cannot index TEXT), text columns LONGTEXT/TEXT. */
+const tables = (kind: "sqlite" | "mysql"): string[] => {
+  const key = kind === "mysql" ? "VARCHAR(191)" : "TEXT";
+  const text = kind === "mysql" ? "LONGTEXT" : "TEXT";
+  const int = kind === "mysql" ? "BIGINT" : "INTEGER";
+  return [
+    `CREATE TABLE IF NOT EXISTS openmatter_feishu_apps (
+      app_id ${key} PRIMARY KEY, app_secret ${text} NOT NULL, brand ${key} NOT NULL,
+      base_url ${text} NOT NULL, tenant_id ${key} NOT NULL, user_id ${key}, agent_id ${key} NOT NULL,
+      bot_open_id ${key}, connected_at ${key} NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS openmatter_gitlab_connections (
+      id ${key} PRIMARY KEY, base_url ${text} NOT NULL, token ${text} NOT NULL, username ${key} NOT NULL,
+      webhook_secret ${text} NOT NULL, project_ids ${text} NOT NULL, tenant_id ${key} NOT NULL,
+      user_id ${key}, agent_id ${key} NOT NULL, connected_at ${key} NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS openmatter_session_tokens (
+      digest ${key} PRIMARY KEY, session_id ${key} NOT NULL, issued_at ${key} NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS openmatter_registrations (
+      id ${key} PRIMARY KEY, tenant_id ${key} NOT NULL, user_id ${key}, agent_id ${key},
+      device_code ${text} NOT NULL, brand ${key} NOT NULL, interval_s ${int} NOT NULL,
+      expires_at_ms ${int} NOT NULL, status_json ${text} NOT NULL, next_poll_at_ms ${int} NOT NULL,
+      lease_owner ${key}, lease_until_ms ${int}, finished_at_ms ${int})`,
+    `CREATE TABLE IF NOT EXISTS openmatter_session_tools (
+      session_id ${key} PRIMARY KEY, tools_json ${text} NOT NULL, updated_at_ms ${int} NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS openmatter_tool_calls (
+      callback_id ${key} PRIMARY KEY, session_id ${key} NOT NULL, call_key ${key} NOT NULL,
+      seq ${int} NOT NULL, claimed_by ${key}, outcome_json ${text}, created_at_ms ${int} NOT NULL)`,
+    kind === "mysql"
+      ? `CREATE INDEX openmatter_tool_calls_match ON openmatter_tool_calls (session_id, call_key)`
+      : `CREATE INDEX IF NOT EXISTS openmatter_tool_calls_match ON openmatter_tool_calls (session_id, call_key)`,
+  ];
+};
+
+/** `INSERT … ON CONFLICT DO UPDATE` in each dialect. */
+const upsert = (
+  kind: "sqlite" | "mysql",
+  table: string,
+  columns: readonly string[],
+  key: string,
+): string => {
+  const updates = columns.filter((c) => c !== key);
+  const placeholders = columns.map(() => "?").join(", ");
+  const head = `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`;
+  return kind === "mysql"
+    ? `${head} ON DUPLICATE KEY UPDATE ${updates.map((c) => `${c} = VALUES(${c})`).join(", ")}`
+    : `${head} ON CONFLICT (${key}) DO UPDATE SET ${updates.map((c) => `${c} = excluded.${c}`).join(", ")}`;
+};
+
+const insertIgnore = (kind: "sqlite" | "mysql") =>
+  kind === "mysql" ? "INSERT IGNORE INTO" : "INSERT OR IGNORE INTO";
 
 const appSecretPurpose = (appId: string) => `feishu-app-secret:${appId}`;
 const gitlabTokenPurpose = (id: string) => `gitlab-token:${id}`;
 const gitlabWebhookPurpose = (id: string) => `gitlab-webhook-secret:${id}`;
+const deviceCodePurpose = (id: string) => `feishu-device-code:${id}`;
 
-const tokenDigest = (token: string): Buffer =>
-  createHash("sha256").update(token, "utf8").digest();
+const tokenDigest = (token: string): Buffer => createHash("sha256").update(token, "utf8").digest();
 
-export const openMatterDatabase = (options: {
-  readonly filename: string;
-  readonly box: SecretBox;
-  readonly now?: () => Date;
-}): MatterDatabase => {
-  const now = options.now ?? (() => new Date());
-  const db = new DatabaseSync(options.filename);
-  db.exec(`
-    PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS feishu_apps (
-      app_id TEXT PRIMARY KEY,
-      app_secret TEXT NOT NULL,
-      brand TEXT NOT NULL,
-      base_url TEXT NOT NULL,
-      tenant_id TEXT NOT NULL,
-      user_id TEXT,
-      agent_id TEXT NOT NULL,
-      bot_open_id TEXT,
-      connected_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS gitlab_connections (
-      id TEXT PRIMARY KEY,
-      base_url TEXT NOT NULL,
-      token TEXT NOT NULL,
-      username TEXT NOT NULL,
-      webhook_secret TEXT NOT NULL,
-      project_ids TEXT NOT NULL,
-      tenant_id TEXT NOT NULL,
-      user_id TEXT,
-      agent_id TEXT NOT NULL,
-      connected_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS session_tokens (
-      digest TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      issued_at TEXT NOT NULL
-    );
-  `);
+/** A long call key (tool name and canonical arguments) as an indexable digest. */
+export const callKeyDigest = (key: string): string =>
+  createHash("sha256").update(key, "utf8").digest("hex");
 
-  type Row = {
+/** Announcement order across replicas: microseconds, strictly increasing
+ * within a process (a Turn's calls are announced by one process). */
+let lastSeq = 0;
+const nextSeq = (nowMs: number): number => {
+  lastSeq = Math.max(nowMs * 1000, lastSeq + 1);
+  return lastSeq;
+};
+
+type Num = number | bigint | string | null;
+const n = (value: Num): number | undefined => (value === null ? undefined : Number(value));
+
+const createMatterDatabase = (
+  sql: SqlDriver,
+  box: SecretBox,
+  storage: MatterDatabase["connectionStorage"],
+  close: () => Promise<void>,
+  now: () => Date,
+): MatterDatabase => {
+  type AppRow = {
     app_id: string;
     app_secret: string;
     brand: string;
@@ -167,9 +262,9 @@ export const openMatterDatabase = (options: {
     bot_open_id: string | null;
     connected_at: string;
   };
-  const toRecord = (row: Row): FeishuAppRecord => ({
+  const toApp = (row: AppRow): FeishuAppRecord => ({
     appId: row.app_id,
-    appSecret: options.box.open(row.app_secret, appSecretPurpose(row.app_id)),
+    appSecret: box.open(row.app_secret, appSecretPurpose(row.app_id)),
     brand: row.brand as FeishuBrand,
     baseUrl: row.base_url,
     tenantId: row.tenant_id,
@@ -178,17 +273,6 @@ export const openMatterDatabase = (options: {
     ...(row.bot_open_id === null ? {} : { botOpenId: row.bot_open_id }),
     connectedAt: row.connected_at,
   });
-
-  const upsert = db.prepare(`
-    INSERT INTO feishu_apps (app_id, app_secret, brand, base_url, tenant_id, user_id, agent_id, bot_open_id, connected_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT (app_id) DO UPDATE SET
-      app_secret = excluded.app_secret, brand = excluded.brand, base_url = excluded.base_url,
-      tenant_id = excluded.tenant_id, user_id = excluded.user_id, agent_id = excluded.agent_id,
-      bot_open_id = excluded.bot_open_id, connected_at = excluded.connected_at
-  `);
-  const selectAll = db.prepare(`SELECT * FROM feishu_apps ORDER BY connected_at, app_id`);
-  const selectOne = db.prepare(`SELECT * FROM feishu_apps WHERE app_id = ?`);
   type GitLabRow = {
     id: string;
     base_url: string;
@@ -204,38 +288,86 @@ export const openMatterDatabase = (options: {
   const toGitLab = (row: GitLabRow): GitLabConnectionRecord => ({
     id: row.id,
     baseUrl: row.base_url,
-    token: options.box.open(row.token, gitlabTokenPurpose(row.id)),
+    token: box.open(row.token, gitlabTokenPurpose(row.id)),
     username: row.username,
-    webhookSecret: options.box.open(row.webhook_secret, gitlabWebhookPurpose(row.id)),
+    webhookSecret: box.open(row.webhook_secret, gitlabWebhookPurpose(row.id)),
     projectIds: JSON.parse(row.project_ids) as number[],
     tenantId: row.tenant_id,
     ...(row.user_id === null ? {} : { userId: row.user_id }),
     agentId: row.agent_id,
     connectedAt: row.connected_at,
   });
-  const upsertGitLab = db.prepare(`
-    INSERT INTO gitlab_connections (id, base_url, token, username, webhook_secret, project_ids, tenant_id, user_id, agent_id, connected_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT (id) DO UPDATE SET
-      base_url = excluded.base_url, token = excluded.token, username = excluded.username,
-      webhook_secret = excluded.webhook_secret, project_ids = excluded.project_ids,
-      tenant_id = excluded.tenant_id, user_id = excluded.user_id, agent_id = excluded.agent_id,
-      connected_at = excluded.connected_at
-  `);
-  const selectAllGitLab = db.prepare(`SELECT * FROM gitlab_connections ORDER BY connected_at, id`);
-  const selectOneGitLab = db.prepare(`SELECT * FROM gitlab_connections WHERE id = ?`);
-  const insertToken = db.prepare(
-    `INSERT INTO session_tokens (digest, session_id, issued_at) VALUES (?, ?, ?)`,
-  );
-  const selectToken = db.prepare(`SELECT digest, session_id FROM session_tokens WHERE digest = ?`);
+  type RegistrationRow = {
+    id: string;
+    tenant_id: string;
+    user_id: string | null;
+    agent_id: string | null;
+    device_code: string;
+    brand: string;
+    interval_s: Num;
+    expires_at_ms: Num;
+    status_json: string;
+    next_poll_at_ms: Num;
+    finished_at_ms: Num;
+  };
+  const toRegistration = (row: RegistrationRow): RegistrationRecord => ({
+    id: row.id,
+    tenantId: row.tenant_id,
+    ...(row.user_id === null ? {} : { userId: row.user_id }),
+    ...(row.agent_id === null ? {} : { agentId: row.agent_id }),
+    deviceCode: box.open(row.device_code, deviceCodePurpose(row.id)),
+    brand: row.brand as FeishuBrand,
+    intervalS: n(row.interval_s)!,
+    expiresAtMs: n(row.expires_at_ms)!,
+    status: JSON.parse(row.status_json) as FeishuConnectStatus,
+    nextPollAtMs: n(row.next_poll_at_ms)!,
+    ...(row.finished_at_ms === null ? {} : { finishedAtMs: n(row.finished_at_ms)! }),
+  });
+
+  const appColumns = [
+    "app_id",
+    "app_secret",
+    "brand",
+    "base_url",
+    "tenant_id",
+    "user_id",
+    "agent_id",
+    "bot_open_id",
+    "connected_at",
+  ];
+  const gitlabColumns = [
+    "id",
+    "base_url",
+    "token",
+    "username",
+    "webhook_secret",
+    "project_ids",
+    "tenant_id",
+    "user_id",
+    "agent_id",
+    "connected_at",
+  ];
+  const getApp = async (appId: string) => {
+    const [row] = await sql.rows<AppRow>(`SELECT * FROM openmatter_feishu_apps WHERE app_id = ?`, [appId]);
+    return row === undefined ? undefined : toApp(row);
+  };
+  const getGitLab = async (id: string) => {
+    const [row] = await sql.rows<GitLabRow>(`SELECT * FROM openmatter_gitlab_connections WHERE id = ?`, [id]);
+    return row === undefined ? undefined : toGitLab(row);
+  };
+  const getRegistration = async (id: string) => {
+    const [row] = await sql.rows<RegistrationRow>(`SELECT * FROM openmatter_registrations WHERE id = ?`, [id]);
+    return row === undefined ? undefined : toRegistration(row);
+  };
 
   return {
+    kind: sql.kind,
     apps: {
-      save: (connection, extra = {}) => {
+      save: async (connection, extra = {}) => {
         const { app } = connection;
-        upsert.run(
+        await sql.run(upsert(sql.kind, "openmatter_feishu_apps", appColumns, "app_id"), [
           app.appId,
-          options.box.seal(app.appSecret, appSecretPurpose(app.appId)),
+          box.seal(app.appSecret, appSecretPurpose(app.appId)),
           app.brand,
           app.baseUrl,
           connection.tenantId,
@@ -243,54 +375,276 @@ export const openMatterDatabase = (options: {
           connection.agentId,
           extra.botOpenId ?? null,
           now().toISOString(),
-        );
-        return toRecord(selectOne.get(app.appId) as Row);
+        ]);
+        return (await getApp(app.appId))!;
       },
-      list: () => (selectAll.all() as Row[]).map(toRecord),
-      get: (appId) => {
-        const row = selectOne.get(appId) as Row | undefined;
-        return row === undefined ? undefined : toRecord(row);
-      },
+      list: async () =>
+        (await sql.rows<AppRow>(`SELECT * FROM openmatter_feishu_apps ORDER BY connected_at, app_id`)).map(toApp),
+      get: getApp,
     },
     gitlab: {
-      save: (c) => {
-        upsertGitLab.run(
+      save: async (c) => {
+        await sql.run(upsert(sql.kind, "openmatter_gitlab_connections", gitlabColumns, "id"), [
           c.id,
           c.baseUrl,
-          options.box.seal(c.token, gitlabTokenPurpose(c.id)),
+          box.seal(c.token, gitlabTokenPurpose(c.id)),
           c.username,
-          options.box.seal(c.webhookSecret, gitlabWebhookPurpose(c.id)),
+          box.seal(c.webhookSecret, gitlabWebhookPurpose(c.id)),
           JSON.stringify(c.projectIds),
           c.tenantId,
           c.userId ?? null,
           c.agentId,
           now().toISOString(),
-        );
-        return toGitLab(selectOneGitLab.get(c.id) as GitLabRow);
+        ]);
+        return (await getGitLab(c.id))!;
       },
-      list: () => (selectAllGitLab.all() as GitLabRow[]).map(toGitLab),
-      get: (id) => {
-        const row = selectOneGitLab.get(id) as GitLabRow | undefined;
-        return row === undefined ? undefined : toGitLab(row);
-      },
+      list: async () =>
+        (await sql.rows<GitLabRow>(`SELECT * FROM openmatter_gitlab_connections ORDER BY connected_at, id`)).map(
+          toGitLab,
+        ),
+      get: getGitLab,
     },
     tokens: {
       issue: async (sessionId) => {
         const token = `omt_${randomBytes(32).toString("base64url")}`;
-        insertToken.run(tokenDigest(token).toString("hex"), sessionId, now().toISOString());
+        await sql.run(`INSERT INTO openmatter_session_tokens (digest, session_id, issued_at) VALUES (?, ?, ?)`, [
+          tokenDigest(token).toString("hex"),
+          sessionId,
+          now().toISOString(),
+        ]);
         return token;
       },
       resolve: async (token) => {
         if (token.length === 0) return null;
         const digest = tokenDigest(token);
-        const row = selectToken.get(digest.toString("hex")) as
-          | { digest: string; session_id: string }
-          | undefined;
-        return row !== undefined && timingSafeEqual(Buffer.from(row.digest, "hex"), digest)
-          ? row.session_id
-          : null;
+        const [row] = await sql.rows<{ digest: string; session_id: string }>(
+          `SELECT digest, session_id FROM openmatter_session_tokens WHERE digest = ?`,
+          [digest.toString("hex")],
+        );
+        return row !== undefined && timingSafeEqual(Buffer.from(row.digest, "hex"), digest) ? row.session_id : null;
       },
     },
-    close: () => db.close(),
+    registrations: {
+      create: async (r) => {
+        await sql.run(
+          `INSERT INTO openmatter_registrations (id, tenant_id, user_id, agent_id, device_code, brand,
+             interval_s, expires_at_ms, status_json, next_poll_at_ms, finished_at_ms)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            r.id,
+            r.tenantId,
+            r.userId ?? null,
+            r.agentId ?? null,
+            box.seal(r.deviceCode, deviceCodePurpose(r.id)),
+            r.brand,
+            r.intervalS,
+            r.expiresAtMs,
+            JSON.stringify(r.status),
+            r.nextPollAtMs,
+            r.finishedAtMs ?? null,
+          ],
+        );
+      },
+      get: getRegistration,
+      claim: async (id, ownerId, nowMs, leaseUntilMs) => {
+        const due = await sql.rows<{ id: string }>(
+          `SELECT id FROM openmatter_registrations
+           WHERE finished_at_ms IS NULL AND next_poll_at_ms <= ?
+             AND (lease_until_ms IS NULL OR lease_until_ms <= ?)${id === undefined ? "" : " AND id = ?"}
+           ORDER BY next_poll_at_ms LIMIT 5`,
+          id === undefined ? [nowMs, nowMs] : [nowMs, nowMs, id],
+        );
+        for (const { id: candidate } of due) {
+          const taken = await sql.run(
+            `UPDATE openmatter_registrations SET lease_owner = ?, lease_until_ms = ?
+             WHERE id = ? AND finished_at_ms IS NULL AND next_poll_at_ms <= ?
+               AND (lease_until_ms IS NULL OR lease_until_ms <= ?)`,
+            [ownerId, leaseUntilMs, candidate, nowMs, nowMs],
+          );
+          if (taken === 1) return getRegistration(candidate);
+        }
+        return undefined;
+      },
+      update: async (id, ownerId, patch) => {
+        await sql.run(
+          `UPDATE openmatter_registrations
+           SET status_json = ?, interval_s = COALESCE(?, interval_s), brand = COALESCE(?, brand),
+               next_poll_at_ms = ?, finished_at_ms = ?, lease_owner = NULL, lease_until_ms = NULL
+           WHERE id = ? AND lease_owner = ?`,
+          [
+            JSON.stringify(patch.status),
+            patch.intervalS ?? null,
+            patch.brand ?? null,
+            patch.nextPollAtMs,
+            patch.finishedAtMs ?? null,
+            id,
+            ownerId,
+          ],
+        );
+      },
+      patchStatus: async (id, status) => {
+        await sql.run(`UPDATE openmatter_registrations SET status_json = ? WHERE id = ?`, [
+          JSON.stringify(status),
+          id,
+        ]);
+      },
+      prune: async (beforeMs) => {
+        await sql.run(
+          `DELETE FROM openmatter_registrations
+           WHERE (finished_at_ms IS NOT NULL AND finished_at_ms < ?) OR expires_at_ms < ?`,
+          [beforeMs, beforeMs],
+        );
+      },
+    },
+    calls: {
+      setTools: async (sessionId, toolsJson) => {
+        await sql.run(
+          upsert(sql.kind, "openmatter_session_tools", ["session_id", "tools_json", "updated_at_ms"], "session_id"),
+          [sessionId, toolsJson, now().getTime()],
+        );
+      },
+      tools: async (sessionId) => {
+        const [row] = await sql.rows<{ tools_json: string }>(
+          `SELECT tools_json FROM openmatter_session_tools WHERE session_id = ?`,
+          [sessionId],
+        );
+        return row?.tools_json;
+      },
+      announce: async (sessionId, callbackId, key) => {
+        await sql.run(
+          `${insertIgnore(sql.kind)} openmatter_tool_calls (callback_id, session_id, call_key, seq, created_at_ms)
+           VALUES (?, ?, ?, ?, ?)`,
+          [callbackId, sessionId, callKeyDigest(key), nextSeq(now().getTime()), now().getTime()],
+        );
+      },
+      resolve: async (callbackId, outcome) => {
+        await sql.run(
+          `UPDATE openmatter_tool_calls SET outcome_json = ? WHERE callback_id = ? AND outcome_json IS NULL`,
+          [JSON.stringify(outcome), callbackId],
+        );
+      },
+      claim: async (sessionId, key, claimer) => {
+        const candidates = await sql.rows<{ callback_id: string }>(
+          `SELECT callback_id FROM openmatter_tool_calls
+           WHERE session_id = ? AND call_key = ? AND claimed_by IS NULL
+           ORDER BY seq LIMIT 5`,
+          [sessionId, callKeyDigest(key)],
+        );
+        for (const { callback_id: id } of candidates) {
+          const taken = await sql.run(
+            `UPDATE openmatter_tool_calls SET claimed_by = ? WHERE callback_id = ? AND claimed_by IS NULL`,
+            [claimer, id],
+          );
+          if (taken === 1) return id;
+        }
+        return undefined;
+      },
+      outcome: async (callbackId) => {
+        const [row] = await sql.rows<{ outcome_json: string | null }>(
+          `SELECT outcome_json FROM openmatter_tool_calls WHERE callback_id = ?`,
+          [callbackId],
+        );
+        return row?.outcome_json == null ? undefined : (JSON.parse(row.outcome_json) as unknown);
+      },
+      release: async (sessionId) => {
+        await sql.run(`DELETE FROM openmatter_tool_calls WHERE session_id = ? AND claimed_by IS NULL`, [sessionId]);
+      },
+      forget: async (callbackId) => {
+        await sql.run(`DELETE FROM openmatter_tool_calls WHERE callback_id = ?`, [callbackId]);
+      },
+      prune: async (beforeMs) => {
+        await sql.run(`DELETE FROM openmatter_tool_calls WHERE created_at_ms < ?`, [beforeMs]);
+        await sql.run(`DELETE FROM openmatter_session_tools WHERE updated_at_ms < ?`, [beforeMs]);
+      },
+    },
+    connectionStorage: storage,
+    close,
   };
+};
+
+/** One SQLite file for a single local process (development, tests). */
+export const openSqliteMatterDatabase = (options: {
+  readonly filename: string;
+  /** Where each connection's store and inbox files go (`<dir>/<key>/`). */
+  readonly connectionsDir: string;
+  readonly box: SecretBox;
+  readonly now?: () => Date;
+}): MatterDatabase => {
+  const db = new DatabaseSync(options.filename);
+  db.exec("PRAGMA journal_mode = WAL");
+  for (const statement of tables("sqlite")) db.exec(statement);
+  // Before the tables were prefixed (same columns, same order).
+  for (const [from, to] of [
+    ["feishu_apps", "openmatter_feishu_apps"],
+    ["gitlab_connections", "openmatter_gitlab_connections"],
+    ["session_tokens", "openmatter_session_tokens"],
+  ] as const) {
+    const old = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(from);
+    if (old !== undefined) {
+      db.exec(`INSERT OR IGNORE INTO ${to} SELECT * FROM ${from}; DROP TABLE ${from};`);
+    }
+  }
+  return createMatterDatabase(
+    sqliteDriver(db),
+    options.box,
+    (key) => {
+      const dir = join(options.connectionsDir, key);
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return {
+        store: makeSqliteStore({ filename: join(dir, "store.sqlite") }),
+        inbox: makeSqliteInbox({ filename: join(dir, "inbox.sqlite") }),
+      };
+    },
+    async () => db.close(),
+    options.now ?? (() => new Date()),
+  );
+};
+
+/**
+ * MySQL shared by every replica. Tables are created on first use; the
+ * connection stores and inboxes share the pool, partitioned by key.
+ */
+export const openMysqlMatterDatabase = async (options: {
+  readonly url: string;
+  readonly box: SecretBox;
+  readonly now?: () => Date;
+}): Promise<MatterDatabase> => {
+  const pool = createPool({ uri: options.url, connectionLimit: 10 });
+  let busy = 0;
+  pool.on("acquire", () => {
+    busy += 1;
+  });
+  pool.on("release", () => {
+    busy = Math.max(0, busy - 1);
+  });
+  try {
+    for (const statement of tables("mysql")) {
+      try {
+        await pool.query(statement);
+      } catch (error) {
+        // CREATE INDEX has no IF NOT EXISTS in MySQL 8; a second replica
+        // (or a restart) finds it already there.
+        if ((error as { code?: string }).code !== "ER_DUP_KEYNAME") throw error;
+      }
+    }
+  } catch (error) {
+    await pool.end();
+    throw error;
+  }
+  return createMatterDatabase(
+    mysqlDriver(pool),
+    options.box,
+    (key) => ({
+      store: makeMysqlStore({ pool, tenantId: key }),
+      inbox: makeMysqlInbox({ pool, tenantId: key }),
+    }),
+    async () => {
+      // Let queries already running finish: mysql2 throws an uncaught error
+      // when a query takes a connection the pool is ending.
+      const until = Date.now() + 5_000;
+      while (busy > 0 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 20));
+      await pool.end();
+    },
+    options.now ?? (() => new Date()),
+  );
 };

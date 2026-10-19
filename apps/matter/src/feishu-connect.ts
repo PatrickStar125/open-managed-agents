@@ -61,9 +61,111 @@ export type FeishuConnectStatus =
       readonly setupUnavailable?: true;
     };
 
+/** A "Connect Feishu" registration as every replica reads and polls it. */
+export interface RegistrationRecord {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly userId?: string;
+  readonly agentId?: string;
+  /** Never sent to the browser; a database store seals it at rest. */
+  readonly deviceCode: string;
+  readonly brand: FeishuBrand;
+  readonly intervalS: number;
+  readonly expiresAtMs: number;
+  readonly status: FeishuConnectStatus;
+  readonly nextPollAtMs: number;
+  readonly finishedAtMs?: number;
+}
+
+/** Where registrations live. With a shared database, the replica that
+ * started a registration need not be the one that polls it, nor the one
+ * the browser asks for its status. */
+export interface RegistrationStore {
+  create(record: RegistrationRecord): Promise<void>;
+  get(id: string): Promise<RegistrationRecord | undefined>;
+  /** Take the next poll of `id` (or, without `id`, of any due registration)
+   * for `ownerId` until `leaseUntilMs`. A poll is due at `nextPollAtMs`;
+   * at most one replica holds it at a time. */
+  claim(
+    id: string | undefined,
+    ownerId: string,
+    nowMs: number,
+    leaseUntilMs: number,
+  ): Promise<RegistrationRecord | undefined>;
+  /** Write a poll's result and give the poll back (only by its owner). */
+  update(
+    id: string,
+    ownerId: string,
+    patch: {
+      readonly status: FeishuConnectStatus;
+      readonly intervalS?: number;
+      readonly brand?: FeishuBrand;
+      readonly nextPollAtMs: number;
+      readonly finishedAtMs?: number;
+    },
+  ): Promise<void>;
+  /** Replace a finished registration's status (the setup check). */
+  patchStatus(id: string, status: FeishuConnectStatus): Promise<void>;
+  /** Drop registrations finished or expired before `beforeMs`. */
+  prune(beforeMs: number): Promise<void>;
+}
+
+/** Registrations in process memory: a single process, and tests. */
+export const memoryRegistrationStore = (): RegistrationStore => {
+  type Row = RegistrationRecord & { leaseOwner?: string; leaseUntilMs?: number };
+  const rows = new Map<string, Row>();
+  const free = (row: Row, nowMs: number) =>
+    row.finishedAtMs === undefined && (row.leaseUntilMs === undefined || row.leaseUntilMs <= nowMs);
+  const strip = ({ leaseOwner: _o, leaseUntilMs: _u, ...record }: Row): RegistrationRecord => record;
+  return {
+    create: async (record) => void rows.set(record.id, { ...record }),
+    get: async (id) => {
+      const row = rows.get(id);
+      return row === undefined ? undefined : strip(row);
+    },
+    claim: async (id, ownerId, nowMs, leaseUntilMs) => {
+      const candidates = id === undefined ? [...rows.values()] : [rows.get(id)].filter((r) => r !== undefined);
+      const row = candidates
+        .filter((r) => free(r, nowMs) && r.nextPollAtMs <= nowMs)
+        .sort((a, b) => a.nextPollAtMs - b.nextPollAtMs)[0];
+      if (row === undefined) return undefined;
+      rows.set(row.id, { ...row, leaseOwner: ownerId, leaseUntilMs });
+      return strip(row);
+    },
+    update: async (id, ownerId, patch) => {
+      const row = rows.get(id);
+      if (row === undefined || row.leaseOwner !== ownerId) return;
+      const { leaseOwner: _o, leaseUntilMs: _u, ...rest } = row;
+      rows.set(id, {
+        ...rest,
+        status: patch.status,
+        intervalS: patch.intervalS ?? row.intervalS,
+        brand: patch.brand ?? row.brand,
+        nextPollAtMs: patch.nextPollAtMs,
+        ...(patch.finishedAtMs === undefined ? {} : { finishedAtMs: patch.finishedAtMs }),
+      });
+    },
+    patchStatus: async (id, status) => {
+      const row = rows.get(id);
+      if (row !== undefined) rows.set(id, { ...row, status });
+    },
+    prune: async (beforeMs) => {
+      for (const [id, row] of rows) {
+        if ((row.finishedAtMs !== undefined && row.finishedAtMs < beforeMs) || row.expiresAtMs < beforeMs) {
+          rows.delete(id);
+        }
+      }
+    },
+  };
+};
+
 export interface FeishuConnectOptions {
   /** Store the new app (seal the secret). Called once per registration. */
   readonly onRegistered: (connection: FeishuConnection) => Promise<void>;
+  /** Defaults to `memoryRegistrationStore()`: a single process. */
+  readonly store?: RegistrationStore;
+  /** This replica, as lease owner (default: random). */
+  readonly ownerId?: string;
   /** Pre-filled app name and description on the confirmation page. */
   readonly appName?: string;
   readonly appDescription?: string;
@@ -75,21 +177,12 @@ export interface FeishuConnectOptions {
   readonly now?: () => number;
   /** How long a finished registration stays readable (default 1 h). */
   readonly retainMs?: number;
+  /** How long one poll may hold a registration (default 30 s). */
+  readonly leaseMs?: number;
 }
 
 const openOrigin = (brand: FeishuBrand) =>
   brand === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
-
-interface Registration {
-  status: FeishuConnectStatus;
-  readonly principal: FeishuConnectPrincipal;
-  readonly agentId?: string;
-  readonly deviceCode: string;
-  readonly expiresAtMs: number;
-  interval: number;
-  brand: FeishuBrand;
-  finishedAtMs?: number;
-}
 
 const defaultSchedule = (task: () => void, ms: number) => {
   const timer = setTimeout(task, ms);
@@ -97,25 +190,31 @@ const defaultSchedule = (task: () => void, ms: number) => {
 };
 
 export class FeishuConnectService {
-  private readonly registrations = new Map<string, Registration>();
+  private readonly store: RegistrationStore;
+  private readonly ownerId: string;
   private readonly schedule: (task: () => void, ms: number) => void;
   private readonly now: () => number;
+  private readonly leaseMs: number;
   private readonly setup: ReturnType<typeof feishuAgentSetup>;
 
   constructor(private readonly options: FeishuConnectOptions) {
+    this.store = options.store ?? memoryRegistrationStore();
+    this.ownerId = options.ownerId ?? randomBytes(8).toString("hex");
     this.schedule = options.schedule ?? defaultSchedule;
     this.now = options.now ?? Date.now;
+    this.leaseMs = options.leaseMs ?? 30_000;
     this.setup = feishuAgentSetup({
       allGroupMessages: options.allGroupMessages === true,
     });
   }
 
-  /** Start a registration; poll it in the background. */
+  /** Start a registration. This replica polls it first; any replica's
+   * `sweep` takes the poll over if this one goes away. */
   async begin(input: {
     readonly principal: FeishuConnectPrincipal;
     readonly agentId?: string;
   }): Promise<{ readonly id: string; readonly status: FeishuConnectStatus }> {
-    this.prune();
+    await this.store.prune(this.now() - (this.options.retainMs ?? 3_600_000)).catch(() => undefined);
     const registration = await Effect.runPromise(
       beginFeishuAppRegistration({
         name: this.options.appName ?? "OpenMA Agent",
@@ -129,64 +228,102 @@ export class FeishuConnectService {
       }),
     );
     const id = randomBytes(16).toString("base64url");
-    const entry: Registration = {
-      status: {
-        status: "pending",
-        url: registration.url,
-        qrSvg: await QRCode.toString(registration.url, { type: "svg", margin: 1 }),
-        expiresAt: registration.expiresAt,
-      },
-      principal: input.principal,
+    const status: FeishuConnectStatus = {
+      status: "pending",
+      url: registration.url,
+      qrSvg: await QRCode.toString(registration.url, { type: "svg", margin: 1 }),
+      expiresAt: registration.expiresAt,
+    };
+    await this.store.create({
+      id,
+      tenantId: input.principal.tenantId,
+      ...(input.principal.userId === undefined ? {} : { userId: input.principal.userId }),
       ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
       deviceCode: registration.deviceCode,
-      expiresAtMs: Date.parse(registration.expiresAt),
-      interval: registration.interval,
       brand: registration.brand,
-    };
-    this.registrations.set(id, entry);
-    this.schedule(() => void this.poll(id), entry.interval * 1000);
-    return { id, status: entry.status };
+      intervalS: registration.interval,
+      expiresAtMs: Date.parse(registration.expiresAt),
+      status,
+      nextPollAtMs: this.now() + registration.interval * 1000,
+    });
+    this.later(id, registration.interval);
+    return { id, status };
   }
 
   /** A registration's status, readable only by the tenant that started it. */
-  status(id: string, tenantId: string): FeishuConnectStatus | undefined {
-    const entry = this.registrations.get(id);
-    return entry?.principal.tenantId === tenantId ? entry.status : undefined;
+  async status(id: string, tenantId: string): Promise<FeishuConnectStatus | undefined> {
+    const record = await this.store.get(id);
+    return record?.tenantId === tenantId ? record.status : undefined;
   }
 
-  /** One poll; reschedules itself while the registration is pending. */
+  /** Poll every due registration whose poll no replica holds. Call it
+   * periodically on every replica. */
+  async sweep(): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      const record = await this.store.claim(undefined, this.ownerId, this.now(), this.now() + this.leaseMs);
+      if (record === undefined) return;
+      await this.pollClaimed(record);
+    }
+  }
+
+  /** One poll of `id`, if it is due and no replica holds it. */
   async poll(id: string): Promise<void> {
-    const entry = this.registrations.get(id);
-    if (entry === undefined || entry.status.status !== "pending") return;
-    if (this.now() >= entry.expiresAtMs) {
-      this.finish(entry, { status: "expired" });
+    const record = await this.store.claim(id, this.ownerId, this.now(), this.now() + this.leaseMs);
+    if (record !== undefined) await this.pollClaimed(record);
+  }
+
+  private later(id: string, intervalS: number): void {
+    this.schedule(() => void this.poll(id).catch(() => undefined), intervalS * 1000);
+  }
+
+  private async pollClaimed(record: RegistrationRecord): Promise<void> {
+    const id = record.id;
+    const finish = (status: FeishuConnectStatus) =>
+      this.store.update(id, this.ownerId, {
+        status,
+        nextPollAtMs: record.nextPollAtMs,
+        finishedAtMs: this.now(),
+      });
+    const again = async (intervalS: number, brand: FeishuBrand) => {
+      await this.store.update(id, this.ownerId, {
+        status: record.status,
+        intervalS,
+        brand,
+        nextPollAtMs: this.now() + intervalS * 1000,
+      });
+      this.later(id, intervalS);
+    };
+    if (record.status.status !== "pending") {
+      await finish(record.status);
+      return;
+    }
+    if (this.now() >= record.expiresAtMs) {
+      await finish({ status: "expired" });
       return;
     }
     let result;
     try {
       result = await Effect.runPromise(
         pollFeishuAppRegistration({
-          deviceCode: entry.deviceCode,
-          interval: entry.interval,
-          brand: entry.brand,
+          deviceCode: record.deviceCode,
+          interval: record.intervalS,
+          brand: record.brand,
           ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }),
         }),
       );
     } catch {
       // A transient platform error: keep polling until the code expires.
-      this.schedule(() => void this.poll(id), entry.interval * 1000);
+      await again(record.intervalS, record.brand);
       return;
     }
     switch (result.status) {
       case "pending":
       case "slow_down":
-        entry.interval = result.interval;
-        entry.brand = result.brand;
-        this.schedule(() => void this.poll(id), entry.interval * 1000);
+        await again(result.interval, result.brand);
         return;
       case "expired":
       case "denied":
-        this.finish(entry, { status: result.status });
+        await finish({ status: result.status });
         return;
       case "registered": {
         const app: RegisteredFeishuApp = {
@@ -199,27 +336,31 @@ export class FeishuConnectService {
         try {
           await this.options.onRegistered({
             app,
-            tenantId: entry.principal.tenantId,
-            ...(entry.principal.userId === undefined
-              ? {}
-              : { userId: entry.principal.userId }),
-            ...(entry.agentId === undefined ? {} : { agentId: entry.agentId }),
+            tenantId: record.tenantId,
+            ...(record.userId === undefined ? {} : { userId: record.userId }),
+            ...(record.agentId === undefined ? {} : { agentId: record.agentId }),
           });
         } catch {
-          this.finish(entry, {
+          await finish({
             status: "failed",
             reason: "The app was created but could not be saved. Connect again.",
           });
           return;
         }
-        this.finish(entry, { status: "registered", appId: app.appId, brand: app.brand });
-        void this.check(entry, app);
+        const registered = { status: "registered", appId: app.appId, brand: app.brand } as const;
+        await finish(registered);
+        void this.check(id, registered, app);
         return;
       }
     }
   }
 
-  private async check(entry: Registration, app: RegisteredFeishuApp): Promise<void> {
+  private async check(
+    id: string,
+    registered: Extract<FeishuConnectStatus, { status: "registered" }>,
+    app: RegisteredFeishuApp,
+  ): Promise<void> {
+    let status: FeishuConnectStatus;
     try {
       const setup = await Effect.runPromise(
         checkFeishuAppSetup(
@@ -232,27 +373,11 @@ export class FeishuConnectService {
           this.setup.requirements,
         ),
       );
-      if (entry.status.status === "registered") {
-        entry.status = { ...entry.status, setup };
-      }
+      status = { ...registered, setup };
     } catch {
-      if (entry.status.status === "registered") {
-        entry.status = { ...entry.status, setupUnavailable: true };
-      }
+      status = { ...registered, setupUnavailable: true };
     }
-  }
-
-  private finish(entry: Registration, status: FeishuConnectStatus): void {
-    entry.status = status;
-    entry.finishedAtMs = this.now();
-  }
-
-  private prune(): void {
-    const retain = this.options.retainMs ?? 3_600_000;
-    for (const [id, entry] of this.registrations) {
-      const end = entry.finishedAtMs ?? entry.expiresAtMs;
-      if (this.now() - end > retain) this.registrations.delete(id);
-    }
+    await this.store.patchStatus(id, status).catch(() => undefined);
   }
 }
 
@@ -315,7 +440,7 @@ export const createFeishuConnectHandler = (options: FeishuConnectHandlerOptions)
     }
     const match = /^\/registrations\/([A-Za-z0-9_-]+)$/.exec(rest);
     if (match?.[1] !== undefined && request.method === "GET") {
-      const status = options.service.status(match[1], principal.tenantId);
+      const status = await options.service.status(match[1], principal.tenantId);
       return status === undefined
         ? Response.json({ error: "not found" }, { status: 404 })
         : Response.json(status, { headers: { "cache-control": "no-store" } });

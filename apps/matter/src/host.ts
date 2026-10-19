@@ -1,19 +1,21 @@
 /**
  * The running Matter service: one OpenMatter application per connection
  * (a Feishu app, a GitLab instance, …), whatever its kind. Each has its own
- * SQLite store and inbox, its adapter's event source and Loops, and an Agent
- * driver for the OpenMA Agent the user chose. All of them share the MCP
- * endpoint (and its bridge), which tells their Sessions apart by the
- * per-Session bearer. What differs per kind lives in a `MatterAdapter`.
+ * store and inbox (a partition of the Matter database), its adapter's event
+ * source and Loops, and an Agent driver for the OpenMA Agent the user chose.
+ * All of them share the MCP endpoint (and its bridge), which tells their
+ * Sessions apart by the per-Session bearer. What differs per kind lives in a
+ * `MatterAdapter`.
+ *
+ * Every replica runs every connection. The database is the only state they
+ * share: the inbox hands each event to one replica, the store serializes
+ * the work on it, and `reconcile` brings each replica's running connections
+ * in line with the saved ones.
  */
 
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { makeConnectorAgentDriver } from "@openma/matter/agent";
 import { createOpenMatter } from "@openma/matter/runtime";
 import { makeLocalLongConnectionRuntime } from "@openma/matter-host-local/runtime";
-import { makeSqliteInbox } from "@openma/matter-inbox-sqlite";
-import { makeSqliteStore } from "@openma/matter-store-sqlite";
 import { Effect } from "effect";
 import { isSafeConnectionKey, type MatterAdapter, type MatterConnection } from "./adapter.js";
 import { createOpenMAConnector, isOmaSessionUnavailable } from "./connector.js";
@@ -25,8 +27,7 @@ import type { OperationCallBridge } from "./tool-bridge.js";
 export const DEFAULT_MCP_SERVER_NAME = "openmatter";
 
 export interface MatterHostOptions {
-  /** Where each connection's store and inbox live (`<dataDir>/apps/<key>/`). */
-  readonly dataDir: string;
+  /** Saved connections, tokens, and each connection's store and inbox. */
   readonly db: MatterDatabase;
   readonly bridge: OperationCallBridge;
   /** The OpenMA API client for a tenant, or null when this service cannot
@@ -45,8 +46,14 @@ export interface MatterHostOptions {
 export interface MatterHost {
   /** Start every saved connection of every adapter. */
   start(): Promise<void>;
+  /** Start saved connections this replica does not run yet, start changed
+   * ones again, and stop deleted ones. Call it periodically. */
+  reconcile(): Promise<void>;
   /** Start one saved connection, or start it again after it changed. */
   restart(kind: string, key: string): Promise<void>;
+  /** Start one saved connection unless this replica already runs its
+   * current revision (another replica may have just saved it). */
+  ensure(kind: string, key: string): Promise<boolean>;
   /** Give an Agent the Matter MCP server before a connection uses it.
    * Throws when this service cannot act in the tenant. */
   prepareAgent(tenantId: string, agentId: string): Promise<void>;
@@ -106,6 +113,8 @@ export const ensureAgentMcpServer = async (
 };
 
 interface Running {
+  readonly kind: string;
+  readonly revision: string;
   readonly stop: () => Promise<void>;
 }
 
@@ -132,10 +141,7 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       report(new Error(`No OpenMA access for tenant ${connection.tenantId}`), key);
       return;
     }
-    const dir = join(options.dataDir, "apps", key);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const store = makeSqliteStore({ filename: join(dir, "store.sqlite") });
-    const inbox = makeSqliteInbox({ filename: join(dir, "inbox.sqlite") });
+    const { store, inbox } = options.db.connectionStorage(key);
     const connector = createOpenMAConnector({
       client,
       bridge: options.bridge,
@@ -175,6 +181,8 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       throw error;
     }
     running.set(key, {
+      kind: adapter.kind,
+      revision: connection.revision,
       stop: async () => {
         await runtime.stop();
         await Effect.runPromise(Effect.either(inbox.close));
@@ -183,24 +191,70 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
     });
   };
 
-  return {
-    start: async () => {
+  // One start or stop at a time, so a reconcile and a restart do not race.
+  let queue: Promise<unknown> = Promise.resolve();
+  const serial = <T>(task: () => Promise<T>): Promise<T> => {
+    const next = queue.then(task, task);
+    queue = next.catch(() => undefined);
+    return next;
+  };
+
+  const reconcile = () =>
+    serial(async () => {
+      const saved = new Map<string, { adapter: MatterAdapter<MatterConnection>; connection: MatterConnection }>();
       for (const adapter of options.adapters) {
-        for (const connection of adapter.list()) {
-          try {
-            await startConnection(adapter, connection);
-          } catch (error) {
-            report(error, connection.key);
+        let connections: readonly MatterConnection[];
+        try {
+          connections = await adapter.list();
+        } catch (error) {
+          // Keep what runs; the next reconcile tries again.
+          report(error, adapter.kind);
+          for (const [key, r] of running) {
+            if (r.kind === adapter.kind) saved.set(key, { adapter, connection: { key } as MatterConnection });
           }
+          continue;
+        }
+        for (const connection of connections) saved.set(connection.key, { adapter, connection });
+      }
+      for (const [key, r] of [...running]) {
+        if (!saved.has(key)) {
+          running.delete(key);
+          await r.stop().catch((error: unknown) => report(error, key));
         }
       }
-    },
-    restart: async (kind, key) => {
-      const adapter = adapterOf(kind);
-      const connection = adapter.get(key);
-      if (connection === undefined) throw new Error(`No ${kind} connection ${key}`);
-      await startConnection(adapter, connection);
-    },
+      for (const [key, { adapter, connection }] of saved) {
+        const current = running.get(key);
+        if (current !== undefined && (connection.revision === undefined || current.revision === connection.revision)) {
+          continue;
+        }
+        try {
+          await startConnection(adapter, connection);
+        } catch (error) {
+          report(error, key);
+        }
+      }
+    });
+
+  return {
+    start: reconcile,
+    reconcile,
+    restart: (kind, key) =>
+      serial(async () => {
+        const adapter = adapterOf(kind);
+        const connection = await adapter.get(key);
+        if (connection === undefined) throw new Error(`No ${kind} connection ${key}`);
+        await startConnection(adapter, connection);
+      }),
+    ensure: (kind, key) =>
+      serial(async () => {
+        const adapter = adapterOf(kind);
+        const connection = await adapter.get(key);
+        if (connection === undefined) return false;
+        if (running.get(key)?.revision !== connection.revision) {
+          await startConnection(adapter, connection);
+        }
+        return running.has(key);
+      }),
     prepareAgent: async (tenantId, agentId) => {
       const client = options.clientFor(tenantId);
       if (client === null) throw new Error(`No OpenMA access for tenant ${tenantId}`);
@@ -210,10 +264,11 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       });
     },
     running: () => [...running.keys()],
-    stop: async () => {
-      const all = [...running.values()];
-      running.clear();
-      await Promise.all(all.map((r) => r.stop()));
-    },
+    stop: () =>
+      serial(async () => {
+        const all = [...running.values()];
+        running.clear();
+        await Promise.all(all.map((r) => r.stop()));
+      }),
   };
 };

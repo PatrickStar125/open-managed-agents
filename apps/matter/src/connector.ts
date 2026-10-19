@@ -204,7 +204,7 @@ export const createOpenMAConnector = (
     const stream = await client.streamEvents(omaSessionId, { signal: abort.signal });
     let backlog: readonly OmaEvent[] = [];
     if (known === undefined) {
-      bridge.setTools(input.sessionId, [...tools.values()]);
+      await bridge.setTools(input.sessionId, [...tools.values()]);
       const sent = await client.sendEvents(omaSessionId, [userMessage(input.content)]);
       turnStarts.set(input.turnId, sent[0]?.id ?? null);
     } else if (known !== null) {
@@ -252,7 +252,7 @@ export const createOpenMAConnector = (
             operation: tool.operation,
             input: call.input as JsonValue,
           };
-          bridge.announce(input.sessionId, call.id, call.tool, call.input);
+          await bridge.announce(input.sessionId, call.id, call.tool, call.input);
           yield createOpenMAEvent({
             ...agentEventEnvelope(ctx, SOURCE),
             type: "callback.requested",
@@ -281,7 +281,7 @@ export const createOpenMAConnector = (
       );
     } finally {
       abort.abort();
-      bridge.release(input.sessionId);
+      await bridge.release(input.sessionId).catch(() => undefined);
     }
   }
 
@@ -291,7 +291,7 @@ export const createOpenMAConnector = (
   ): Promise<void> => {
     switch (command.type) {
       case "callback.respond":
-        bridge.resolve(
+        await bridge.resolve(
           command.callbackId,
           command.error === undefined
             ? { ok: true, result: (command.result ?? null) as JsonValue }

@@ -16,8 +16,8 @@ const main = async () => {
     }
     throw error;
   }
-  const service = createMatterService(config);
-  await service.host.start();
+  const service = await createMatterService(config);
+  await service.start();
   const server = await listen(service, config);
   console.log(
     `[matter] listening on ${config.host}:${config.port}; ${service.host.running().length} connection(s) running`,

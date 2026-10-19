@@ -34,6 +34,7 @@ const asConnection = (app: FeishuAppRecord): FeishuAppConnection => ({
   ...app,
   key: app.appId,
   label: `Feishu app ${app.appId}`,
+  revision: app.connectedAt,
 });
 
 /** Tenant tokens for one app, minted on demand and reused until shortly
@@ -68,9 +69,9 @@ export const createFeishuAdapter = (
   options: FeishuAdapterOptions,
 ): MatterAdapter<FeishuAppConnection> => ({
   kind: FEISHU_ADAPTER_KIND,
-  list: () => options.db.apps.list().map(asConnection),
-  get: (key) => {
-    const app = options.db.apps.get(key);
+  list: async () => (await options.db.apps.list()).map(asConnection),
+  get: async (key) => {
+    const app = await options.db.apps.get(key);
     return app === undefined ? undefined : asConnection(app);
   },
   wire: (app, report) => {
@@ -129,7 +130,7 @@ export const connectFeishuApp =
         }),
       ),
     );
-    const record = options.db.apps.save(
+    const record = await options.db.apps.save(
       { ...connection, agentId: connection.agentId },
       info._tag === "Right" ? { botOpenId: info.right.botOpenId } : {},
     );

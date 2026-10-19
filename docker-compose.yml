@@ -98,6 +98,8 @@ services:
       MATTER_HOST: 0.0.0.0
       MATTER_PORT: "4720"
       MATTER_DATA_DIR: /app/data/matter
+      # mysql://… to keep state in MySQL instead (required for >1 replica).
+      MATTER_DATABASE_URL: ${MATTER_DATABASE_URL:-}
       MATTER_PROXY_SECRET: ${MATTER_PROXY_SECRET:-}
       MATTER_SECRET_KEY: ${MATTER_SECRET_KEY:-}
       OMA_URL: http://oma-server:8787
