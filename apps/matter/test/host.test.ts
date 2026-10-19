@@ -40,6 +40,7 @@ class FakeWsClient implements FeishuWsClient {
 /** open.feishu.cn: tenant tokens, bot info and message replies. */
 class FakeFeishu {
   readonly replies: { messageId: string; body: Record<string, unknown> }[] = [];
+  readonly reactions: { messageId: string; emoji: unknown }[] = [];
   readonly fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     const reply = (body: unknown) =>
@@ -53,6 +54,12 @@ class FakeFeishu {
     }
     if (url.pathname === "/open-apis/bot/v3/info") {
       return reply({ code: 0, bot: { open_id: "ou_bot", app_name: "Helpdesk" } });
+    }
+    const reactionPath = /^\/open-apis\/im\/v1\/messages\/([^/]+)\/reactions$/.exec(url.pathname);
+    if (reactionPath?.[1] !== undefined) {
+      const body = JSON.parse(String(init?.body)) as { reaction_type: { emoji_type: unknown } };
+      this.reactions.push({ messageId: reactionPath[1], emoji: body.reaction_type.emoji_type });
+      return reply({ code: 0, data: { reaction_id: "r_1" } });
     }
     const replyPath = /^\/open-apis\/im\/v1\/messages\/([^/]+)\/reply$/.exec(url.pathname);
     if (replyPath?.[1] !== undefined) {
@@ -228,6 +235,8 @@ describe("Matter service", () => {
     await ws[0]!.invoke!(mention("ev_1", "om_1"));
 
     const posted = await waitFor(() => feishu.replies[0]);
+    // The message was acknowledged with a reaction before the Agent answered.
+    expect(feishu.reactions).toEqual([{ messageId: "om_1", emoji: "OnIt" }]);
     expect(posted.messageId).toBe("om_1");
     expect(JSON.stringify(posted.body)).toContain("All green.");
     const result = await waitFor(() => mcpResults[0]);
