@@ -42,6 +42,19 @@ This package currently contains the Agent side:
   `MATTER_URL` and `MATTER_PROXY_SECRET`; the Console's Feishu page then calls
   `/matter/connect/feishu/...`.
 
+The service (`server.ts`, `main.ts`) runs every connection through a
+`MatterAdapter` (`adapter.ts`): the adapter lists the saved connections of its
+kind and wires each into an OpenMatter application (integrations, Loops, event
+source); the host (`host.ts`) gives each connection its own SQLite store and
+inbox, the OpenMA connector and the intake runtime. Two adapters exist:
+
+- Feishu (`feishu-adapter.ts`): one long connection per connected app,
+  `feishu-agent` Loop.
+- GitLab (`gitlab-adapter.ts`): `POST /connect/gitlab` saves an instance and
+  bot token; GitLab webhooks arrive at `POST /webhooks/gitlab/<id>`, are
+  persisted before the `202`, and run the `gitlab-mention` Loop. See
+  docs/self-host.md.
+
 ## Operation calls over MCP
 
 The Agent reaches OpenMatter operations, such as the Feishu reply tool, through

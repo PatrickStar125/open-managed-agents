@@ -1,7 +1,7 @@
 /**
  * Durable state of the Matter service that OpenMatter's own stores do not
- * cover: the Feishu apps users connected (app secrets sealed), and the hashes
- * of the per-Session MCP bearers. One SQLite file (`node:sqlite`).
+ * cover: the Feishu apps and GitLab instances users connected (secrets
+ * sealed), and the hashes of the per-Session MCP bearers. One SQLite file (`node:sqlite`).
  */
 
 import {
@@ -68,6 +68,28 @@ export interface FeishuAppRecord {
   readonly connectedAt: string;
 }
 
+/** A connected GitLab instance with its secrets opened. */
+export interface GitLabConnectionRecord {
+  /** `gitlab-<hex>`: the connection key and the webhook path segment. */
+  readonly id: string;
+  /** The instance root, for example `https://gitlab.example.com`. */
+  readonly baseUrl: string;
+  /** The bot user's token (API scope); notes are posted as this user. */
+  readonly token: string;
+  /** The bot user's username, without @; comments mentioning it are answered. */
+  readonly username: string;
+  /** GitLab checks it on every webhook (`X-Gitlab-Token`). */
+  readonly webhookSecret: string;
+  /** Numeric ids of the projects whose comments are answered. */
+  readonly projectIds: readonly number[];
+  readonly tenantId: string;
+  readonly userId?: string;
+  readonly agentId: string;
+  readonly connectedAt: string;
+}
+
+export type GitLabConnectionInput = Omit<GitLabConnectionRecord, "connectedAt">;
+
 export interface MatterDatabase {
   readonly apps: {
     /** Insert or replace: connecting the same app again moves it. */
@@ -78,11 +100,19 @@ export interface MatterDatabase {
     list(): readonly FeishuAppRecord[];
     get(appId: string): FeishuAppRecord | undefined;
   };
+  readonly gitlab: {
+    /** Insert or replace by id. */
+    save(connection: GitLabConnectionInput): GitLabConnectionRecord;
+    list(): readonly GitLabConnectionRecord[];
+    get(id: string): GitLabConnectionRecord | undefined;
+  };
   readonly tokens: SessionTokenStore;
   close(): void;
 }
 
 const appSecretPurpose = (appId: string) => `feishu-app-secret:${appId}`;
+const gitlabTokenPurpose = (id: string) => `gitlab-token:${id}`;
+const gitlabWebhookPurpose = (id: string) => `gitlab-webhook-secret:${id}`;
 
 const tokenDigest = (token: string): Buffer =>
   createHash("sha256").update(token, "utf8").digest();
@@ -105,6 +135,18 @@ export const openMatterDatabase = (options: {
       user_id TEXT,
       agent_id TEXT NOT NULL,
       bot_open_id TEXT,
+      connected_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS gitlab_connections (
+      id TEXT PRIMARY KEY,
+      base_url TEXT NOT NULL,
+      token TEXT NOT NULL,
+      username TEXT NOT NULL,
+      webhook_secret TEXT NOT NULL,
+      project_ids TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      user_id TEXT,
+      agent_id TEXT NOT NULL,
       connected_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS session_tokens (
@@ -147,6 +189,41 @@ export const openMatterDatabase = (options: {
   `);
   const selectAll = db.prepare(`SELECT * FROM feishu_apps ORDER BY connected_at, app_id`);
   const selectOne = db.prepare(`SELECT * FROM feishu_apps WHERE app_id = ?`);
+  type GitLabRow = {
+    id: string;
+    base_url: string;
+    token: string;
+    username: string;
+    webhook_secret: string;
+    project_ids: string;
+    tenant_id: string;
+    user_id: string | null;
+    agent_id: string;
+    connected_at: string;
+  };
+  const toGitLab = (row: GitLabRow): GitLabConnectionRecord => ({
+    id: row.id,
+    baseUrl: row.base_url,
+    token: options.box.open(row.token, gitlabTokenPurpose(row.id)),
+    username: row.username,
+    webhookSecret: options.box.open(row.webhook_secret, gitlabWebhookPurpose(row.id)),
+    projectIds: JSON.parse(row.project_ids) as number[],
+    tenantId: row.tenant_id,
+    ...(row.user_id === null ? {} : { userId: row.user_id }),
+    agentId: row.agent_id,
+    connectedAt: row.connected_at,
+  });
+  const upsertGitLab = db.prepare(`
+    INSERT INTO gitlab_connections (id, base_url, token, username, webhook_secret, project_ids, tenant_id, user_id, agent_id, connected_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET
+      base_url = excluded.base_url, token = excluded.token, username = excluded.username,
+      webhook_secret = excluded.webhook_secret, project_ids = excluded.project_ids,
+      tenant_id = excluded.tenant_id, user_id = excluded.user_id, agent_id = excluded.agent_id,
+      connected_at = excluded.connected_at
+  `);
+  const selectAllGitLab = db.prepare(`SELECT * FROM gitlab_connections ORDER BY connected_at, id`);
+  const selectOneGitLab = db.prepare(`SELECT * FROM gitlab_connections WHERE id = ?`);
   const insertToken = db.prepare(
     `INSERT INTO session_tokens (digest, session_id, issued_at) VALUES (?, ?, ?)`,
   );
@@ -173,6 +250,28 @@ export const openMatterDatabase = (options: {
       get: (appId) => {
         const row = selectOne.get(appId) as Row | undefined;
         return row === undefined ? undefined : toRecord(row);
+      },
+    },
+    gitlab: {
+      save: (c) => {
+        upsertGitLab.run(
+          c.id,
+          c.baseUrl,
+          options.box.seal(c.token, gitlabTokenPurpose(c.id)),
+          c.username,
+          options.box.seal(c.webhookSecret, gitlabWebhookPurpose(c.id)),
+          JSON.stringify(c.projectIds),
+          c.tenantId,
+          c.userId ?? null,
+          c.agentId,
+          now().toISOString(),
+        );
+        return toGitLab(selectOneGitLab.get(c.id) as GitLabRow);
+      },
+      list: () => (selectAllGitLab.all() as GitLabRow[]).map(toGitLab),
+      get: (id) => {
+        const row = selectOneGitLab.get(id) as GitLabRow | undefined;
+        return row === undefined ? undefined : toGitLab(row);
       },
     },
     tokens: {

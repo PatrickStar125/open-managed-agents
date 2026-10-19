@@ -106,6 +106,8 @@ services:
       OMA_ENVIRONMENT_ID: ${MATTER_OMA_ENVIRONMENT_ID:-}
       # Where OpenMA's harness reaches the MCP endpoint.
       MATTER_MCP_URL: http://matter:4720/mcp
+      # Where GitLab reaches this service for webhooks (optional).
+      MATTER_PUBLIC_URL: ${MATTER_PUBLIC_URL:-}
     volumes:
       - ./data:/app/data
     depends_on:
