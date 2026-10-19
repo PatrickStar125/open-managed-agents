@@ -3,6 +3,7 @@ import { startTransition, useEffect, useMemo, useState, useRef } from "react";
 import { useParams, Link } from "react-router";
 import { ApiError } from "../lib/api";
 import { useManagedApi } from "../lib/useManagedApi";
+import { useScrollFade } from "../hooks/useScrollFade";
 import { readManagedMetadataObject } from "../lib/managed-metadata";
 import { toast } from "sonner";
 import { Markdown } from "../components/Markdown";
@@ -1211,6 +1212,7 @@ function ThreadTree({
   activeThreadId: string;
   onSelect: (id: string) => void;
 }) {
+  const listFade = useScrollFade<HTMLDivElement>();
   const knownIds = new Set<string>(["sthr_primary", ...threads.map((t) => t.id)]);
   const childrenOf = new Map<string, typeof threads>();
   for (const t of threads) {
@@ -1241,9 +1243,9 @@ function ThreadTree({
   const isFlat = maxDepth <= 1;
   const containerClass = isFlat
     ? "pl-3 pr-4 flex items-center gap-1 shrink-0 overflow-x-auto"
-    : "pl-3 pr-4 py-1 flex flex-col items-stretch gap-0 shrink-0 overflow-y-auto max-h-40";
+    : `console-scroll-fade ${listFade.className} pl-3 pr-4 py-1 flex flex-col items-stretch gap-0 shrink-0 overflow-y-auto max-h-40`;
   return (
-    <div role="tablist" aria-label="Threads" className={containerClass}>
+    <div ref={isFlat ? undefined : listFade.ref} role="tablist" aria-label="Threads" className={containerClass}>
       {flat.map((n) => (
         <ThreadTab
           key={n.id}

@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import type { ComponentType } from "react";
 import { SearchIcon, UsersIcon } from "lucide-react";
 import { NavLink, useLocation } from "react-router";
+import { useScrollFade } from "@/hooks/useScrollFade";
 
 import { openCommandPalette } from "./CommandPalette";
 import { TenantSwitcher } from "./TenantSwitcher";
@@ -85,6 +86,7 @@ function useNavGroups(): NavGroup[] {
 }
 
 export function AppSidebar() {
+  const navFade = useScrollFade<HTMLElement>();
   const { pathname } = useLocation();
   const { t } = useI18n();
   const navGroups = [
@@ -108,7 +110,7 @@ export function AppSidebar() {
         </Button>
       </div>
 
-      <nav className="console-sidebar-nav" aria-label="Console">
+      <nav ref={navFade.ref} className={`console-sidebar-nav console-scroll-fade ${navFade.className}`} aria-label="Console">
         {navGroups.map((group, groupIndex) => (
           <section className="console-sidebar-group" key={group.label}>
             {groupIndex > 0 && (
