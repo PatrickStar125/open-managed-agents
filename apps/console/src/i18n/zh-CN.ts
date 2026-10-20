@@ -331,6 +331,7 @@ export const zhCN: Messages = {
       linkFailed: "连接失败。",
       gitlabUrl: "GitLab 地址",
       gitlabToken: "机器人访问令牌（api 权限）",
+      otherInstance: "其他地址…",
       link: "连接",
       webhookHint: "把这个 Webhook 加到每个项目（Settings → Webhooks），勾选 Comments 和 Merge request events。密钥只显示这一次。",
       webhookUrl: "Webhook 地址",

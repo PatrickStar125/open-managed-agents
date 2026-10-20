@@ -334,6 +334,7 @@ export const en: Messages = {
       linkFailed: "Linking failed.",
       gitlabUrl: "GitLab URL",
       gitlabToken: "Bot access token (api scope)",
+      otherInstance: "Another address…",
       link: "Link",
       webhookHint: "Add this webhook to each project (Settings → Webhooks), with Comments and Merge request events. The secret is shown only once.",
       webhookUrl: "Webhook URL",

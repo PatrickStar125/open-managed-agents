@@ -354,6 +354,7 @@ export interface Messages {
       linkFailed: string;
       gitlabUrl: string;
       gitlabToken: string;
+      otherInstance: string;
       link: string;
       webhookHint: string;
       webhookUrl: string;
