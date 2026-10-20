@@ -301,7 +301,14 @@ export interface Messages {
       use: string;
       enabledLabel: string;
       sectionBondHint: string;
-      sectionAgentHint: string;
+      sectionSession: string;
+      sectionSessionHint: string;
+      environment: string;
+      environmentDefault: string;
+      environmentHint: string;
+      vaults: string;
+      vaultsHint: string;
+      noVaults: string;
       sectionOptions: string;
       sectionOptionsHint: string;
       notFound: string;
