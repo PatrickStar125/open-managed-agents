@@ -279,6 +279,8 @@ export const zhCN: Messages = {
       enabledLabel: "启用",
       sectionBondHint: "Loop 通过哪个应用收发消息。",
       sectionSession: "会话",
+      sectionTrigger: "运行时间",
+      sectionTriggerHint: "Loop 按这个时间自动运行。",
       sectionSessionHint: "Loop 每次开的 Agent 会话：由哪个 Agent 处理、在哪个环境里运行、带上哪些凭证。",
       environment: "环境",
       environmentDefault: "默认环境",
@@ -345,6 +347,7 @@ export const zhCN: Messages = {
       "feishu-agent": { name: "飞书机器人", description: "在飞书里 @机器人 或私聊，由 Agent 以提问人的身份回答。" },
       "gitlab-mention": { name: "GitLab 评论 @ 回复", description: "MR 评论里 @机器人 时，由 Agent 回复。" },
       "gitlab-mr-review": { name: "GitLab MR 评审", description: "MR 打开或有新提交时，由 Agent 评审。" },
+      "feishu-scheduled-report": { name: "飞书定时报告", description: "按计划时间运行 Agent，把它写的报告发到飞书群。" },
     },
     fields: {
       bond: { title: "运行在" },
@@ -357,6 +360,9 @@ export const zhCN: Messages = {
       skipDrafts: { title: "跳过草稿 MR" },
       username: { title: "GitLab 用户名", description: "机器人账号的用户名（不带 @），评论里 @ 它才回复。默认取连接的账号。" },
       instructions: { title: "补充指令", description: "附加给 Agent 的说明。" },
+      task: { title: "任务", description: "每次运行时 Agent 要做什么。它最后的回答会作为报告发到群里。" },
+      schedule: { title: "时间", description: "cron 表达式：分 时 日 月 周。例如 0 10 * * 1-5 表示工作日早上 10 点。" },
+      timezone: { title: "时区", description: "按哪个时区解读时间，例如 Asia/Shanghai。" },
     },
     options: {
       "work-item": "每个工作项一个会话（飞书话题、GitLab MR）",

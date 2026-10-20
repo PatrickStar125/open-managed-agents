@@ -282,6 +282,8 @@ export const en: Messages = {
       enabledLabel: "Enabled",
       sectionBondHint: "The app the Loop listens and replies through.",
       sectionSession: "Session",
+      sectionTrigger: "Schedule",
+      sectionTriggerHint: "When the Loop runs on its own.",
       sectionSessionHint: "The Agent session the Loop opens: which Agent handles it, the environment it runs in, and the credentials it carries.",
       environment: "Environment",
       environmentDefault: "Default environment",
@@ -348,6 +350,7 @@ export const en: Messages = {
       "feishu-agent": { name: "Feishu bot", description: "Mention the bot or message it in Feishu; the Agent answers as the person who asked." },
       "gitlab-mention": { name: "GitLab mentions", description: "Mention the bot in a merge request comment; the Agent replies." },
       "gitlab-mr-review": { name: "GitLab MR review", description: "When a merge request opens or gets new commits, the Agent reviews it." },
+      "feishu-scheduled-report": { name: "Feishu scheduled report", description: "Run an Agent on a schedule and post its report to Feishu chats." },
     },
     fields: {
       bond: { title: "Runs on" },
@@ -360,6 +363,9 @@ export const en: Messages = {
       skipDrafts: { title: "Skip draft merge requests" },
       username: { title: "GitLab username", description: "The bot account's username (without @); it answers only when mentioned. Default: the linked account." },
       instructions: { title: "Extra instructions", description: "Added to the Agent's instructions." },
+      task: { title: "Task", description: "What the Agent does on each run. Its final answer is posted to the chats as the report." },
+      schedule: { title: "Time", description: "A cron expression: minute hour day-of-month month day-of-week. For example 0 10 * * 1-5 is 10:00 on weekdays." },
+      timezone: { title: "Time zone", description: "The time zone the time is read in, such as Asia/Shanghai." },
     },
     options: {
       "work-item": "One session per work item (Feishu topic, GitLab MR)",

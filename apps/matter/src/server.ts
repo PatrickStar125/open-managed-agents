@@ -169,7 +169,7 @@ export const openConfiguredDatabase = async (
 /** Everything but the listener, so tests drive it with plain Requests. */
 export const createMatterService = async (
   config: MatterConfig,
-  overrides: Partial<Pick<MatterHostOptions, "onError" | "onStarted">> & {
+  overrides: Partial<Pick<MatterHostOptions, "onError" | "onStarted" | "scheduleTimers">> & {
     /** Reaches the providers (Feishu, GitLab); tests pass a fake. */
     readonly fetch?: typeof fetch;
     readonly createWsClient?: FeishuLongConnectionOptions["createClient"];
@@ -233,6 +233,7 @@ export const createMatterService = async (
       ((error, key) =>
         console.error(`[matter] ${key}:`, error instanceof Error ? error.message : error)),
     onStarted: overrides.onStarted ?? ((_key, label) => console.log(`[matter] ${label}: started`)),
+    ...(overrides.scheduleTimers === undefined ? {} : { scheduleTimers: overrides.scheduleTimers }),
   });
   const connectFeishu = connectFeishuApp(host, { db, ...providerFetch });
   const proxied = trustedProxyPrincipal(config.proxySecret);

@@ -463,6 +463,8 @@ function LoopForm(props: {
     const initial: Record<string, unknown> = {};
     for (const [key, field] of fields) if (field.default !== undefined) initial[key] = field.default;
     if (template.id === "feishu-agent") initial.acknowledge = "Get";
+    // A schedule is read in the browser's time zone unless changed.
+    if (fields.some(([key]) => key === "timezone")) initial.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const bondField = fields.find(([, f]) => f["x-oma-widget"] === "bond")?.[0];
     if (bondField && props.initialBond && props.bonds.some((b) => b.id === props.initialBond)) initial[bondField] = props.initialBond;
     return initial;
@@ -474,7 +476,10 @@ function LoopForm(props: {
   const bondKey = fields.find(([, f]) => f["x-oma-widget"] === "bond")?.[0];
   const agentKey = fields.find(([, f]) => f["x-oma-widget"] === "agent")?.[0];
   const session = (key: string) => fields.some(([k, f]) => k === key && f["x-oma-section"] === "session");
-  const options = fields.filter(([key, f]) => key !== bondKey && key !== agentKey && f["x-oma-section"] !== "session");
+  const options = fields.filter(
+    ([key, f]) => key !== bondKey && key !== agentKey && f["x-oma-section"] !== "session" && f["x-oma-section"] !== "trigger",
+  );
+  const trigger = fields.filter(([, f]) => f["x-oma-section"] === "trigger");
   // Session settings a template adds itself, such as `sessionScope`.
   const sessionOptions = fields.filter(
     ([key, f]) => f["x-oma-section"] === "session" && key !== "environmentId" && key !== "vaultIds" && key !== agentKey,
@@ -545,6 +550,24 @@ function LoopForm(props: {
             bonds={props.bonds}
             reloadBonds={props.reloadBonds}
           />
+        </MatterSection>
+      )}
+
+      {trigger.length > 0 && (
+        <MatterSection title={m.loops.sectionTrigger} hint={m.loops.sectionTriggerHint}>
+          <div className="space-y-5">
+            {trigger.map(([key, field]) => (
+              <ConfigField
+                key={key}
+                name={key}
+                field={field}
+                required={required(key) || key === "schedule"}
+                value={values[key]}
+                bond=""
+                onChange={(v) => set(key, v)}
+              />
+            ))}
+          </div>
         </MatterSection>
       )}
 
@@ -741,7 +764,7 @@ function ConfigField(props: {
             ))}
           </SelectContent>
         </Select>
-      ) : name === "instructions" ? (
+      ) : name === "instructions" || name === "task" ? (
         <Textarea id={id} rows={4} value={text} onChange={(e) => onChange(e.target.value)} />
       ) : (
         <Input id={id} className="sm:w-80" value={text} onChange={(e) => onChange(e.target.value)} />

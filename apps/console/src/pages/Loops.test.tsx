@@ -175,6 +175,39 @@ describe("LoopsPage", () => {
     expect(await screen.findByText("Helpdesk")).toBeTruthy();
   });
 
+  it("schedules a report Loop in the browser's time zone", async () => {
+    const reportTemplate = {
+      id: "feishu-scheduled-report",
+      version: "1.0.0",
+      provider: "feishu",
+      description: "Report",
+      configSchema: {
+        properties: {
+          bond: { type: "string", title: "Runs on", "x-oma-widget": "bond", "x-bond-provider": "feishu" },
+          agentId: { type: "string", title: "Agent", "x-oma-widget": "agent" },
+          task: { type: "string", title: "Task" },
+          schedule: { type: "string", title: "Schedule", "x-oma-widget": "cron", "x-oma-section": "trigger" },
+          timezone: { type: "string", title: "Time zone", default: "UTC", "x-oma-widget": "timezone", "x-oma-section": "trigger" },
+        },
+        required: ["bond", "agentId", "task", "schedule"],
+      },
+    };
+    routes["GET /matter/loop-templates"] = () => json(200, { data: [feishuTemplate, reportTemplate] });
+    routes["POST /matter/loops"] = () => json(201, loop);
+    open("/loops/new?template=feishu-scheduled-report&bond=feishu:cli_old");
+    expect(await screen.findByText(/^(Schedule|运行时间)$/)).toBeTruthy();
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect((screen.getByLabelText(/^(Time zone|时区)/) as HTMLInputElement).value).toBe(zone);
+    fireEvent.change(screen.getByLabelText(/^(Time|时间)\s*\*?$/), { target: { value: "0 10 * * 1-5" } });
+    fireEvent.change(screen.getByLabelText(/^(Task|任务)/), { target: { value: "Daily metrics" } });
+    fireEvent.click(screen.getByRole("button", { name: /^(Save|保存)$/ }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === "/matter/loops")).toBe(true));
+    expect(calls.find((c) => c.method === "POST")?.body).toMatchObject({
+      template: "feishu-scheduled-report",
+      config: { bond: "feishu:cli_old", schedule: "0 10 * * 1-5", timezone: zone, task: "Daily metrics" },
+    });
+  });
+
   it("sets the Loop's session: the default environment and the checked vaults", async () => {
     routes["PATCH /matter/loops/loop-1"] = () => json(200, loop);
     open("/loops/loop-1");

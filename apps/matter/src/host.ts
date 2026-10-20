@@ -21,7 +21,14 @@ import { createHash } from "node:crypto";
 import { isSafeConnectionKey, type MatterAdapter, type MatterConnection } from "./adapter.js";
 import { createOpenMAConnector, isOmaSessionUnavailable } from "./connector.js";
 import type { OmaClient, OmaMcpServer } from "./oma-client.js";
-import { splitLoopConfig, type LoopSession } from "./loops.js";
+import { loopSchedules, splitLoopConfig, type LoopSession } from "./loops.js";
+import {
+  combineSources,
+  makeScheduleIntegration,
+  makeScheduleSource,
+  SCHEDULE_INTEGRATION_ID,
+  type ScheduleTimers,
+} from "./schedule.js";
 import type { LoopRecord, MatterDatabase } from "./persistence.js";
 import { withImages } from "./images.js";
 import { sessionVaults } from "./session-tokens.js";
@@ -47,6 +54,8 @@ export interface MatterHostOptions {
   readonly onError?: (error: unknown, key: string) => void;
   /** A connection started on this replica (for logs). */
   readonly onStarted?: (key: string, label: string) => void;
+  /** Clock and timers of scheduled Loops; tests replace them. */
+  readonly scheduleTimers?: ScheduleTimers;
 }
 
 /** One connection as this replica sees it. */
@@ -205,6 +214,7 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       return;
     }
     const { loops, drivers } = loopDrivers(connection.loops);
+    const schedules = loopSchedules(connection.loops);
     const client = options.clientFor(connection.tenantId);
     if (client === null) {
       report(new Error(`No OpenMA access for tenant ${connection.tenantId}`), key);
@@ -230,7 +240,10 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
     });
     const application = createOpenMatter({
       store,
-      integrations: wiring.integrations,
+      integrations:
+        schedules.length === 0
+          ? wiring.integrations
+          : { ...wiring.integrations, [SCHEDULE_INTEGRATION_ID]: makeScheduleIntegration() },
       agents: Object.fromEntries(
         [...drivers].map(([key, { agentId, session }]) => [
           key,
@@ -245,7 +258,18 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
     });
     wiring.install(application, loops);
     const runtime = makeLocalLongConnectionRuntime({
-      source: wiring.source,
+      source:
+        schedules.length === 0
+          ? wiring.source
+          : combineSources(
+              wiring.source,
+              makeScheduleSource({
+                schedules,
+                authority: key,
+                ...(options.scheduleTimers === undefined ? {} : { timers: options.scheduleTimers }),
+                onError: (error) => report(error, key),
+              }),
+            ),
       application,
       inbox,
       connectionLabel: connection.label,

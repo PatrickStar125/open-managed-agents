@@ -20,7 +20,7 @@ import {
   type MatterAdapter,
   type MatterConnection,
 } from "./adapter.js";
-import { loopTemplate, normalizeLoopConfig } from "./loops.js";
+import { installLoops, normalizeLoopConfig } from "./loops.js";
 import type { FeishuConnectPrincipal } from "./feishu-connect.js";
 import type { MatterHost } from "./host.js";
 import type { GitLabConnectionRecord, LoopRecord, MatterDatabase } from "./persistence.js";
@@ -85,13 +85,7 @@ export const createGitLabAdapter = (options: {
             ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
           }),
         },
-        install: (application, loops) => {
-          for (const loop of loops) {
-            const template = loopTemplate(loop.template);
-            if (template?.provider !== "gitlab") throw new Error(`Loop ${loop.id}: ${loop.template} does not run on GitLab`);
-            application.loop(template.loop, loop.config as Parameters<typeof application.loop>[1]);
-          }
-        },
+        install: (application, loops) => installLoops(application, loops, "gitlab"),
         source: {
           start: async (onEnvelope) => {
             deliver = onEnvelope;

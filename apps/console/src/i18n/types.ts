@@ -302,6 +302,8 @@ export interface Messages {
       enabledLabel: string;
       sectionBondHint: string;
       sectionSession: string;
+      sectionTrigger: string;
+      sectionTriggerHint: string;
       sectionSessionHint: string;
       environment: string;
       environmentDefault: string;

@@ -30,9 +30,10 @@ import {
   loopTemplate,
   loopTemplates,
   normalizeLoopConfig,
-  SESSION_FIELDS,
+  hostFields,
   splitLoopConfig,
 } from "./loops.js";
+import { isScheduled } from "./schedule.js";
 import type { LoopRecord, MatterDatabase } from "./persistence.js";
 
 type Provider = "feishu" | "gitlab";
@@ -106,9 +107,9 @@ const templates = () =>
         properties: {
           bond: { type: "string", minLength: 1, title: "Bond", "x-oma-widget": "bond", "x-bond-provider": provider },
           ...(schema.properties ?? {}),
-          ...SESSION_FIELDS,
+          ...hostFields(loop),
         },
-        required: ["bond", ...(schema.required ?? [])],
+        required: ["bond", ...(schema.required ?? []), ...(isScheduled(loop) ? ["schedule"] : [])],
       },
     };
   });
