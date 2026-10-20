@@ -331,7 +331,9 @@ describe("Matter service", () => {
     // Bad configurations are refused with the reasons.
     const missing = await call("POST", "/loops", { template: "feishu-agent", config: { bond } });
     expect(missing.status).toBe(400);
-    expect((await read(missing)).problems).toEqual(["Agent is required"]);
+    const missingBody = await read(missing);
+    expect(missingBody.problems).toEqual(["Agent is required"]);
+    expect(missingBody.issues).toEqual([{ field: "agentId", code: "required" }]);
     expect((await call("POST", "/loops", { template: "feishu-agent", config: { bond: "feishu:cli_nope", agentId: "agent-1" } })).status).toBe(404);
     expect((await call("POST", "/loops", { template: "gitlab-mention", config: { bond, agentId: "agent-1" } })).status).toBe(400);
     expect((await call("POST", "/loops", { template: "feishu-agent", config: { bond, agentId: "agent-1" } }, "other")).status).toBe(401);
@@ -396,8 +398,14 @@ describe("Matter service", () => {
 
     // Unknown environments and vaults are refused.
     const config = { bond, agentId: "agent-1" };
-    expect((await call("POST", "/loops", { template: "feishu-agent", config: { ...config, environmentId: "env_nope" } })).status).toBe(404);
-    expect((await call("POST", "/loops", { template: "feishu-agent", config: { ...config, vaultIds: ["vlt_nope"] } })).status).toBe(404);
+    const noEnvironment = await call("POST", "/loops", { template: "feishu-agent", config: { ...config, environmentId: "env_nope" } });
+    expect(noEnvironment.status).toBe(404);
+    expect(((await noEnvironment.json()) as { issues: unknown }).issues).toEqual([
+      { field: "environmentId", code: "not_found", params: { id: "env_nope" } },
+    ]);
+    const noVault = await call("POST", "/loops", { template: "feishu-agent", config: { ...config, vaultIds: ["vlt_nope"] } });
+    expect(noVault.status).toBe(404);
+    expect(((await noVault.json()) as { issues: unknown }).issues).toEqual([{ field: "vaultIds", code: "not_found", params: { id: "vlt_nope" } }]);
 
     const created = await call("POST", "/loops", {
       template: "feishu-agent",

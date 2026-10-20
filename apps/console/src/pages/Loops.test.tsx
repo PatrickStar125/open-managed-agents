@@ -3,7 +3,9 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter, Route, Routes } from "react-router";
 
 import { I18nProvider } from "../i18n";
-import { LoopEditPage, LoopsPage, LoopTemplatesPage } from "./Loops";
+import { en } from "../i18n/en";
+import { zhCN } from "../i18n/zh-CN";
+import { issueText, LoopEditPage, LoopsPage, LoopTemplatesPage } from "./Loops";
 
 const managedApi = {
   agents: { list: vi.fn(async () => ({ data: [{ id: "agent-1", name: "Helpdesk" }] })) },
@@ -223,3 +225,23 @@ describe("LoopsPage", () => {
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ config: { ...loop.config, vaultIds: ["vlt_user"] } });
   });
 });
+
+describe("issueText", () => {
+  it("says a configuration problem in the user's language", () => {
+    expect(issueText(zhCN.matter, { field: "agentId", code: "required" })).toBe(`请填写${zhCN.matter.fields.agentId!.title}`);
+    expect(issueText(en.matter, { field: "task", code: "max_length", params: { max: 8000 } })).toBe(
+      `${en.matter.fields.task!.title} must be at most 8000 characters`,
+    );
+    expect(issueText(zhCN.matter, { field: "chats", code: "type", params: { expected: "string", item: 2 } })).toBe(
+      `${zhCN.matter.fields.chats?.title ?? "chats"}必须是文本（第 2 项）`,
+    );
+    expect(issueText(zhCN.matter, { field: "sessionScope", code: "enum", params: { options: "request, global" } })).toContain(
+      zhCN.matter.options.request!,
+    );
+    expect(issueText(zhCN.matter, { field: "timezone", code: "timezone_unknown", params: { timezone: "Mars/Base" } })).toBe(
+      "未知时区 Mars/Base",
+    );
+    expect(issueText(en.matter, { code: "something_new" })).toBeUndefined();
+  });
+});
+

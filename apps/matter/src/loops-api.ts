@@ -16,6 +16,7 @@
  *   DELETE /bonds/:bond              only when no Loop uses it
  */
 
+import { issueJson, MissingReferenceError, type LoopIssue } from "./issues.js";
 import { randomUUID } from "node:crypto";
 import type { ProviderAppConfig } from "@openma/matter/bond";
 import { makeFeishuResourceCatalog, mintTenantAccessToken } from "@openma/matter-feishu/bond";
@@ -56,6 +57,7 @@ class ApiError extends Error {
     readonly status: number,
     message: string,
     readonly problems?: readonly string[],
+    readonly issues?: readonly LoopIssue[],
   ) {
     super(message);
   }
@@ -161,7 +163,7 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
     try {
       config = normalizeLoopConfig(input.template, rest);
     } catch (error) {
-      if (error instanceof LoopConfigError) throw new ApiError(400, error.message, error.problems);
+      if (error instanceof LoopConfigError) throw new ApiError(400, error.message, error.problems, error.issues);
       throw error;
     }
     if (typeof config.agentId === "string") {
@@ -169,6 +171,9 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
         await host.prepareAgent(principal.tenantId, config.agentId);
         await host.checkSession(principal.tenantId, splitLoopConfig(config).session);
       } catch (error) {
+        if (error instanceof MissingReferenceError) {
+          throw new ApiError(404, error.message, [error.message], [error.issue]);
+        }
         if (error instanceof Error && /not found/.test(error.message)) throw new ApiError(404, error.message);
         throw error;
       }
@@ -350,7 +355,14 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
       return json({ error: "method not allowed" }, 405);
     } catch (error) {
       if (error instanceof ApiError) {
-        return json({ error: error.message, ...(error.problems === undefined ? {} : { problems: error.problems }) }, error.status);
+        return json(
+          {
+            error: error.message,
+            ...(error.problems === undefined ? {} : { problems: error.problems }),
+            ...(error.issues === undefined ? {} : { issues: error.issues.map(issueJson) }),
+          },
+          error.status,
+        );
       }
       throw error;
     }

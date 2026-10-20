@@ -374,5 +374,20 @@ export interface Messages {
     options: Record<string, string>;
     /** The label of `freshness: "thread"`. */
     freshnessThread: string;
+    /** Loop configuration problems by code; {field}, {max}, {min}, {options}, {timezone}, {id}, {expected} are filled in. */
+    issues: {
+      required: string;
+      type: string;
+      max_length: string;
+      min_items: string;
+      enum: string;
+      schedule_fields: string;
+      schedule_invalid: string;
+      timezone_unknown: string;
+      not_found: string;
+      /** Appended when the problem is in one entry of a list: {item} is its position. */
+      item: string;
+    };
+    issueTypes: { string: string; boolean: string; list: string };
   };
 }

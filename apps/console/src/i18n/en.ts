@@ -377,5 +377,18 @@ export const en: Messages = {
       off: "Never check",
     },
     freshnessThread: "Anyone's newer message in the thread",
+    issues: {
+      required: "{field} is required",
+      type: "{field} must be {expected}",
+      max_length: "{field} must be at most {max} characters",
+      min_items: "{field} needs at least {min}",
+      enum: "{field} must be one of {options}",
+      schedule_fields: "{field} needs five parts: minute hour day-of-month month day-of-week",
+      schedule_invalid: "{field} is not a valid cron expression",
+      timezone_unknown: "Unknown time zone {timezone}",
+      not_found: "{field}: {id} was not found",
+      item: " (entry {item})",
+    },
+    issueTypes: { string: "text", boolean: "on or off", list: "a list" },
   },
 };

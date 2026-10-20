@@ -374,5 +374,18 @@ export const zhCN: Messages = {
       off: "不检查",
     },
     freshnessThread: "话题里有人发了新消息",
+    issues: {
+      required: "请填写{field}",
+      type: "{field}必须是{expected}",
+      max_length: "{field}最多 {max} 个字符",
+      min_items: "{field}至少需要 {min} 项",
+      enum: "{field}只能是以下之一：{options}",
+      schedule_fields: "{field}需要五段：分 时 日 月 周",
+      schedule_invalid: "{field}不是有效的 cron 表达式",
+      timezone_unknown: "未知时区 {timezone}",
+      not_found: "{field}：找不到 {id}",
+      item: "（第 {item} 项）",
+    },
+    issueTypes: { string: "文本", boolean: "开关", list: "列表" },
   },
 };

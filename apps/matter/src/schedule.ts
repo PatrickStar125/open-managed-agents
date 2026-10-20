@@ -13,6 +13,7 @@
  * A tick missed while no replica ran is not made up.
  */
 
+import type { LoopIssue } from "./issues.js";
 import type { LongConnectionSource, ReceivedEnvelope } from "@openma/matter-host-local/runtime";
 import type { WorkIntegration } from "@openma/matter/integration";
 import { IntegrationError } from "@openma/matter/integration";
@@ -52,25 +53,42 @@ export const isScheduled = (loop: Loop): boolean => {
   return Array.isArray(spec?.sources) && spec.sources.includes(SCHEDULE_TICK);
 };
 
-/** The problem with a schedule, or undefined when it is valid. */
-export const scheduleProblem = (schedule: unknown, timezone: unknown): string | undefined => {
-  if (typeof schedule !== "string" || schedule.trim() === "") return "Schedule is required";
+/**
+ * What is wrong with a schedule, or undefined when it is valid. The code and
+ * params let a console say it in the user's language; message is English.
+ */
+export const scheduleIssue = (schedule: unknown, timezone: unknown): LoopIssue | undefined => {
+  if (typeof schedule !== "string" || schedule.trim() === "") {
+    return { field: "schedule", code: "required", message: "Schedule is required" };
+  }
   if (schedule.trim().split(/\s+/).length !== 5) {
-    return "Schedule must have five fields: minute hour day-of-month month day-of-week";
+    return {
+      field: "schedule",
+      code: "schedule_fields",
+      message: "Schedule must have five fields: minute hour day-of-month month day-of-week",
+    };
   }
   const tz = typeof timezone === "string" && timezone !== "" ? timezone : "UTC";
   try {
     new Intl.DateTimeFormat("en", { timeZone: tz });
   } catch {
-    return `Unknown time zone ${tz}`;
+    return { field: "timezone", code: "timezone_unknown", params: { timezone: tz }, message: `Unknown time zone ${tz}` };
   }
   try {
     CronExpressionParser.parse(schedule, { tz });
   } catch (error) {
-    return `Invalid schedule: ${error instanceof Error ? error.message : String(error)}`;
+    return {
+      field: "schedule",
+      code: "schedule_invalid",
+      message: `Invalid schedule: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
   return undefined;
 };
+
+/** The problem with a schedule in English, or undefined when it is valid. */
+export const scheduleProblem = (schedule: unknown, timezone: unknown): string | undefined =>
+  scheduleIssue(schedule, timezone)?.message;
 
 /** The first time after `after` that the schedule names. */
 export const nextFire = (schedule: string, timezone: string, after: Date): Date =>

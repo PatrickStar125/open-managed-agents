@@ -13,6 +13,7 @@
  * in line with the saved ones.
  */
 
+import { MissingReferenceError } from "./issues.js";
 import { makeConnectorAgentDriver } from "@openma/matter/agent";
 import { createOpenMatter } from "@openma/matter/runtime";
 import { makeLocalLongConnectionRuntime } from "@openma/matter-host-local/runtime";
@@ -373,12 +374,12 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       if (session.environmentId !== undefined) {
         const environment = await client.getEnvironment(session.environmentId);
         if (environment === null || environment.archived_at) {
-          throw new Error(`Environment ${session.environmentId} not found`);
+          throw new MissingReferenceError("environmentId", "Environment", session.environmentId);
         }
       }
       for (const vaultId of session.vaultIds) {
         const vault = await client.getVault(vaultId);
-        if (vault === null || vault.archived_at) throw new Error(`Vault ${vaultId} not found`);
+        if (vault === null || vault.archived_at) throw new MissingReferenceError("vaultIds", "Vault", vaultId);
       }
     },
     running: () => [...running.keys()],

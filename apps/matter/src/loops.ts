@@ -13,7 +13,8 @@ import { feishuTemplates } from "@openma/matter-feishu/bond";
 import { gitlabTemplates } from "@openma/matter-gitlab/bond";
 import type { MatterApplication } from "./adapter.js";
 import type { LoopRecord } from "./persistence.js";
-import { isScheduled, SCHEDULE_FIELDS, scheduledLoop, scheduleProblem, type LoopSchedule } from "./schedule.js";
+import type { LoopIssue } from "./issues.js";
+import { isScheduled, SCHEDULE_FIELDS, scheduledLoop, scheduleIssue, type LoopSchedule } from "./schedule.js";
 import { feishuScheduledReport } from "./templates/feishu-report.js";
 
 /** A Loop written with `defineLoop` from `@openma/matter-loop`. */
@@ -149,9 +150,15 @@ const HOST_DEFAULTS: Readonly<Record<string, Readonly<Record<string, unknown>>>>
 };
 
 export class LoopConfigError extends Error {
-  constructor(readonly problems: readonly string[]) {
-    super(problems.join("; "));
+  readonly problems: readonly string[];
+  /** The same problems with field, code and params, for translation. */
+  readonly issues: readonly LoopIssue[];
+  constructor(problems: readonly (string | LoopIssue)[]) {
+    const issues = problems.map((p) => (typeof p === "string" ? { code: "invalid", message: p } : p));
+    super(issues.map((i) => i.message).join("; "));
     this.name = "LoopConfigError";
+    this.issues = issues;
+    this.problems = issues.map((i) => i.message);
   }
 }
 
@@ -171,36 +178,47 @@ interface ObjectSchema {
   readonly required?: readonly string[];
 }
 
-const checkValue = (name: string, schema: PropertySchema, value: unknown, problems: string[]): void => {
+const checkValue = (
+  field: string,
+  label: string,
+  schema: PropertySchema,
+  value: unknown,
+  issues: LoopIssue[],
+  item?: number,
+): void => {
+  const add = (code: string, message: string, extra: Record<string, string | number> = {}) => {
+    const params: Record<string, string | number> = item === undefined ? extra : { ...extra, item };
+    issues.push({ field, code, message, ...(Object.keys(params).length > 0 ? { params } : {}) });
+  };
   switch (schema.type) {
     case "string":
       if (typeof value !== "string") {
-        problems.push(`${name} must be a string`);
+        add("type", `${label} must be a string`, { expected: "string" });
         return;
       }
-      if (schema.minLength !== undefined && value.length < schema.minLength) problems.push(`${name} is required`);
+      if (schema.minLength !== undefined && value.length < schema.minLength) add("required", `${label} is required`);
       if (schema.maxLength !== undefined && value.length > schema.maxLength) {
-        problems.push(`${name} must be at most ${schema.maxLength} characters`);
+        add("max_length", `${label} must be at most ${schema.maxLength} characters`, { max: schema.maxLength });
       }
       break;
     case "boolean":
-      if (typeof value !== "boolean") problems.push(`${name} must be true or false`);
+      if (typeof value !== "boolean") add("type", `${label} must be true or false`, { expected: "boolean" });
       break;
     case "array":
       if (!Array.isArray(value)) {
-        problems.push(`${name} must be a list`);
+        add("type", `${label} must be a list`, { expected: "list" });
         return;
       }
       if (schema.minItems !== undefined && value.length < schema.minItems) {
-        problems.push(`${name} needs at least ${schema.minItems}`);
+        add("min_items", `${label} needs at least ${schema.minItems}`, { min: schema.minItems });
       }
       if (schema.items !== undefined) {
-        value.forEach((item, i) => checkValue(`${name}[${i}]`, schema.items!, item, problems));
+        value.forEach((entry, i) => checkValue(field, `${label}[${i}]`, schema.items!, entry, issues, i + 1));
       }
       break;
   }
   if (schema.enum !== undefined && !schema.enum.includes(value)) {
-    problems.push(`${name} must be one of ${schema.enum.join(", ")}`);
+    add("enum", `${label} must be one of ${schema.enum.join(", ")}`, { options: schema.enum.join(", ") });
   }
 };
 
@@ -217,21 +235,23 @@ export const normalizeLoopConfig = (template: string, input: unknown): Record<st
   const schema = (entry.loop.definition.configSchema ?? {}) as ObjectSchema;
   const given = input as Record<string, unknown>;
   const config: Record<string, unknown> = {};
-  const problems: string[] = [];
+  const problems: LoopIssue[] = [];
   const properties: Record<string, PropertySchema> = { ...(schema.properties ?? {}), ...hostFields(entry.loop) };
   const required = [...(schema.required ?? []), ...(isScheduled(entry.loop) ? ["schedule"] : [])];
   for (const [name, property] of Object.entries(properties)) {
     const value =
       given[name] !== undefined ? given[name] : (HOST_DEFAULTS[template]?.[name] ?? property.default);
     if (value === undefined) {
-      if (required.includes(name)) problems.push(`${property.title ?? name} is required`);
+      if (required.includes(name)) {
+        problems.push({ field: name, code: "required", message: `${property.title ?? name} is required` });
+      }
       continue;
     }
-    checkValue(property.title ?? name, property, value, problems);
+    checkValue(name, property.title ?? name, property, value, problems);
     config[name] = value;
   }
   if (isScheduled(entry.loop) && config.schedule !== undefined) {
-    const problem = scheduleProblem(config.schedule, config.timezone);
+    const problem = scheduleIssue(config.schedule, config.timezone);
     if (problem !== undefined) problems.push(problem);
   }
   if (problems.length > 0) throw new LoopConfigError(problems);

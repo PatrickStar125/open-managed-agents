@@ -5,10 +5,13 @@ import {
   nextFire,
   SCHEDULE_TICK,
   scheduledLoop,
+  scheduleIssue,
   scheduleProblem,
   type ScheduleTimers,
 } from "../src/schedule.js";
 import { feishuScheduledReport } from "../src/templates/feishu-report.js";
+import { issueJson } from "../src/issues.js";
+import { LoopConfigError, normalizeLoopConfig } from "../src/loops.js";
 
 describe("schedules", () => {
   it("reads a cron expression in its time zone", () => {
@@ -25,6 +28,18 @@ describe("schedules", () => {
     expect(scheduleProblem("0 10 * *", "UTC")).toMatch(/five fields/);
     expect(scheduleProblem("0 25 * * *", "UTC")).toMatch(/Invalid schedule/);
     expect(scheduleProblem("0 10 * * *", "Mars/Base")).toBe("Unknown time zone Mars/Base");
+  });
+
+  it("names each schedule problem with a code the console can translate", () => {
+    expect(scheduleIssue("0 10 * * *", "UTC")).toBeUndefined();
+    expect(scheduleIssue("", "UTC")).toMatchObject({ field: "schedule", code: "required" });
+    expect(scheduleIssue("0 10 * *", "UTC")).toMatchObject({ field: "schedule", code: "schedule_fields" });
+    expect(scheduleIssue("0 25 * * *", "UTC")).toMatchObject({ field: "schedule", code: "schedule_invalid" });
+    expect(scheduleIssue("0 10 * * *", "Mars/Base")).toMatchObject({
+      field: "timezone",
+      code: "timezone_unknown",
+      params: { timezone: "Mars/Base" },
+    });
   });
 
   it("gives each scheduled Loop its own tick type", () => {
@@ -87,3 +102,33 @@ describe("schedules", () => {
     expect(pending).toEqual([]);
   });
 });
+
+describe("config issues", () => {
+  const issuesOf = (config: Record<string, unknown>) => {
+    try {
+      normalizeLoopConfig("feishu-scheduled-report", config);
+    } catch (error) {
+      if (error instanceof LoopConfigError) return error.issues.map(issueJson);
+      throw error;
+    }
+    return [];
+  };
+
+  it("reports every problem with a field, a code and its parameters", () => {
+    expect(
+      issuesOf({ agentId: "a", chats: [], task: "x".repeat(8001), sessionScope: "thread", schedule: "0 9 * * *" }),
+    ).toEqual([
+      { field: "chats", code: "min_items", params: { min: 1 } },
+      { field: "task", code: "max_length", params: { max: 8000 } },
+      { field: "sessionScope", code: "enum", params: { options: "request, global" } },
+    ]);
+    expect(issuesOf({ agentId: "a", chats: ["oc_1", 3], task: "t", schedule: "0 9 * *" })).toEqual([
+      { field: "chats", code: "type", params: { expected: "string", item: 2 } },
+      { field: "schedule", code: "schedule_fields" },
+    ]);
+    expect(issuesOf({ chats: ["oc_1"], task: "t", schedule: "0 9 * * *" })).toEqual([
+      { field: "agentId", code: "required" },
+    ]);
+  });
+});
+

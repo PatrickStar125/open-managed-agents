@@ -16,7 +16,17 @@ import { FilterChip } from "../components/FilterChip";
 import { Page } from "../components/Page";
 import type { RowAction } from "../components/RowContextMenu";
 import { useI18n } from "../i18n";
-import { matter, MatterError, type Bond, type BondResource, type FieldSchema, type Loop, type LoopTemplate } from "../lib/matter";
+import type { Messages } from "../i18n/types";
+import {
+  matter,
+  MatterError,
+  type Bond,
+  type BondResource,
+  type FieldSchema,
+  type Loop,
+  type LoopTemplate,
+  type MatterIssue,
+} from "../lib/matter";
 import { useManagedApi } from "../lib/useManagedApi";
 import {
   FeishuLinker,
@@ -489,7 +499,15 @@ function LoopForm(props: {
   const required = (key: string) => template.configSchema.required.includes(key);
 
   const fail = (err: unknown) =>
-    setProblems(err instanceof MatterError ? (err.problems.length ? [...err.problems] : [err.message]) : [String(err)]);
+    setProblems(
+      err instanceof MatterError
+        ? err.issues.length === err.problems.length && err.issues.length > 0
+          ? err.issues.map((issue, i) => issueText(m, issue) ?? err.problems[i]!)
+          : err.problems.length
+            ? [...err.problems]
+            : [err.message]
+        : [String(err)],
+    );
 
   async function save() {
     setBusy(true);
@@ -712,6 +730,27 @@ function LoopForm(props: {
       </div>
     </>
   );
+}
+
+const fill = (text: string, values: Readonly<Record<string, string | number>>) =>
+  text.replace(/\{(\w+)\}/g, (all, key: string) => (values[key] === undefined ? all : String(values[key])));
+
+/** A Loop configuration problem in the user's language, or undefined for an unknown code. */
+export function issueText(m: Messages["matter"], issue: MatterIssue): string | undefined {
+  const template = (m.issues as Record<string, string | undefined>)[issue.code];
+  if (template === undefined || issue.code === "item") return undefined;
+  const params = issue.params ?? {};
+  const field = issue.field === undefined ? "" : (m.fields[issue.field]?.title ?? issue.field);
+  const expected = typeof params.expected === "string" ? (m.issueTypes as Record<string, string>)[params.expected] ?? params.expected : "";
+  const options =
+    typeof params.options === "string"
+      ? params.options
+          .split(", ")
+          .map((o) => m.options[o] ?? o)
+          .join(" / ")
+      : "";
+  const text = fill(template, { ...params, field, expected, options });
+  return params.item === undefined ? text : text + fill(m.issues.item, { item: params.item });
 }
 
 /** One template option, rendered from its JSON Schema. */
