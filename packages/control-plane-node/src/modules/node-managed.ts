@@ -15,6 +15,7 @@
  * index.ts is the executable entrypoint (process.env, listen, signals).
  */
 
+import { installEnvironmentPackages } from "../lib/environment-packages";
 import { resolveSessionSandboxMode, readManagedSessionMappingMetadata } from "@open-managed-agents/openai-agents-compat";
 import { SqlSessionThreadStore } from "@open-managed-agents/session-thread-store-sql";
 import { buildOpenAISubagentTools, nodeOpenAISubagentPolicy, openAISubagentSession } from "../openai-subagents.js";
@@ -435,6 +436,7 @@ export async function createManagedNodeRuntime(
     prepareSandbox: async ({
       workspaceId,
       session,
+      environment,
       sandbox,
       runtimeGeneration,
     }) => {
@@ -460,6 +462,18 @@ export async function createManagedNodeRuntime(
       // fresh sandbox before inputs are staged, so input mounts under the
       // outputs directory win and the next turn can read prior outputs.
       await sharedSessionOutputs?.restoreToSandbox(workspaceId, session.id, sandbox, runtimeGeneration);
+      // After the workspace is restored, so packages it carries count.
+      await installEnvironmentPackages(sandbox, environment, {
+        pipIndexUrl: config.sandbox.environment.SANDBOX_PIP_INDEX_URL,
+        log: (result) => logger.info({
+          op: "main-node.environment_packages",
+          sessionId: session.id,
+          workspaceId,
+          environmentId: environment.id,
+          path: result.path,
+          durationMs: result.durationMs,
+        }, "Environment packages ready"),
+      });
       await preparer.prepare({
         workspaceId,
         session,

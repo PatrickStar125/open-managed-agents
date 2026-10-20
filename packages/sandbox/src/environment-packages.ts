@@ -1,0 +1,278 @@
+// Install an Environment's `packages` into a sandbox, once per container.
+//
+// Shared by the Cloudflare SessionDO warmup and the Node managed runtime.
+// Three paths, decided by two markers:
+//
+//   warm     → markers in /tmp + /workspace match → no-op
+//   restored → /tmp marker gone but /workspace marker survived backup
+//              → only re-install apt (lang packages already in /workspace
+//              came back with the workspace)
+//   fresh    → both markers gone → full setup
+//
+// Lang packages (pip/npm/cargo/go) go under /workspace/.<lang>/ so a
+// workspace backup carries them. Apt installs to /usr, which a backup
+// cannot carry, so a cold restart re-runs it.
+
+/** The `packages` of a cloud Environment. */
+export interface EnvironmentPackages {
+  pip?: readonly string[];
+  npm?: readonly string[];
+  apt?: readonly string[];
+  cargo?: readonly string[];
+  /** Accepted but skipped: the sandbox images ship no Ruby. */
+  gem?: readonly string[];
+  go?: readonly string[];
+}
+
+export interface EnvironmentPackagesOptions {
+  /**
+   * A Python package index to install pip packages from, for sandboxes
+   * whose network reaches a mirror faster than pypi.org.
+   */
+  pipIndexUrl?: string;
+}
+
+/** Directories the installed tools live in, in PATH order. */
+export const ENVIRONMENT_PACKAGE_PATHS = [
+  "/workspace/.venv/bin",
+  "/workspace/.npm-global/bin",
+  "/workspace/.cargo/bin",
+  "/workspace/.go/bin",
+] as const;
+
+const WARM_MARKER = "/tmp/.oma-setup-warm";
+const RESTORED_MARKER = "/workspace/.oma-setup-restored";
+
+/** A sandbox that runs shell commands. */
+export interface PackageSandbox {
+  exec(command: string, timeout?: number): Promise<string>;
+}
+
+export type EnvironmentPackagesPath = "warm" | "restored" | "fresh";
+
+export type EnvironmentPackagesProgress =
+  | { kind: "step"; step: "running_setup" | "reinstalling_apt"; reason?: string }
+  | { kind: "done"; path: EnvironmentPackagesPath; durationMs: number };
+
+/**
+ * Read an exec result. Two shapes exist: the Cloudflare sandbox returns
+ * "exit=N\n<stdout>\nstderr: <stderr>", other adapters return the combined
+ * output with a trailing "\n[exit N]" when the command failed.
+ */
+export function parseExecResult(raw: string): { exitCode: number; stdout: string; stderr: string } {
+  const prefixed = raw.match(/^exit=(-?\d+)\n?/);
+  if (prefixed) {
+    const rest = raw.slice(prefixed[0].length);
+    const marker = "\nstderr: ";
+    const idx = rest.indexOf(marker);
+    return idx >= 0
+      ? { exitCode: parseInt(prefixed[1]!, 10), stdout: rest.slice(0, idx), stderr: rest.slice(idx + marker.length) }
+      : { exitCode: parseInt(prefixed[1]!, 10), stdout: rest, stderr: "" };
+  }
+  const suffixed = raw.match(/(?:^|\n)\[exit (-?\d+)\]\s*$/);
+  if (suffixed) {
+    return { exitCode: parseInt(suffixed[1]!, 10), stdout: raw.slice(0, suffixed.index), stderr: "" };
+  }
+  return { exitCode: 0, stdout: raw, stderr: "" };
+}
+
+/** Whether the packages ask for anything to be installed. */
+export function hasEnvironmentPackages(packages: EnvironmentPackages | undefined): boolean {
+  if (!packages) return false;
+  return [packages.pip, packages.npm, packages.apt, packages.cargo, packages.go].some(
+    (list) => (list?.length ?? 0) > 0,
+  );
+}
+
+/** The apt-only install script; empty when there are no apt packages. */
+export function buildAptScript(apt: readonly string[] | undefined): string {
+  if (!apt || apt.length === 0) return "";
+  return `apt-get update -qq && apt-get install -y -qq --no-install-recommends ${apt.map(shellQuote).join(" ")}`;
+}
+
+/**
+ * The full setup script (apt + langs into /workspace), run in a subshell.
+ * It stops at the first failing step, so a failed install is reported
+ * rather than masked by the steps after it.
+ *
+ *   pip   → /workspace/.venv (uv; installed with pip when the image lacks it)
+ *   npm   → /workspace/.npm-global
+ *   cargo → /workspace/.cargo
+ *   go    → /workspace/.go
+ *
+ * Also writes /workspace/.oma-env, which a shell can `source` for PATH.
+ */
+export function buildFullSetupScript(
+  packages: EnvironmentPackages | undefined,
+  options: EnvironmentPackagesOptions = {},
+): string {
+  if (!hasEnvironmentPackages(packages)) return "";
+  const sections: string[] = ["set -e"];
+
+  const apt = buildAptScript(packages!.apt);
+  if (apt) sections.push(apt);
+
+  const pip = packages!.pip ?? [];
+  if (pip.length > 0) {
+    const index = options.pipIndexUrl?.trim();
+    if (index) {
+      sections.push(`export UV_INDEX_URL=${shellQuote(index)} PIP_INDEX_URL=${shellQuote(index)}`);
+    }
+    sections.push(
+      `mkdir -p /workspace`,
+      // Images without uv get it from pip; PEP 668 images need the override.
+      `if command -v uv >/dev/null 2>&1; then UV=uv; else python3 -m pip install -q --user --break-system-packages uv 2>/dev/null || python3 -m pip install -q --user uv; UV="python3 -m uv"; fi`,
+      `[ -d /workspace/.venv ] || $UV venv -q /workspace/.venv`,
+      `$UV pip install --python /workspace/.venv/bin/python -q ${pip.map(shellQuote).join(" ")}`,
+    );
+  }
+
+  const npm = packages!.npm ?? [];
+  if (npm.length > 0) {
+    sections.push(
+      `mkdir -p /workspace/.npm-global`,
+      `npm config set prefix /workspace/.npm-global`,
+      `npm install -g --silent ${npm.map(shellQuote).join(" ")}`,
+    );
+  }
+
+  const cargo = packages!.cargo ?? [];
+  if (cargo.length > 0) {
+    sections.push(
+      `export CARGO_HOME=/workspace/.cargo`,
+      `mkdir -p $CARGO_HOME`,
+      `cargo install --quiet ${cargo.map(shellQuote).join(" ")}`,
+    );
+  }
+
+  const go = packages!.go ?? [];
+  if (go.length > 0) {
+    sections.push(
+      `export GOPATH=/workspace/.go GOMODCACHE=/workspace/.go/pkg/mod GOBIN=/workspace/.go/bin`,
+      `mkdir -p $GOBIN`,
+      ...go.map((pkg) => `go install ${shellQuote(pkg)}`),
+    );
+  }
+
+  sections.push(
+    `cat > /workspace/.oma-env <<'EOF'`,
+    `export PATH=${ENVIRONMENT_PACKAGE_PATHS.join(":")}:$PATH`,
+    `export CARGO_HOME=/workspace/.cargo`,
+    `export GOPATH=/workspace/.go`,
+    `export GOMODCACHE=/workspace/.go/pkg/mod`,
+    `EOF`,
+  );
+  // A subshell keeps `set -e` and the exports out of a shared shell session.
+  return `(\n${sections.join("\n")}\n)`;
+}
+
+const langHash = (packages: EnvironmentPackages | undefined): string =>
+  fnv1a(JSON.stringify({
+    pip: packages?.pip ?? [],
+    npm: packages?.npm ?? [],
+    cargo: packages?.cargo ?? [],
+    go: packages?.go ?? [],
+  }));
+
+const fullHash = (packages: EnvironmentPackages | undefined): string =>
+  fnv1a(JSON.stringify({
+    apt: packages?.apt ?? [],
+    pip: packages?.pip ?? [],
+    npm: packages?.npm ?? [],
+    cargo: packages?.cargo ?? [],
+    go: packages?.go ?? [],
+  }));
+
+async function probeSetupState(
+  sandbox: PackageSandbox,
+  full: string,
+  lang: string,
+): Promise<EnvironmentPackagesPath> {
+  try {
+    const raw = await sandbox.exec(
+      `WARM=$(cat ${WARM_MARKER} 2>/dev/null || echo MISSING); ` +
+      `REST=$(cat ${RESTORED_MARKER} 2>/dev/null || echo MISSING); ` +
+      `echo "WARM=$WARM"; echo "REST=$REST"`,
+      15_000,
+    );
+    const { stdout } = parseExecResult(raw);
+    const warm = (stdout.match(/WARM=(\S+)/)?.[1] ?? "MISSING").trim();
+    const rest = (stdout.match(/REST=(\S+)/)?.[1] ?? "MISSING").trim();
+    if (warm === full) return "warm";
+    if (rest === lang) return "restored";
+    return "fresh";
+  } catch {
+    return "fresh";
+  }
+}
+
+/**
+ * Install the packages unless this container (or its restored workspace)
+ * already has them. Call after the sandbox is ready and its workspace has
+ * been restored. Never throws for a failed install: the result carries
+ * `error` so the caller can report it and carry on.
+ */
+export async function ensureEnvironmentPackages(
+  sandbox: PackageSandbox,
+  packages: EnvironmentPackages | undefined,
+  onProgress?: (event: EnvironmentPackagesProgress) => void,
+  options: EnvironmentPackagesOptions = {},
+): Promise<{ path: EnvironmentPackagesPath; durationMs: number; error?: string }> {
+  const startMs = Date.now();
+  const full = fullHash(packages);
+  const lang = langHash(packages);
+  const markers = `echo "${full}" > ${WARM_MARKER}; mkdir -p /workspace; echo "${lang}" > ${RESTORED_MARKER}`;
+
+  const state = await probeSetupState(sandbox, full, lang);
+  if (state === "warm") {
+    onProgress?.({ kind: "done", path: "warm", durationMs: Date.now() - startMs });
+    return { path: "warm", durationMs: Date.now() - startMs };
+  }
+
+  if (state === "restored") {
+    onProgress?.({ kind: "step", step: "reinstalling_apt" });
+    const aptScript = buildAptScript(packages?.apt);
+    if (aptScript) {
+      const r = parseExecResult(await sandbox.exec(aptScript, 180_000));
+      if (r.exitCode !== 0) {
+        return {
+          path: "restored",
+          durationMs: Date.now() - startMs,
+          error: `apt_install_failed exit=${r.exitCode}: ${(r.stderr || r.stdout || "").slice(-300)}`,
+        };
+      }
+    }
+    await sandbox.exec(markers);
+    onProgress?.({ kind: "done", path: "restored", durationMs: Date.now() - startMs });
+    return { path: "restored", durationMs: Date.now() - startMs };
+  }
+
+  onProgress?.({ kind: "step", step: "running_setup" });
+  const fullScript = buildFullSetupScript(packages, options);
+  if (fullScript) {
+    const r = parseExecResult(await sandbox.exec(fullScript, 600_000));
+    if (r.exitCode !== 0) {
+      return {
+        path: "fresh",
+        durationMs: Date.now() - startMs,
+        error: `full_setup_failed exit=${r.exitCode}: ${(r.stderr || r.stdout || "").slice(-300)}`,
+      };
+    }
+  }
+  await sandbox.exec(markers);
+  onProgress?.({ kind: "done", path: "fresh", durationMs: Date.now() - startMs });
+  return { path: "fresh", durationMs: Date.now() - startMs };
+}
+
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function fnv1a(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}

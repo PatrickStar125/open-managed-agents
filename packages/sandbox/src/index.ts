@@ -54,3 +54,18 @@ export {
 } from "./orchestrator";
 
 export { createNoEnvironmentSandbox, isNoEnvironmentSandbox } from "./no-environment";
+export {
+  buildAptScript,
+  buildFullSetupScript,
+  ENVIRONMENT_PACKAGE_PATHS,
+  ensureEnvironmentPackages,
+  hasEnvironmentPackages,
+  parseExecResult,
+} from "./environment-packages";
+export type {
+  EnvironmentPackages,
+  EnvironmentPackagesOptions,
+  EnvironmentPackagesPath,
+  EnvironmentPackagesProgress,
+  PackageSandbox,
+} from "./environment-packages";
