@@ -336,7 +336,7 @@ describe("Matter service", () => {
       template: "feishu-agent",
       provider: "feishu",
       enabled: true,
-      config: { bond, agentId: "agent-1", acknowledge: "Get", sessionScope: "thread", chats: [] },
+      config: { bond, agentId: "agent-1", acknowledge: "Get", sessionScope: "work-item", chats: [] },
       state: { running: true },
     });
     expect(service.host.running()).toEqual([APP_ID]);
@@ -410,6 +410,30 @@ describe("Matter service", () => {
     // Matter's own vault (the MCP bearer) comes first, then the Loop's.
     expect(sessions[0]?.vault_ids).toHaveLength(2);
     expect(sessions[0]?.vault_ids[1]).toBe("vlt_user");
+  });
+
+  it("renames the session scopes OpenMatter 0.2.6 renamed, on start", async () => {
+    const first = await start();
+    await first.db.apps.save({ ...connection, agentId: undefined });
+    const saved = (sessionScope: string) => ({
+      tenantId: "default",
+      bondKind: "feishu",
+      bondKey: APP_ID,
+      template: "feishu-agent",
+      config: { agentId: "agent-1", sessionScope, chats: [], acknowledge: "Get", freshness: "thread", vaultIds: [] },
+      enabled: true,
+    });
+    await first.db.loops.save({ id: "loop-thread", ...saved("thread") });
+    await first.db.loops.save({ id: "loop-chat", ...saved("chat") });
+    await first.db.loops.save({ id: "loop-user", ...saved("chat_user") });
+    await first.close();
+    services.splice(services.indexOf(first), 1);
+    const service = await start();
+    const scopes = Object.fromEntries((await service.db.loops.list()).map((l) => [l.id, l.config.sessionScope]));
+    expect(scopes).toEqual({ "loop-thread": "work-item", "loop-chat": "global", "loop-user": "chat_user" });
+    // The migrated Loops install with the new template.
+    await service.host.start();
+    expect(service.host.running()).toEqual([APP_ID]);
   });
 
   it("turns a connection saved with an Agent into a Loop on start, once", async () => {

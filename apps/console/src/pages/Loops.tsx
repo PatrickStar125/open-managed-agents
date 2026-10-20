@@ -475,6 +475,10 @@ function LoopForm(props: {
   const agentKey = fields.find(([, f]) => f["x-oma-widget"] === "agent")?.[0];
   const session = (key: string) => fields.some(([k, f]) => k === key && f["x-oma-section"] === "session");
   const options = fields.filter(([key, f]) => key !== bondKey && key !== agentKey && f["x-oma-section"] !== "session");
+  // Session settings a template adds itself, such as `sessionScope`.
+  const sessionOptions = fields.filter(
+    ([key, f]) => f["x-oma-section"] === "session" && key !== "environmentId" && key !== "vaultIds" && key !== agentKey,
+  );
   const environment = typeof values.environmentId === "string" && values.environmentId !== "" ? values.environmentId : "";
   const chosenVaults = Array.isArray(values.vaultIds) ? (values.vaultIds as string[]) : [];
   const required = (key: string) => template.configSchema.required.includes(key);
@@ -568,6 +572,17 @@ function LoopForm(props: {
                 </SelectContent>
               </Select>
             </div>
+            {sessionOptions.map(([key, field]) => (
+              <ConfigField
+                key={key}
+                name={key}
+                field={field}
+                required={required(key)}
+                value={values[key]}
+                bond={bondKey && typeof values[bondKey] === "string" ? (values[bondKey] as string) : ""}
+                onChange={(v) => set(key, v)}
+              />
+            ))}
             {session("environmentId") && (
               <div className="space-y-1.5">
                 <Label htmlFor="loop-environment">{m.loops.environment}</Label>

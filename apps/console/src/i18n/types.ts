@@ -370,7 +370,7 @@ export interface Messages {
     fields: Record<string, { title: string; description?: string }>;
     /** Enum option labels, by value. */
     options: Record<string, string>;
-    /** `freshness: "thread"` reads differently from `sessionScope: "thread"`. */
+    /** The label of `freshness: "thread"`. */
     freshnessThread: string;
   };
 }

@@ -392,4 +392,16 @@ export const migrateConnectionsToLoops = async (db: MatterDatabase): Promise<voi
     });
     await db.gitlab.forgetAgent(c.id);
   }
+  // OpenMatter 0.2.6 names session scopes the same in every template.
+  // The WorkThread ids did not change, so the Loops keep their Sessions.
+  for (const loop of await db.loops.list()) {
+    const renamed = LEGACY_SESSION_SCOPES[loop.template]?.[String(loop.config.sessionScope)];
+    if (renamed === undefined) continue;
+    await db.loops.save({ ...loop, config: { ...loop.config, sessionScope: renamed } });
+  }
+};
+
+/** Session scope values renamed by OpenMatter 0.2.6, per template. */
+const LEGACY_SESSION_SCOPES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "feishu-agent": { thread: "work-item", chat: "global" },
 };

@@ -25,6 +25,7 @@ const feishuTemplate = {
       bond: { type: "string", title: "Runs on", "x-oma-widget": "bond", "x-bond-provider": "feishu" },
       agentId: { type: "string", title: "Agent", "x-oma-widget": "agent" },
       acknowledge: { type: "string", title: "Acknowledge" },
+      sessionScope: { type: "string", enum: ["work-item", "global"], default: "work-item", title: "Scope", "x-oma-widget": "session-scope", "x-oma-section": "session" },
       environmentId: { type: "string", title: "Environment", "x-oma-widget": "environment", "x-oma-section": "session" },
       vaultIds: { type: "array", items: { type: "string" }, default: [], title: "Vaults", "x-oma-widget": "vault", "x-oma-section": "session" },
     },
@@ -157,7 +158,7 @@ describe("LoopsPage", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === "/matter/loops")).toBe(true));
     expect(calls.find((c) => c.method === "POST" && c.url === "/matter/loops")?.body).toEqual({
       template: "feishu-agent",
-      config: { bond: "feishu:cli_new", acknowledge: "Get", vaultIds: [] },
+      config: { bond: "feishu:cli_new", acknowledge: "Get", sessionScope: "work-item", vaultIds: [] },
     });
     expect(await screen.findByText("agentId is required")).toBeTruthy();
   });
@@ -179,6 +180,8 @@ describe("LoopsPage", () => {
     open("/loops/loop-1");
     const vault = await screen.findByRole("checkbox", { name: "Analytics keys" });
     expect(screen.getByText(/^(Default environment|默认环境)$/)).toBeTruthy();
+    // The template's own session setting sits with the others.
+    expect(screen.getByText(/^(Session scope|会话粒度)/)).toBeTruthy();
     // Session settings are not listed with the template's own options.
     expect(screen.queryByLabelText(/^(Vaults|凭证库)$/, { selector: "input" })).toBeNull();
     fireEvent.click(vault);
