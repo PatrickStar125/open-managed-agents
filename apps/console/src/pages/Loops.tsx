@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { PlusIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -29,8 +29,6 @@ import {
 } from "../lib/matter";
 import { useManagedApi } from "../lib/useManagedApi";
 import {
-  FeishuLinker,
-  GitLabLinker,
   loopPath,
   MatterNotice,
   MatterSection,
@@ -566,7 +564,6 @@ function LoopForm(props: {
             value={typeof values[bondKey] === "string" ? (values[bondKey] as string) : ""}
             onChange={(v) => set(bondKey, v)}
             bonds={props.bonds}
-            reloadBonds={props.reloadBonds}
           />
         </MatterSection>
       )}
@@ -813,33 +810,28 @@ function ConfigField(props: {
   );
 }
 
-/** Which linked app the Loop runs on, or link a new one right here. */
-function BondField(props: {
-  provider: Provider;
-  value: string;
-  onChange: (value: string) => void;
-  bonds: Bond[];
-  reloadBonds: () => Promise<void>;
-}) {
+/**
+ * Which linked app the Loop runs on. Linking a new one happens on the Bond
+ * page, which brings the user back here with the new Bond chosen.
+ */
+function BondField(props: { provider: Provider; value: string; onChange: (value: string) => void; bonds: Bond[] }) {
   const { t } = useI18n();
   const m = t.matter;
   const { provider } = props;
+  const location = useLocation();
   const choices = props.bonds.filter((b) => b.provider === provider);
-  const [linking, setLinking] = useState(choices.length === 0);
   const selected = choices.find((b) => b.id === props.value);
-
-  async function linked(id: string) {
-    await props.reloadBonds();
-    props.onChange(id);
-    setLinking(false);
-  }
+  const back = new URLSearchParams(location.search);
+  back.delete("bond");
+  const query = back.toString();
+  const linkTo = `/bonds/new?${new URLSearchParams({ provider, return: `${location.pathname}${query ? `?${query}` : ""}` })}`;
 
   return (
     <div className="space-y-3">
-      {choices.length > 0 && (
-        <Select value={props.value} onValueChange={props.onChange}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <Select value={props.value} onValueChange={props.onChange} disabled={choices.length === 0}>
           <SelectTrigger aria-label={m.loops.bond} className="w-full sm:w-80">
-            <SelectValue placeholder={m.choose} />
+            <SelectValue placeholder={choices.length === 0 ? m.loops.noBond : m.choose} />
           </SelectTrigger>
           <SelectContent>
             {choices.map((b) => (
@@ -849,18 +841,11 @@ function BondField(props: {
             ))}
           </SelectContent>
         </Select>
-      )}
-      {choices.length === 0 && !linking && <p className="text-sm text-fg-muted">{m.loops.noBond}</p>}
-      {selected?.provider === "feishu" && <SetupResult setup={selected.setup} />}
-      {linking ? (
-        <div className="rounded-md border border-border p-3">
-          {provider === "feishu" ? <FeishuLinker onLinked={linked} /> : <GitLabLinker onLinked={linked} />}
-        </div>
-      ) : (
-        <Button variant="link" size="sm" className="h-auto px-0" onClick={() => setLinking(true)}>
-          + {provider === "feishu" ? m.bonds.linkFeishu : m.bonds.linkGitLab}
+        <Button asChild variant="link" size="sm" className="h-auto px-0">
+          <Link to={linkTo}>+ {provider === "feishu" ? m.bonds.linkFeishu : m.bonds.linkGitLab}</Link>
         </Button>
-      )}
+      </div>
+      {selected?.provider === "feishu" && <SetupResult setup={selected.setup} />}
     </div>
   );
 }

@@ -272,7 +272,7 @@ export const zhCN: Messages = {
       confirmDelete: "确定删除这个 Loop？",
       pickBondFirst: "请先选择应用。",
       noResources: "没有找到。",
-      noBond: "还没有连接应用。",
+      noBond: "还没有连接应用",
       mine: "我的 Loop",
       templatesTitle: "模板",
       use: "使用",

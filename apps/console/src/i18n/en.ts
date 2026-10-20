@@ -275,7 +275,7 @@ export const en: Messages = {
       confirmDelete: "Delete this Loop?",
       pickBondFirst: "Choose the app first.",
       noResources: "None found.",
-      noBond: "Nothing linked yet.",
+      noBond: "Nothing linked yet",
       mine: "Your Loops",
       templatesTitle: "Templates",
       use: "Use",

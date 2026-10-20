@@ -6,6 +6,7 @@ import { I18nProvider } from "../i18n";
 import { en } from "../i18n/en";
 import { zhCN } from "../i18n/zh-CN";
 import { issueText, LoopEditPage, LoopsPage, LoopTemplatesPage } from "./Loops";
+import { BondLinkPage } from "./Bonds";
 
 const managedApi = {
   agents: { list: vi.fn(async () => ({ data: [{ id: "agent-1", name: "Helpdesk" }] })) },
@@ -95,6 +96,7 @@ const open = (path = "/loops") =>
           <Route path="/loops/new" element={<LoopEditPage />} />
           <Route path="/loops/templates" element={<LoopTemplatesPage />} />
           <Route path="/loops/:id" element={<LoopEditPage />} />
+          <Route path="/bonds/new" element={<BondLinkPage />} />
         </Routes>
       </I18nProvider>
     </MemoryRouter>,
@@ -133,7 +135,7 @@ describe("LoopsPage", () => {
   });
 
 
-  it("links a new Feishu app from the Bond field, then saves the Loop on it", async () => {
+  it("links a new Feishu app on the Bond page, then comes back and saves the Loop on it", async () => {
     routes["GET /matter/loops"] = () => json(200, { data: [] });
     routes["GET /matter/bonds"] = () => json(200, { data: [] });
     routes["POST /matter/connect/feishu/registrations"] = () =>
@@ -147,15 +149,21 @@ describe("LoopsPage", () => {
 
     // Old Feishu links redirect here with the template preselected.
     open("/loops?template=feishu-agent");
+    // The Loop form only picks a Bond; linking one is the Bond page's job.
+    const link = await screen.findByRole("link", { name: /Link a Feishu app|连接飞书应用/ });
+    expect(link.getAttribute("href")).toBe("/bonds/new?provider=feishu&return=%2Floops%2Fnew%3Ftemplate%3Dfeishu-agent");
+    expect(screen.queryByRole("button", { name: /Show QR code|生成二维码/ })).toBeNull();
+    fireEvent.click(link);
+
     fireEvent.click(await screen.findByRole("button", { name: /Show QR code|生成二维码/ }));
     await waitFor(() => expect(calls.some((c) => c.url === "/matter/connect/feishu/registrations")).toBe(true));
     expect(calls.find((c) => c.url === "/matter/connect/feishu/registrations")?.body).toEqual({});
-
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3100);
     });
-    expect(await screen.findByText("New bot")).toBeTruthy();
 
+    // Back on the Loop form with the new Bond chosen.
+    expect(await screen.findByText("New bot")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /^(Save|保存)$/ }));
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url === "/matter/loops")).toBe(true));
     expect(calls.find((c) => c.method === "POST" && c.url === "/matter/loops")?.body).toEqual({
