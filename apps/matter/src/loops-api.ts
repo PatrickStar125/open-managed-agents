@@ -116,7 +116,7 @@ const templates = () =>
     };
   });
 
-const loopView = (loop: LoopRecord, host: MatterHost) => ({
+const loopView = async (loop: LoopRecord, host: MatterHost) => ({
   id: loop.id,
   template: loop.template,
   provider: loopTemplate(loop.template)?.provider,
@@ -124,7 +124,7 @@ const loopView = (loop: LoopRecord, host: MatterHost) => ({
   enabled: loop.enabled,
   createdAt: loop.createdAt,
   updatedAt: loop.updatedAt,
-  state: host.state(loop.bondKey),
+  state: await host.sharedState(loop.bondKey),
 });
 
 export const createLoopApiHandler = (options: LoopApiOptions) => {
@@ -216,7 +216,7 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
               provider: "feishu" as const,
               label: app.appId,
               connectedAt: app.connectedAt,
-              ...host.state(app.appId),
+              ...(await host.sharedState(app.appId)),
               loops: used(FEISHU_ADAPTER_KIND, app.appId),
               ...(setup === undefined ? {} : { setup }),
               details: { appId: app.appId, brand: app.brand },
@@ -233,7 +233,7 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
           provider: "gitlab",
           label: `${c.username}@${new URL(c.baseUrl).host}`,
           connectedAt: c.connectedAt,
-          ...host.state(c.id),
+          ...(await host.sharedState(c.id)),
           loops: used(GITLAB_ADAPTER_KIND, c.id),
           details: {
             baseUrl: c.baseUrl,
@@ -301,7 +301,7 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
       }
       if (collection === "loops" && id === undefined && method === "GET") {
         const loops = (await db.loops.list()).filter((l) => l.tenantId === principal.tenantId);
-        return json({ data: loops.map((l) => loopView(l, host)) });
+        return json({ data: await Promise.all(loops.map((l) => loopView(l, host))) });
       }
       if (collection === "loops" && id === undefined && method === "POST") {
         const input = await body();
@@ -312,7 +312,7 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
           config: input.config,
           enabled: input.enabled !== false,
         });
-        return json(loopView(saved, host), 201);
+        return json(await loopView(saved, host), 201);
       }
       if (collection === "loops" && id !== undefined && sub === undefined && method === "PATCH") {
         const loop = await tenantLoop(principal.tenantId, id);
@@ -326,7 +326,7 @@ export const createLoopApiHandler = (options: LoopApiOptions) => {
               : input.config,
           enabled: typeof input.enabled === "boolean" ? input.enabled : loop.enabled,
         });
-        return json(loopView(saved, host));
+        return json(await loopView(saved, host));
       }
       if (collection === "loops" && id !== undefined && sub === undefined && method === "DELETE") {
         const loop = await tenantLoop(principal.tenantId, id);

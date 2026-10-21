@@ -15,6 +15,7 @@
 
 import { MissingReferenceError } from "./issues.js";
 import { makeConnectorAgentDriver } from "@openma/matter/agent";
+import type { WorkIntegration } from "@openma/matter/integration";
 import { createOpenMatter } from "@openma/matter/runtime";
 import { makeLocalLongConnectionRuntime } from "@openma/matter-host-local/runtime";
 import { Effect } from "effect";
@@ -86,8 +87,16 @@ export interface MatterHost {
   running(): readonly string[];
   /** Whether this replica runs `key`, and its last error. */
   state(key: string): ConnectionState;
+  /** Like `state`, with the last error any replica recorded: a failed
+   * delivery (a report the bot could not post) or a failed start. */
+  sharedState(key: string): Promise<ConnectionState>;
   stop(): Promise<void>;
 }
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "object" && error !== null && "message" in error
+    ? String((error as { message: unknown }).message)
+    : String(error);
 
 const hasSession = (session: LoopSession): boolean =>
   session.environmentId !== undefined || session.vaultIds.length > 0;
@@ -189,12 +198,38 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
   const running = new Map<string, Running>();
   const lastErrors = new Map<string, { message: string; at: string }>();
   const report = (error: unknown, key: string) => {
-    lastErrors.set(key, {
-      message: error instanceof Error ? error.message : String(error),
-      at: new Date().toISOString(),
-    });
+    const entry = { message: errorMessage(error), at: new Date().toISOString() };
+    lastErrors.set(key, entry);
+    void options.db.errors.set(key, entry).catch(() => {});
     options.onError?.(error, key);
   };
+  // Deliveries (the bot posting a reply or a report) fail on whichever
+  // replica runs them; keep the failure where every replica can show it,
+  // until a later delivery on the connection succeeds.
+  const deliveryKey = (key: string) => `${key}#delivery`;
+  const withDeliveryErrors = <T extends Record<string, WorkIntegration>>(key: string, integrations: T): T =>
+    Object.fromEntries(
+      Object.entries(integrations).map(([id, integration]) => [
+        id,
+        {
+          ...integration,
+          deliver: (effect: Parameters<WorkIntegration["deliver"]>[0]) =>
+            integration.deliver(effect).pipe(
+              Effect.tap(() => Effect.promise(() => options.db.errors.clear(deliveryKey(key)).catch(() => {}))),
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  const entry = {
+                    message: `${effect.operation} failed: ${errorMessage(error)}`,
+                    at: new Date().toISOString(),
+                  };
+                  void options.db.errors.set(deliveryKey(key), entry).catch(() => {});
+                  options.onError?.(error, key);
+                }),
+              ),
+            ),
+        },
+      ]),
+    ) as T;
   const adapterOf = (kind: string) => {
     const adapter = options.adapters.find((a) => a.kind === kind);
     if (adapter === undefined) throw new Error(`No adapter for ${kind}`);
@@ -241,10 +276,12 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
     });
     const application = createOpenMatter({
       store,
-      integrations:
+      integrations: withDeliveryErrors(
+        key,
         schedules.length === 0
           ? wiring.integrations
           : { ...wiring.integrations, [SCHEDULE_INTEGRATION_ID]: makeScheduleIntegration() },
+      ),
       agents: Object.fromEntries(
         [...drivers].map(([key, { agentId, session }]) => [
           key,
@@ -284,6 +321,7 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       throw error;
     }
     lastErrors.delete(key);
+    void options.db.errors.clear(key).catch(() => {});
     options.onStarted?.(key, connection.label);
     running.set(key, {
       kind: adapter.kind,
@@ -385,6 +423,16 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
     running: () => [...running.keys()],
     state: (key) => {
       const lastError = lastErrors.get(key);
+      return { running: running.has(key), ...(lastError === undefined ? {} : { lastError }) };
+    },
+    sharedState: async (key) => {
+      const [started, delivery] = await Promise.all([
+        options.db.errors.get(key).catch(() => undefined),
+        options.db.errors.get(deliveryKey(key)).catch(() => undefined),
+      ]);
+      const lastError = [lastErrors.get(key), started, delivery]
+        .filter((e): e is { message: string; at: string } => e !== undefined)
+        .sort((a, b) => b.at.localeCompare(a.at))[0];
       return { running: running.has(key), ...(lastError === undefined ? {} : { lastError }) };
     },
     stop: () =>
