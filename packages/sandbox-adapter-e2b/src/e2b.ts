@@ -157,7 +157,7 @@ export async function createE2BSandbox(
       throw error;
     }
   }
-  return new E2BSandboxExecutor(sb, opts);
+  return new E2BSandboxExecutor(sb, opts, { created: true });
 }
 
 const TRANSIENT_READINESS = /\[(unauthenticated|unavailable|deadline_exceeded)\]|invalid username|connection refused|ECONNRESET|ECONNREFUSED|socket hang up|\b50[234]\b/iu;
@@ -190,6 +190,8 @@ export class E2BSandboxExecutor
   private lifetimeMs: number;
   /** When the sandbox lifetime was last renewed; 0 renews on the first command. */
   private renewedAt = 0;
+  /** A caller holds an explicit lease (`renewLease`) and owns the lifetime. */
+  private leased = false;
   private logger: NonNullable<E2BSandboxOptions["logger"]>;
   /** Tracks whether s3fs has already mounted the memory bucket root.
    *  We mount once per sandbox lifetime; subsequent mountMemoryStore calls
@@ -200,9 +202,12 @@ export class E2BSandboxExecutor
   constructor(
     private sandbox: E2BSandboxLike,
     opts: E2BSandboxOptions,
+    origin: { created?: boolean } = {},
   ) {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 120_000;
     this.lifetimeMs = sandboxLifetime(opts);
+    // A sandbox we just created already has `lifetimeMs` to live.
+    if (origin.created === true) this.renewedAt = Date.now();
     this.logger = opts.logger ?? {
       warn: (msg) => console.warn(`[e2b-sandbox] ${msg}`),
     };
@@ -236,6 +241,7 @@ export class E2BSandboxExecutor
     if (typeof this.sandbox.setTimeout !== "function") {
       throw new Error("E2B SDK does not expose sandbox.setTimeout");
     }
+    this.leased = true;
     await this.sandbox.setTimeout(input.ttlMs);
   }
 
@@ -298,9 +304,11 @@ export class E2BSandboxExecutor
    * Push the sandbox's end of life out by `lifetimeMs`, at most once a
    * minute. E2B counts the lifetime from creation, not from the last
    * command, so without this a sandbox dies mid-turn after its lifetime.
+   * Once a caller holds an explicit lease, its TTL wins: renewing here would
+   * keep the sandbox alive past the end of that lease.
    */
   private async keepAlive(): Promise<void> {
-    if (typeof this.sandbox.setTimeout !== "function") return;
+    if (this.leased || typeof this.sandbox.setTimeout !== "function") return;
     const now = Date.now();
     if (now - this.renewedAt < KEEP_ALIVE_INTERVAL_MS) return;
     this.renewedAt = now;
@@ -920,7 +928,7 @@ export const sandboxProvider: SandboxProviderPort<E2BSandboxExecutor> = {
       checkpoint.checkpointId,
       creationOptions(options),
     );
-    return new E2BSandboxExecutor(sandbox, options);
+    return new E2BSandboxExecutor(sandbox, options, { created: true });
   },
 };
 
