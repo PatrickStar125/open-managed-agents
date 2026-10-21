@@ -37,6 +37,18 @@ export {
 } from "./lease";
 
 export {
+  probeSandboxLiveness,
+  startSandboxHeartbeat,
+  withSandboxRecovery,
+  SandboxRecoveryFailedError,
+  SandboxReplacedError,
+  type SandboxHeartbeatOptions,
+  type SandboxLiveness,
+  type SandboxRecovery,
+  type SandboxRecoveryOptions,
+} from "./recovery";
+
+export {
   withSandboxExecutionGuard,
   SandboxExecutionFencedError,
   type SandboxExecutionGuard,

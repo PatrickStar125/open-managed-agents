@@ -149,6 +149,7 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
     }
   }
   const checkpointIntervalMs = integer("OMA_WORKSPACE_CHECKPOINT_INTERVAL_SEC", 60, { min: 1 }) * 1000;
+  const sandboxLeaseTtlMs = integer("OMA_SANDBOX_LEASE_TTL_SEC", 1800, { min: 60 }) * 1000;
 
   const memoryQueueRaw = env.MEMORY_QUEUE ?? "auto";
   const memoryQueue: NodeConfig["memoryQueue"] = memoryQueueRaw === "disabled" ? "disabled" : "auto";
@@ -203,6 +204,7 @@ export function loadNodeConfig(env: NodeEnvironment): NodeConfig {
     workspace: {
       strategy: workspaceStrategy === "checkpoint_restore" ? "checkpoint_restore" : "ephemeral",
       checkpointIntervalMs,
+      sandboxLeaseTtlMs,
     },
     managedWebhooks: {
       url: env.OMA_MANAGED_AGENTS_WEBHOOK_URL,
