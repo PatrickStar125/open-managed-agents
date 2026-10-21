@@ -99,7 +99,7 @@ import { resolveProxiedToolCall } from "../harness/tool-proxy";
 import { MemoryStoreService } from "@open-managed-agents/memory-store";
 import { buildCfServices, buildCfTenantDbProvider, getCfServicesForTenant } from "@open-managed-agents/services";
 import { toEnvironmentConfig } from "@open-managed-agents/environments-store";
-import { ensureSetupApplied } from "./setup-on-warmup";
+import { ensureEnvironmentPackages } from "@open-managed-agents/sandbox";
 import {
   resolveSkills,
   resolveCustomSkills,
@@ -3597,7 +3597,7 @@ export class SessionDO extends DurableObject<Env> {
       // Install environment packages if configured. Replaces the old
       // "always re-install everything every cold start" loop with a
       // marker-aware 3-path flow (warm/restored/fresh) — see
-      // ./setup-on-warmup.ts for the full design.
+      // packages/sandbox/src/environment-packages.ts for the full design.
       //
       // Lang packages (pip/npm/cargo/go) install to /workspace/.<lang>/
       // so they're captured by the workspace backup just restored above.
@@ -3606,7 +3606,7 @@ export class SessionDO extends DurableObject<Env> {
       if (envId && !imagePathHandled) {
         const pkgs = environmentConfig?.config?.packages;
         if (pkgs) {
-          const result = await ensureSetupApplied(
+          const result = await ensureEnvironmentPackages(
             { exec: (cmd: string, timeout?: number) => sandbox.exec(cmd, timeout) },
             pkgs,
             (event) => {
