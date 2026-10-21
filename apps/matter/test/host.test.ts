@@ -46,6 +46,8 @@ class FakeFeishu {
   readonly reactions: { messageId: string; emoji: unknown }[] = [];
   readonly sent: { chatId: string | null; body: Record<string, unknown> }[] = [];
   readonly calls: string[] = [];
+  /** Chats the bot is not in: sending there fails as Feishu does. */
+  readonly notIn = new Set<string>();
   readonly fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     this.calls.push(url.pathname);
@@ -69,6 +71,9 @@ class FakeFeishu {
     }
     if (url.pathname === "/open-apis/im/v1/messages" && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      if (this.notIn.has(String(body.receive_id))) {
+        return reply({ code: 230002, msg: "Bot/User can NOT be out of the chat." });
+      }
       this.sent.push({ chatId: url.searchParams.get("receive_id_type") === "chat_id" ? String(body.receive_id) : null, body });
       return reply({ code: 0, data: { message_id: `om_sent_${this.sent.length}` } });
     }
@@ -511,6 +516,25 @@ describe("Matter service", () => {
     expect(oma.sessions.size).toBe(1);
     // The next run is armed for the next day.
     expect(pending.some((p) => new Date(p.at).toISOString() === "2026-10-21T02:00:00.000Z")).toBe(true);
+    const loopState = async () =>
+      ((await (await call("GET", "/loops")).json()) as { data: { state: { lastError?: { message: string } } }[] }).data[0]!
+        .state;
+    expect((await loopState()).lastError).toBeUndefined();
+
+    // The bot left the chat: the next report cannot be posted, and the Loop
+    // says so instead of looking healthy.
+    feishu.notIn.add("oc_eng");
+    now = Date.parse("2026-10-21T02:00:00Z");
+    pending.find((p) => new Date(p.at).toISOString() === "2026-10-21T02:00:00.000Z")!.callback();
+    let failed: { message: string } | undefined;
+    for (let i = 0; i < 400 && failed === undefined; i++) {
+      failed = (await loopState()).lastError;
+      if (failed === undefined) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (failed === undefined) throw new Error("the Loop never reported the failed delivery");
+    expect(failed.message).toMatch(/message\.send failed/);
+    expect(failed.message).toMatch(/out of the chat|230002/);
+    expect(feishu.sent).toHaveLength(1);
   });
 
   it("renames the session scopes OpenMatter 0.2.6 renamed, on start", async () => {
