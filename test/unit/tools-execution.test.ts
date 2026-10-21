@@ -64,6 +64,32 @@ describe("Built-in tool execution", () => {
     expect(result).toContain("echo hello");
   });
 
+  it("returns tool failures to the model without stack traces", async () => {
+    const failing = Object.assign(new TestSandbox(), {
+      exec: async () => {
+        throw new Error("fetch failed", { cause: new Error("connect ECONNREFUSED 10.0.0.1:443") });
+      },
+      readFile: async () => {
+        const error = new Error("This tool call was interrupted because the environment restarted.");
+        error.name = "SandboxReplacedError";
+        throw error;
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const tools = await buildTools(makeAgentConfig(), failing);
+      const bash = await tools.bash.execute({ command: "curl x" }, TOOL_EXEC_OPTS);
+      expect(bash).toBe("Error: fetch failed\ncause: connect ECONNREFUSED 10.0.0.1:443");
+      const read = await tools.read.execute({ file_path: "/workspace/a.txt" }, TOOL_EXEC_OPTS);
+      expect(read).toBe("Error: This tool call was interrupted because the environment restarted.");
+      for (const result of [bash, read]) expect(result).not.toMatch(/\n\s+at /);
+      // Operators still get the full error in the server log.
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("bash tool passes timeout to sandbox", async () => {
     let capturedTimeout: number | undefined;
     const sandbox: any = {
