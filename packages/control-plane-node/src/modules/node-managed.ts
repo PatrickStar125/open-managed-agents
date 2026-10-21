@@ -16,6 +16,7 @@
  */
 
 import { installEnvironmentPackages } from "../lib/environment-packages";
+import { injectVaultEnvironment, vaultEnvironmentVariables } from "../lib/vault-environment";
 import { resolveSessionSandboxMode, readManagedSessionMappingMetadata } from "@open-managed-agents/openai-agents-compat";
 import { SqlSessionThreadStore } from "@open-managed-agents/session-thread-store-sql";
 import { buildOpenAISubagentTools, nodeOpenAISubagentPolicy, openAISubagentSession } from "../openai-subagents.js";
@@ -474,6 +475,19 @@ export async function createManagedNodeRuntime(
           durationMs: result.durationMs,
         }, "Environment packages ready"),
       });
+      // Vault `environment_variable` credentials, for the commands the Agent runs.
+      const injected = await injectVaultEnvironment(
+        sandbox,
+        await vaultEnvironmentVariables(managedCredentialStore, workspaceId, session.vaultIds),
+      );
+      if (injected.length > 0) {
+        logger.info({
+          op: "main-node.vault_environment",
+          sessionId: session.id,
+          workspaceId,
+          names: injected,
+        }, "Vault environment variables set");
+      }
       await preparer.prepare({
         workspaceId,
         session,

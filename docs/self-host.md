@@ -518,6 +518,8 @@ The same demo works on the Postgres compose unchanged.
 
 Every provider installs an Environment's `packages` when a sandbox starts: pip into `/workspace/.venv` (with `uv`, installed from pip when the image lacks it), npm into `/workspace/.npm-global`, cargo into `/workspace/.cargo`, go into `/workspace/.go`, apt system-wide. Those directories are put on `PATH` for the agent's commands. A container that already ran the same list, or whose restored `/workspace` carries it, skips the install; a failed install fails the session with the installer's output. Set `SANDBOX_PIP_INDEX_URL` to install pip packages from a mirror when the sandbox network reaches one faster than pypi.org.
 
+Vault credentials of type `environment_variable` are set in the sandbox of every session that attaches the Vault (an earlier Vault wins on a name clash), so the agent's commands can read them. The sandbox holds the real value: there is no egress proxy substituting it, and `networking` / `injection_location` are not enforced, so only store secrets the agent may see.
+
 ### Per-provider capability matrix
 
 | Provider | bash | fs | net | `/mnt/memory` | `/mnt/outputs` | vault CA | workspace backup |
