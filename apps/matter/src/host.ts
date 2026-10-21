@@ -13,14 +13,25 @@
  * in line with the saved ones.
  */
 
+import { MissingReferenceError } from "./issues.js";
 import { makeConnectorAgentDriver } from "@openma/matter/agent";
+import type { WorkIntegration } from "@openma/matter/integration";
 import { createOpenMatter } from "@openma/matter/runtime";
 import { makeLocalLongConnectionRuntime } from "@openma/matter-host-local/runtime";
 import { Effect } from "effect";
+import { createHash } from "node:crypto";
 import { isSafeConnectionKey, type MatterAdapter, type MatterConnection } from "./adapter.js";
 import { createOpenMAConnector, isOmaSessionUnavailable } from "./connector.js";
 import type { OmaClient, OmaMcpServer } from "./oma-client.js";
-import type { MatterDatabase } from "./persistence.js";
+import { loopSchedules, splitLoopConfig, type LoopSession } from "./loops.js";
+import {
+  combineSources,
+  makeScheduleIntegration,
+  makeScheduleSource,
+  SCHEDULE_INTEGRATION_ID,
+  type ScheduleTimers,
+} from "./schedule.js";
+import type { LoopRecord, MatterDatabase } from "./persistence.js";
 import { withImages } from "./images.js";
 import { sessionVaults } from "./session-tokens.js";
 import type { OperationCallBridge } from "./tool-bridge.js";
@@ -43,6 +54,17 @@ export interface MatterHostOptions {
   /** Every kind of connection the service runs. Keys must not collide. */
   readonly adapters: readonly MatterAdapter<MatterConnection>[];
   readonly onError?: (error: unknown, key: string) => void;
+  /** A connection started on this replica (for logs). */
+  readonly onStarted?: (key: string, label: string) => void;
+  /** Clock and timers of scheduled Loops; tests replace them. */
+  readonly scheduleTimers?: ScheduleTimers;
+}
+
+/** One connection as this replica sees it. */
+export interface ConnectionState {
+  readonly running: boolean;
+  /** The last error the connection reported since it last started. */
+  readonly lastError?: { readonly message: string; readonly at: string };
 }
 
 export interface MatterHost {
@@ -59,10 +81,61 @@ export interface MatterHost {
   /** Give an Agent the Matter MCP server before a connection uses it.
    * Throws when this service cannot act in the tenant. */
   prepareAgent(tenantId: string, agentId: string): Promise<void>;
+  /** Throws a "not found" error unless the session's environment and vaults exist. */
+  checkSession(tenantId: string, session: LoopSession): Promise<void>;
   /** Keys of the connections currently running. */
   running(): readonly string[];
+  /** Whether this replica runs `key`, and its last error. */
+  state(key: string): ConnectionState;
+  /** Like `state`, with the last error any replica recorded: a failed
+   * delivery (a report the bot could not post) or a failed start. */
+  sharedState(key: string): Promise<ConnectionState>;
   stop(): Promise<void>;
 }
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : typeof error === "object" && error !== null && "message" in error
+    ? String((error as { message: unknown }).message)
+    : String(error);
+
+const hasSession = (session: LoopSession): boolean =>
+  session.environmentId !== undefined || session.vaultIds.length > 0;
+
+const sessionMetadata = (session: LoopSession) => ({
+  ...(session.environmentId === undefined ? {} : { environmentId: session.environmentId }),
+  vaultIds: [...session.vaultIds],
+});
+
+/**
+ * One Agent driver per Agent and session settings. A Loop without session
+ * settings uses the Agent id as its driver key, as before, so its Sessions
+ * continue; one with settings gets a key of its own, and the Loop's
+ * `agentId` names that key. The session fields never reach the template.
+ */
+export const loopDrivers = (
+  records: readonly LoopRecord[],
+): {
+  readonly loops: readonly LoopRecord[];
+  readonly drivers: ReadonlyMap<string, { readonly agentId: string; readonly session: LoopSession }>;
+} => {
+  const drivers = new Map<string, { agentId: string; session: LoopSession }>();
+  const loops = records.map((record) => {
+    const { config, session } = splitLoopConfig(record.config);
+    const agentId = config.agentId;
+    if (typeof agentId !== "string" || agentId === "") return { ...record, config };
+    let key = agentId;
+    if (hasSession(session)) {
+      const digest = createHash("sha256")
+        .update(JSON.stringify([session.environmentId ?? null, [...session.vaultIds].sort()]))
+        .digest("hex")
+        .slice(0, 12);
+      key = `${agentId}#${digest}`;
+    }
+    if (!drivers.has(key)) drivers.set(key, { agentId, session });
+    return { ...record, config: { ...config, agentId: key } };
+  });
+  return { loops, drivers };
+};
 
 /**
  * Add the Matter MCP server (and the `mcp_toolset` OpenMA requires for it)
@@ -123,7 +196,40 @@ interface Running {
 export const createMatterHost = (options: MatterHostOptions): MatterHost => {
   const mcpServerName = options.mcpServerName ?? DEFAULT_MCP_SERVER_NAME;
   const running = new Map<string, Running>();
-  const report = (error: unknown, key: string) => options.onError?.(error, key);
+  const lastErrors = new Map<string, { message: string; at: string }>();
+  const report = (error: unknown, key: string) => {
+    const entry = { message: errorMessage(error), at: new Date().toISOString() };
+    lastErrors.set(key, entry);
+    void options.db.errors.set(key, entry).catch(() => {});
+    options.onError?.(error, key);
+  };
+  // Deliveries (the bot posting a reply or a report) fail on whichever
+  // replica runs them; keep the failure where every replica can show it,
+  // until a later delivery on the connection succeeds.
+  const deliveryKey = (key: string) => `${key}#delivery`;
+  const withDeliveryErrors = <T extends Record<string, WorkIntegration>>(key: string, integrations: T): T =>
+    Object.fromEntries(
+      Object.entries(integrations).map(([id, integration]) => [
+        id,
+        {
+          ...integration,
+          deliver: (effect: Parameters<WorkIntegration["deliver"]>[0]) =>
+            integration.deliver(effect).pipe(
+              Effect.tap(() => Effect.promise(() => options.db.errors.clear(deliveryKey(key)).catch(() => {}))),
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  const entry = {
+                    message: `${effect.operation} failed: ${errorMessage(error)}`,
+                    at: new Date().toISOString(),
+                  };
+                  void options.db.errors.set(deliveryKey(key), entry).catch(() => {});
+                  options.onError?.(error, key);
+                }),
+              ),
+            ),
+        },
+      ]),
+    ) as T;
   const adapterOf = (kind: string) => {
     const adapter = options.adapters.find((a) => a.kind === kind);
     if (adapter === undefined) throw new Error(`No adapter for ${kind}`);
@@ -138,6 +244,13 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
     if (!isSafeConnectionKey(key)) throw new Error(`Unsafe connection key ${JSON.stringify(key)}`);
     await running.get(key)?.stop();
     running.delete(key);
+    // A Bond no Loop uses stays idle.
+    if (connection.loops.length === 0) {
+      lastErrors.delete(key);
+      return;
+    }
+    const { loops, drivers } = loopDrivers(connection.loops);
+    const schedules = loopSchedules(connection.loops);
     const client = options.clientFor(connection.tenantId);
     if (client === null) {
       report(new Error(`No OpenMA access for tenant ${connection.tenantId}`), key);
@@ -163,18 +276,38 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
     });
     const application = createOpenMatter({
       store,
-      integrations: wiring.integrations,
-      agents: {
-        [connection.agentId]: makeConnectorAgentDriver({
-          connector,
-          agentId: connection.agentId,
-          isSessionUnavailable: isOmaSessionUnavailable,
-        }),
-      },
+      integrations: withDeliveryErrors(
+        key,
+        schedules.length === 0
+          ? wiring.integrations
+          : { ...wiring.integrations, [SCHEDULE_INTEGRATION_ID]: makeScheduleIntegration() },
+      ),
+      agents: Object.fromEntries(
+        [...drivers].map(([key, { agentId, session }]) => [
+          key,
+          makeConnectorAgentDriver({
+            connector,
+            agentId,
+            isSessionUnavailable: isOmaSessionUnavailable,
+            ...(hasSession(session) ? { session: { metadata: sessionMetadata(session) } } : {}),
+          }),
+        ]),
+      ),
     });
-    wiring.install(application);
+    wiring.install(application, loops);
     const runtime = makeLocalLongConnectionRuntime({
-      source: wiring.source,
+      source:
+        schedules.length === 0
+          ? wiring.source
+          : combineSources(
+              wiring.source,
+              makeScheduleSource({
+                schedules,
+                authority: key,
+                ...(options.scheduleTimers === undefined ? {} : { timers: options.scheduleTimers }),
+                onError: (error) => report(error, key),
+              }),
+            ),
       application,
       inbox,
       connectionLabel: connection.label,
@@ -187,6 +320,9 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
       await Effect.runPromise(Effect.either(store.close));
       throw error;
     }
+    lastErrors.delete(key);
+    void options.db.errors.clear(key).catch(() => {});
+    options.onStarted?.(key, connection.label);
     running.set(key, {
       kind: adapter.kind,
       revision: connection.revision,
@@ -270,7 +406,35 @@ export const createMatterHost = (options: MatterHostOptions): MatterHost => {
         url: options.mcpServerUrl,
       });
     },
+    checkSession: async (tenantId, session) => {
+      const client = options.clientFor(tenantId);
+      if (client === null) throw new Error(`No OpenMA access for tenant ${tenantId}`);
+      if (session.environmentId !== undefined) {
+        const environment = await client.getEnvironment(session.environmentId);
+        if (environment === null || environment.archived_at) {
+          throw new MissingReferenceError("environmentId", "Environment", session.environmentId);
+        }
+      }
+      for (const vaultId of session.vaultIds) {
+        const vault = await client.getVault(vaultId);
+        if (vault === null || vault.archived_at) throw new MissingReferenceError("vaultIds", "Vault", vaultId);
+      }
+    },
     running: () => [...running.keys()],
+    state: (key) => {
+      const lastError = lastErrors.get(key);
+      return { running: running.has(key), ...(lastError === undefined ? {} : { lastError }) };
+    },
+    sharedState: async (key) => {
+      const [started, delivery] = await Promise.all([
+        options.db.errors.get(key).catch(() => undefined),
+        options.db.errors.get(deliveryKey(key)).catch(() => undefined),
+      ]);
+      const lastError = [lastErrors.get(key), started, delivery]
+        .filter((e): e is { message: string; at: string } => e !== undefined)
+        .sort((a, b) => b.at.localeCompare(a.at))[0];
+      return { running: running.has(key), ...(lastError === undefined ? {} : { lastError }) };
+    },
     stop: () =>
       serial(async () => {
         const all = [...running.values()];
