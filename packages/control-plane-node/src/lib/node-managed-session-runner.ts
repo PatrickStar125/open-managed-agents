@@ -417,7 +417,7 @@ export class DefaultNodeManagedSessionRunner
       await acquired.sandbox.destroy?.().catch(() => undefined);
       throw abortedError(signal);
     }
-    // Until this turn reaches its barrier the replacement is as dirty as any
+    // Until this turn reaches its barrier the replacement is as dirty as every
     // sandbox a turn has written to.
     if (acquired.workspace !== undefined) acquired.workspace.trusted = false;
     this.installSandbox(input, acquired, fingerprint);

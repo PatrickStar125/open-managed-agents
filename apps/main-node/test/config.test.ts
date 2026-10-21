@@ -21,7 +21,7 @@ describe("loadNodeConfig", () => {
     expect(config.memoryQueue).toBe("auto");
     expect(config.realtime).toEqual({ mode: "memory", pollIntervalMs: 300 });
     expect(config.execution.concurrency).toBe(8);
-    expect(config.workspace).toEqual({ strategy: "ephemeral", checkpointIntervalMs: 60_000 });
+    expect(config.workspace).toEqual({ strategy: "ephemeral", checkpointIntervalMs: 60_000, sandboxLeaseTtlMs: 1_800_000 });
     expect(config.execution.ownerId).toMatch(/^node:\d+:/);
     expect(config.paths).toEqual({ sandboxWorkdir: "./data/sandboxes", sessionOutputs: "./data/session-outputs" });
     expect(config.http).toEqual({ host: "0.0.0.0", port: 8787, gatewayOrigin: "http://localhost:8787", publicBaseUrl: undefined, consoleDir: undefined, metricsToken: undefined, apiKey: undefined });
@@ -103,7 +103,9 @@ describe("loadNodeConfig", () => {
     const configured = loadNodeConfig({ ...minimal, ...workspace, OMA_WORKSPACE_CHECKPOINT_INTERVAL_SEC: "45",
       FILES_S3_ENDPOINT: "https://oss.example", FILES_S3_BUCKET: "files",
       FILES_S3_ACCESS_KEY: "test-key", FILES_S3_SECRET_KEY: "test-secret" });
-    expect(configured.workspace).toEqual({ strategy: "checkpoint_restore", checkpointIntervalMs: 45_000 });
+    expect(configured.workspace).toEqual({ strategy: "checkpoint_restore", checkpointIntervalMs: 45_000, sandboxLeaseTtlMs: 1_800_000 });
+    expect(loadNodeConfig({ ...minimal, OMA_SANDBOX_LEASE_TTL_SEC: "600" }).workspace.sandboxLeaseTtlMs).toBe(600_000);
+    expect(() => loadNodeConfig({ ...minimal, OMA_SANDBOX_LEASE_TTL_SEC: "30" })).toThrow(/OMA_SANDBOX_LEASE_TTL_SEC/);
   });
 
   it("parses the string-encoded flags and numbers exactly as the assembly did", () => {
