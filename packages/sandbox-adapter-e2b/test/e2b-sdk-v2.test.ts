@@ -64,11 +64,54 @@ describe("E2B SDK v2 adapter", () => {
       apiUrl: "http://127.0.0.1:3000",
       sandboxUrl: "http://127.0.0.1:3002",
       domain: "localhost",
+      timeoutMs: 30 * 60_000,
       lifecycle: {
         onTimeout: { action: "pause", keepMemory: true },
         autoResume: true,
       },
     });
+  });
+
+  it("gives the sandbox the configured lifetime and renews it while commands run", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-10-21T00:00:00Z") });
+    try {
+      const executor = await sandboxFactory(
+        { sessionId: "session_lifetime", workdir: "/tmp/unused" },
+        { E2B_API_KEY: "local", E2B_SANDBOX_TIMEOUT_MS: "3600000" },
+      );
+      expect(sdk.create).toHaveBeenCalledWith("base", expect.objectContaining({ timeoutMs: 3_600_000 }));
+      const sandbox = await sdk.create.mock.results.at(-1)!.value as ReturnType<typeof makeSdkSandbox>;
+      sandbox.commands.run.mockResolvedValue({ stdout: "ok", stderr: "", exitCode: 0 });
+
+      await executor.exec("true");
+      await executor.exec("true");
+      // Renewed once on the first command, not again within a minute.
+      expect(sandbox.setTimeout).toHaveBeenCalledTimes(1);
+      expect(sandbox.setTimeout).toHaveBeenLastCalledWith(3_600_000);
+
+      vi.setSystemTime(Date.parse("2026-10-21T00:04:30Z"));
+      await executor.readFile("/workspace/a.txt");
+      expect(sandbox.setTimeout).toHaveBeenCalledTimes(2);
+
+      // A failed renewal does not fail the command and is tried again next time.
+      sandbox.setTimeout.mockRejectedValueOnce(new Error("unavailable"));
+      vi.setSystemTime(Date.parse("2026-10-21T00:06:00Z"));
+      await expect(executor.exec("true")).resolves.toBe("ok");
+      await executor.exec("true");
+      expect(sandbox.setTimeout).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a malformed sandbox lifetime", async () => {
+    await expect(
+      sandboxFactory(
+        { sessionId: "session_bad_lifetime", workdir: "/tmp/unused" },
+        { E2B_API_KEY: "local", E2B_SANDBOX_TIMEOUT_MS: "soon" },
+      ),
+    ).rejects.toThrow(/E2B_SANDBOX_TIMEOUT_MS/);
+    expect(sdk.create).not.toHaveBeenCalled();
   });
 
   it("passes creation metadata from JSON to E2B-compatible providers", async () => {
@@ -338,6 +381,7 @@ describe("E2B SDK v2 adapter", () => {
       apiUrl: undefined,
       sandboxUrl: undefined,
       domain: "sandbox.test",
+      timeoutMs: 30 * 60_000,
       lifecycle: {
         onTimeout: { action: "pause", keepMemory: true },
         autoResume: true,

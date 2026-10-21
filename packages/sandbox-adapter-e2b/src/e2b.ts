@@ -111,6 +111,13 @@ export interface E2BSandboxOptions {
   templateId?: string;
   /** Default per-command timeout in ms. */
   defaultTimeoutMs?: number;
+  /**
+   * How long the sandbox lives without commands, in ms (E2B's sandbox
+   * `timeoutMs`). Every command renews it, so a session that keeps working
+   * keeps its sandbox. Defaults to 30 minutes; without it E2B gives a
+   * sandbox 5 minutes in total.
+   */
+  lifetimeMs?: number;
   /** Logger for debug output. */
   logger?: { warn: (msg: string, ctx?: unknown) => void };
   /**
@@ -180,6 +187,9 @@ export class E2BSandboxExecutor
   private envVars: Record<string, string> = {};
   private commandSecrets: Array<{ prefix: string; secrets: Record<string, string> }> = [];
   private defaultTimeoutMs: number;
+  private lifetimeMs: number;
+  /** When the sandbox lifetime was last renewed; 0 renews on the first command. */
+  private renewedAt = 0;
   private logger: NonNullable<E2BSandboxOptions["logger"]>;
   /** Tracks whether s3fs has already mounted the memory bucket root.
    *  We mount once per sandbox lifetime; subsequent mountMemoryStore calls
@@ -192,6 +202,7 @@ export class E2BSandboxExecutor
     opts: E2BSandboxOptions,
   ) {
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 120_000;
+    this.lifetimeMs = sandboxLifetime(opts);
     this.logger = opts.logger ?? {
       warn: (msg) => console.warn(`[e2b-sandbox] ${msg}`),
     };
@@ -283,7 +294,26 @@ export class E2BSandboxExecutor
     };
   }
 
+  /**
+   * Push the sandbox's end of life out by `lifetimeMs`, at most once a
+   * minute. E2B counts the lifetime from creation, not from the last
+   * command, so without this a sandbox dies mid-turn after its lifetime.
+   */
+  private async keepAlive(): Promise<void> {
+    if (typeof this.sandbox.setTimeout !== "function") return;
+    const now = Date.now();
+    if (now - this.renewedAt < KEEP_ALIVE_INTERVAL_MS) return;
+    this.renewedAt = now;
+    try {
+      await this.sandbox.setTimeout(this.lifetimeMs);
+    } catch (error) {
+      this.renewedAt = 0;
+      this.logger.warn("could not renew the sandbox lifetime", { error: String(error) });
+    }
+  }
+
   async exec(command: string, timeout?: number): Promise<string> {
+    await this.keepAlive();
     const wrapped = this.applyEnv(command);
     const result = await settleCommand(this.sandbox.commands.run(wrapped, {
       timeoutMs: timeout ?? this.defaultTimeoutMs,
@@ -298,6 +328,7 @@ export class E2BSandboxExecutor
   }
 
   async startProcess(command: string): Promise<ProcessHandle | null> {
+    await this.keepAlive();
     const wrapped = this.applyEnv(command);
     const handle = (await this.sandbox.commands.run(wrapped, {
       background: true,
@@ -347,6 +378,7 @@ export class E2BSandboxExecutor
     const command = [spec.command, ...(spec.args ?? [])]
       .map(shellEscape)
       .join(" ");
+    await this.keepAlive();
     const handle = (await this.sandbox.commands.run(command, {
       background: true,
       stdin: true,
@@ -479,6 +511,7 @@ export class E2BSandboxExecutor
   }
 
   async readFile(path: string): Promise<string> {
+    await this.keepAlive();
     return this.sandbox.files.read(path);
   }
 
@@ -498,11 +531,13 @@ export class E2BSandboxExecutor
   }
 
   async writeFile(path: string, content: string): Promise<string> {
+    await this.keepAlive();
     await this.sandbox.files.write(path, content);
     return path;
   }
 
   async writeFileBytes(path: string, bytes: Uint8Array): Promise<string> {
+    await this.keepAlive();
     await this.sandbox.files.write(path, bytes);
     return path;
   }
@@ -760,6 +795,7 @@ type E2BConnectionOptions = Pick<
 
 type E2BCreateOptions = E2BConnectionOptions & {
   metadata?: Record<string, string>;
+  timeoutMs?: number;
   lifecycle: {
     onTimeout: { action: "pause"; keepMemory: true };
     autoResume: true;
@@ -791,10 +827,28 @@ function connectionOptions(opts: E2BConnectionOptions): E2BConnectionOptions {
   };
 }
 
+const DEFAULT_SANDBOX_LIFETIME_MS = 30 * 60_000;
+const KEEP_ALIVE_INTERVAL_MS = 60_000;
+
+const sandboxLifetime = (opts: E2BSandboxOptions): number =>
+  opts.lifetimeMs !== undefined && Number.isSafeInteger(opts.lifetimeMs) && opts.lifetimeMs > 0
+    ? opts.lifetimeMs
+    : DEFAULT_SANDBOX_LIFETIME_MS;
+
+function parseLifetime(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const ms = Number(value);
+  if (!Number.isSafeInteger(ms) || ms <= 0) {
+    throw new Error("E2B_SANDBOX_TIMEOUT_MS must be a positive integer of milliseconds");
+  }
+  return ms;
+}
+
 function creationOptions(opts: E2BSandboxOptions): E2BCreateOptions {
   return {
     ...connectionOptions(opts),
     ...(opts.createMetadata === undefined ? {} : { metadata: opts.createMetadata }),
+    timeoutMs: sandboxLifetime(opts),
     // ACP keeps a live JSON-RPC process in the sandbox. Killing the sandbox
     // at the end of its lease loses that process and forces a cold restore;
     // a memory pause preserves it and E2B resumes it transparently on the
@@ -832,6 +886,7 @@ function optionsFromFactory(env: SandboxFactoryEnv): E2BSandboxOptions {
     sandboxUrl: env.E2B_SANDBOX_URL,
     domain: env.E2B_DOMAIN,
     createMetadata: parseCreateMetadata(env.E2B_CREATE_METADATA),
+    lifetimeMs: parseLifetime(env.E2B_SANDBOX_TIMEOUT_MS),
     templateId: env.SANDBOX_IMAGE,
     memoryBucket: readS3MemoryBucket(env),
   };
