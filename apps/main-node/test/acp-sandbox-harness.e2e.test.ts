@@ -334,10 +334,7 @@ describe("ACP sandbox harness", () => {
     expect(JSON.stringify(service.sessionNewParams)).not.toContain(
       "must-never-reach-the-sandbox",
     );
-    // The adapter extends a connected sandbox's lifetime on its first command
-    // (before the harness takes its lease); once the lease is held, only the
-    // lease renews it.
-    expect(service.leaseTtls).toEqual([30 * 60_000, 90_000, 90_000]);
+    expect(service.leaseTtls).toEqual([90_000, 90_000]);
     expect(JSON.parse(checkpointBeforeDestroy ?? "null")).toEqual(
       expect.objectContaining({ acpSessionId: "e2b-acp-session" }),
     );

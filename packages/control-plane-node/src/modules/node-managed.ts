@@ -371,6 +371,9 @@ export async function createManagedNodeRuntime(
 
   const managedRuntimeRunner = new DefaultNodeManagedSessionRunner({
     ...(workspaceCheckpoints === undefined ? {} : { workspaceCheckpoints }),
+    ...(config.workspace.sandboxLeaseTtlMs === undefined
+      ? {}
+      : { sandboxLease: { ttlMs: config.workspace.sandboxLeaseTtlMs } }),
     subagentThreads: new SqlSessionThreadStore(sql),
     subagentPolicy: ({ session }) => nodeOpenAISubagentPolicy(session, openAIAgentsSecrets),
     resolveSubagentSession: async ({ workspaceId, session, request }) => {
