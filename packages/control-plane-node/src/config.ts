@@ -79,6 +79,9 @@ export interface NodeConfig {
     strategy: "ephemeral" | "checkpoint_restore";
     /** Target between safe turn checkpoints; no fixed wall-clock RPO. */
     checkpointIntervalMs: number;
+    /** Sandbox lease renewed while a turn runs; an idle sandbox lives this
+     * long before the provider may reclaim it. Unset: provider default. */
+    sandboxLeaseTtlMs?: number;
   };
   managedWebhooks: {
     url: string | undefined;
