@@ -713,6 +713,18 @@ describe("SessionsApplicationService", () => {
     expect(versionLookups).toEqual([]);
   });
 
+  it("rejects unsupported coordinator data rather than silently dropping an advisor", async () => {
+    const service = new SessionsApplicationService({
+      workspaceId: "workspace_01", store: new MemorySessionStore(),
+      agents: { findCurrent: async () => ({ ...structuredClone(agent), multiagent: { type: "coordinator", agents: [{ type: "advisor", model: "m" }] } as never }), findVersion: async () => null },
+      environments: availableSessionEnvironment, resources: emptySessionResources,
+      lifecycle: silentSessionLifecycle, clock: { now: () => new Date("2026-08-26T02:00:00.000Z") },
+      ids: { nextSessionId: () => "invalid" },
+    });
+    const result = await service.createSession({ agent: { type: "latest", agentId: agent.id }, environmentId: environment.id });
+    expect(result.type).not.toBe("created");
+  });
+
   describe("agent update idle boundary", () => {
     async function setup(status: SessionView["status"]) {
       const store = new MemorySessionStore();

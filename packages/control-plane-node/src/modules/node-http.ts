@@ -345,7 +345,14 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
       .port(managedAgentsPortTokens.agents),
   ));
   v1.route("/oma/agents", buildLegacyAgentRoutes({
+    application: (context) => managedPlatform.app({
+      workspaceId: (context.var as { tenant_id: string }).tenant_id,
+    }).port(managedAgentsPortTokens.agents),
     services,
+    hasActiveSessionsByAgent: async (tenantId, agentId) =>
+      await sessionsService.hasActiveByAgent({ tenantId, agentId }) ||
+      (await sql.prepare("SELECT id FROM managed_sessions WHERE workspace_id = ? AND agent_id = ? AND archived_at IS NULL LIMIT 1").bind(tenantId, agentId).first()) !== null,
+    hasActiveEvalsByAgent: (tenantId, agentId) => evalsService.hasActiveByAgent({ tenantId, agentId }),
     validateModel: async (tenantId, model) => {
       const cards = await modelCardsService.list({ tenantId });
       const active = cards.filter((card) => card.archived_at === null);

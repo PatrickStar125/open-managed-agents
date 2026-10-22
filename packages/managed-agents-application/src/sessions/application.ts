@@ -140,21 +140,16 @@ async function snapshotAgent(
   workspaceId: string,
 ): Promise<SessionAgent | null> {
   const roster: SessionThreadAgent[] = [];
-  const configuredMultiagent = agent.multiagent as Agent["multiagent"] & {
-    agents?: Array<
-      | { type: "agent"; agentId: string; version?: number }
-      | { type: "advisor"; model: string }
-    >;
-  };
-  const legacyEntries = configuredMultiagent?.agents ?? [];
+  const configuredMultiagent = agent.multiagent;
+  if (configuredMultiagent !== null && (
+    configuredMultiagent.type !== "multiagent_20261001" ||
+    configuredMultiagent.advisor?.type !== "disabled" ||
+    configuredMultiagent.workflows?.type !== "disabled" ||
+    configuredMultiagent.subagents == null
+  )) return null;
   const subagents = configuredMultiagent?.subagents;
-  const entries = subagents?.type === "enabled"
-    ? subagents.predefinedAgents ?? []
-    : legacyEntries
-        .filter((entry): entry is { type: "agent"; agentId: string; version?: number } => entry.type === "agent")
-        .map((entry) => ({ type: "agent" as const, agentId: entry.agentId, version: entry.version }));
+  const entries = subagents?.type === "enabled" ? subagents.predefinedAgents : [];
   for (const entry of entries) {
-    if (typeof entry === "string" || entry.type === "self" || entry.version === undefined) return null;
     const member = await findPinnedAgent(source, workspaceId, entry.agentId, entry.version);
     if (member === null) return null;
     roster.push(snapshotThreadAgent(member));

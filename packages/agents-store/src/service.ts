@@ -286,6 +286,30 @@ export class AgentService {
     return this.repo.get(opts.tenantId, opts.agentId);
   }
 
+  /** Freeze the complete runtime roster using only tenant-scoped fixed pins. */
+  async getRuntimeSnapshot(opts: { tenantId: string; agentId: string }): Promise<import("@open-managed-agents/shared").RuntimeAgentConfig | null> {
+    const row = await this.get(opts);
+    if (!row || row.archived_at) return null;
+    const { tenant_id: _tenant, multiagent, ...base } = row;
+    if (!multiagent) return base;
+    if (multiagent.type !== "multiagent_20261001" || multiagent.advisor.type !== "disabled" || multiagent.workflows.type !== "disabled") throw new Error("Unsupported runtime multiagent configuration");
+    if (multiagent.subagents.type === "disabled") return { ...base, multiagent: { ...multiagent, subagents: multiagent.subagents } };
+    const seen = new Set<string>();
+    const members = [];
+    for (const ref of multiagent.subagents.predefined_agents) {
+      if (!Number.isInteger(ref.version) || ref.version < 1 || seen.has(ref.id)) throw new Error("Invalid pinned runtime reference");
+      seen.add(ref.id);
+      const current = await this.get({ tenantId: opts.tenantId, agentId: ref.id });
+      if (!current || current.archived_at) throw new Error(`Pinned agent ${ref.id} unavailable`);
+      const selected = current.version === ref.version ? current : (await this.getVersion({ tenantId: opts.tenantId, agentId: ref.id, version: ref.version }))?.snapshot;
+      if (!selected || selected.archived_at) throw new Error(`Pinned agent ${ref.id} version ${ref.version} unavailable`);
+      if (ref.id !== row.id && selected.multiagent) throw new Error("Nested multiagent is not supported");
+      const { multiagent: _nested, ...member } = selected;
+      members.push({ ...member, type: "agent" as const, mcp_servers: member.mcp_servers ?? [], skills: member.skills ?? [] });
+    }
+    return { ...base, multiagent: { ...multiagent, subagents: { ...multiagent.subagents, predefined_agents: members } } };
+  }
+
   /** Cross-tenant lookup by id — used by SessionDO's getAgentConfig fallback
    *  (session-do.ts:185). Trusts the caller to authorize since it has no
    *  tenant scope. */

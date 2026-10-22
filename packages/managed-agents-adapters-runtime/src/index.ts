@@ -580,8 +580,6 @@ interface RuntimeAgentSnapshot {
   version: number;
   created_at: string;
   updated_at: string;
-  /** Transitional harness field; remove with the legacy consumer migration. */
-  callable_agents?: Array<{ type: "agent"; id: string; version: number }>;
   multiagent?: {
     type: "multiagent_20261001";
     advisor: { type: "disabled" };
@@ -590,7 +588,7 @@ interface RuntimeAgentSnapshot {
       | {
           type: "enabled";
           inline_agents: { type: "enabled" } | { type: "disabled" };
-          predefined_agents: Array<{ type: "agent"; id: string; version: number }>;
+          predefined_agents: Array<RuntimeAgentSnapshot & { type: "agent" }>;
         };
     workflows: { type: "disabled" };
   };
@@ -714,11 +712,6 @@ function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapsho
     ? agent.multiagent.subagents.predefinedAgents
         .filter((member): member is Extract<typeof member, { type: "agent" }> => member.type === "agent")
     : [];
-  const callableAgents = roster.map((member) => ({
-    type: member.type,
-    id: member.id,
-    version: member.version,
-  }));
   return {
     id: agent.id,
     name: agent.name,
@@ -734,6 +727,18 @@ function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapsho
       }),
       ...(agent.model.speed !== undefined && { speed: agent.model.speed }),
     },
+    ...(agent.openma?.auxiliaryModel !== undefined && { aux_model: {
+      id: agent.openma.auxiliaryModel.id,
+      ...(agent.openma.auxiliaryModel.effort !== undefined && { effort: agent.openma.auxiliaryModel.effort }),
+      ...(agent.openma.auxiliaryModel.inferenceGeo !== undefined && { inference_geo: agent.openma.auxiliaryModel.inferenceGeo }),
+      ...(agent.openma.auxiliaryModel.speed !== undefined && { speed: agent.openma.auxiliaryModel.speed }),
+      ...(agent.openma.auxiliaryModel.maxTokens !== undefined && { max_tokens: agent.openma.auxiliaryModel.maxTokens }),
+      ...(agent.openma.auxiliaryModel.providerOptions !== undefined && { provider_options: structuredClone(agent.openma.auxiliaryModel.providerOptions) }),
+    } }),
+    ...(agent.openma?.appendablePrompts !== undefined && { appendable_prompts: structuredClone(agent.openma.appendablePrompts) }),
+    ...(agent.openma?.harness !== undefined && { harness: agent.openma.harness }),
+    ...(agent.openma?.contextManagement !== undefined && { context_management: structuredClone(agent.openma.contextManagement) }),
+    ...(agent.openma?.openaiModelSettings !== undefined && { model_settings: structuredClone(agent.openma.openaiModelSettings) }),
     system: agent.system ?? "",
     tools: agent.tools.map(runtimeAgentTool),
     mcp_servers: agent.mcpServers.map((server) => ({ ...server })),
@@ -745,7 +750,6 @@ function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapsho
     version: agent.version,
     created_at: input.session.createdAt,
     updated_at: input.session.updatedAt,
-    ...(callableAgents.length > 0 && { callable_agents: callableAgents }),
     ...(agent.multiagent !== null && {
       multiagent: {
         type: agent.multiagent.type,
@@ -758,8 +762,9 @@ function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapsho
                 inline_agents: agent.multiagent.subagents.inlineAgents,
                 predefined_agents: roster.map((member) => ({
                   type: "agent" as const,
-                  id: member.id,
-                  version: member.version,
+                  ...runtimeAgentSnapshot({ ...input, session: {
+                    ...input.session, agent: { ...member, multiagent: null },
+                  } }),
                 })),
               },
         workflows: { type: "disabled" },

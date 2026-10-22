@@ -7,7 +7,8 @@ import {
   connectHttpMcpClient,
   type McpClientPort,
 } from "@open-managed-agents/mcp";
-import type { AgentConfig, ToolsetConfig, CustomToolConfig, SessionEvent } from "@open-managed-agents/shared";
+import type { RuntimeAgentConfig as AgentConfig } from "@open-managed-agents/api-types";
+import type { ToolsetConfig, CustomToolConfig, SessionEvent } from "@open-managed-agents/shared";
 import type { ToMarkdownProvider } from "@open-managed-agents/markdown";
 import type { SandboxPort, ProcessHandle } from "./interface";
 import { nanoid } from "nanoid";
@@ -1183,6 +1184,8 @@ export async function buildTools(
           req.headers.set("x-oma-tenant", tenantId);
           req.headers.set("x-oma-session", sessionId);
           req.headers.set("x-oma-mcp-server", serverName);
+          req.headers.set("x-oma-agent-id", agentConfig.id);
+          req.headers.set("x-oma-agent-version", String(agentConfig.version));
           return mcpBinding.fetch(req);
         };
         let mcpClient: McpClientPort | undefined;
@@ -1248,8 +1251,9 @@ export async function buildTools(
 
 
   // Multi-agent tools — create a call tool for each callable agent
-  if (agentConfig.callable_agents?.length && env?.ANTHROPIC_API_KEY) {
-    for (const ca of agentConfig.callable_agents) {
+  const subagents = agentConfig.multiagent?.subagents;
+  if (subagents?.type === "enabled" && env?.delegateToAgent) {
+    for (const ca of subagents.predefined_agents) {
       const toolName = `call_agent_${ca.id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
 
       tools[toolName] = tool({
@@ -1271,14 +1275,9 @@ export async function buildTools(
     }
   }
 
-  // Built-in general sub-agent tool — opt-in via
-  // agentConfig.enable_general_subagent. Reserved id "general" routes
-  // to a synthesized config in runSubAgent (apps/agent/src/runtime/
-  // session-do.ts), so the user doesn't need to pre-create + add a
-  // sub-agent to the callable_agents roster. Inherits this agent's
-  // model + sandbox; runs with a generic system prompt and a safe
-  // built-in toolset (no schedule, no further delegate, no MCP).
-  if (agentConfig.enable_general_subagent && env?.delegateToAgent) {
+  // Inline children inherit the pinned parent configuration and share its
+  // sandbox, but have their own conversation and cannot delegate again.
+  if (subagents?.type === "enabled" && subagents.inline_agents.type === "enabled" && env?.delegateToAgent) {
     tools.general_subagent = tool({
       description:
         "Delegate a focused, well-scoped sub-task to a fresh general sub-agent. " +
@@ -1286,7 +1285,7 @@ export async function buildTools(
         "and returns a single text response when done. Use for: research, code " +
         "exploration, file scanning, batch operations — anything you want a clean " +
         "context for. The sub-agent shares this agent's sandbox + model but cannot " +
-        "delegate further or use MCP tools.",
+        "delegate further. It inherits the parent's system, tools, MCP servers, and skills.",
       inputSchema: z.object({
         task: z
           .string()

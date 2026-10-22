@@ -343,6 +343,7 @@ function validateMetadata(metadata: Record<string, string>): string | null {
     if (key.length < 1 || key.length > 64) {
       return "Agent metadata keys must contain 1 to 64 characters";
     }
+    if (typeof value !== "string") return "Agent metadata values must be strings";
     if (value.length > 512) {
       return "Agent metadata values may contain at most 512 characters";
     }
@@ -437,9 +438,10 @@ async function resolveMultiagent(
     }
     const requestedVersion = typeof entry === "string" ? undefined : entry.version;
     const current = await store.findCurrent({ workspaceId, agentId });
-    const referenced = requestedVersion === undefined || current?.version === requestedVersion ? current : await store.findVersion({ workspaceId, agentId, version: requestedVersion });
+    if (current === null || current.archivedAt !== null) return { type: "invalid_request", message: `predefined agent ${agentId} was not found` };
+    const referenced = requestedVersion === undefined || current.version === requestedVersion ? current : await store.findVersion({ workspaceId, agentId, version: requestedVersion });
     if (referenced === null || referenced.archivedAt !== null) return { type: "invalid_request", message: `predefined agent ${agentId} was not found` };
-    if (referenced.multiagent !== null) return { type: "invalid_request", message: `predefined agent ${agentId} cannot have multiagent enabled` };
+    if (agentId !== self.agentId && referenced.multiagent !== null) return { type: "invalid_request", message: `predefined agent ${agentId} cannot have multiagent enabled` };
     resolvedEntries.push({ type: "agent", agentId: referenced.id, version: referenced.version });
   }
   return {
@@ -567,7 +569,7 @@ export class AgentsApplicationService implements AgentsApplicationPort {
       command.metadata === undefined
         ? current.metadata
         : patchMetadata(current.metadata, command.metadata);
-    const invalidMetadata = validateMetadata(metadata);
+    const invalidMetadata = command.metadata === undefined ? null : validateMetadata(metadata);
     if (invalidMetadata !== null) {
       return { type: "invalid_request", message: invalidMetadata };
     }
@@ -577,7 +579,8 @@ export class AgentsApplicationService implements AgentsApplicationPort {
         : command.mcpServers ?? [];
     const tools =
       command.tools === undefined ? current.tools : command.tools ?? [];
-    const invalidMcpConfiguration = validateMcpConfiguration(mcpServers, tools);
+    const invalidMcpConfiguration = command.mcpServers === undefined && command.tools === undefined
+      ? null : validateMcpConfiguration(mcpServers, tools);
     if (invalidMcpConfiguration !== null) {
       return { type: "invalid_request", message: invalidMcpConfiguration };
     }

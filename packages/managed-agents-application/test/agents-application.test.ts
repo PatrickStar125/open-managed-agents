@@ -112,6 +112,73 @@ class MemoryAgentStore implements AgentStore {
   }
 }
 
+describe("multiagent reference integrity", () => {
+  function setup(workspaceId = "workspace_01", store = new MemoryAgentStore()) {
+    let id = 0;
+    const service = new AgentsApplicationService({ workspaceId, store,
+      clock: { now: () => new Date("2026-08-26T00:00:00.000Z") },
+      ids: { nextAgentId: () => `agent_${++id}` } });
+    return { service, store };
+  }
+  it.each([{}, { validLegacyNull: null }])("renames legacy MCP agents without revalidating untouched fields %j", async (metadata) => {
+    const { service, store } = setup();
+    const created = await service.createAgent({ name: "old", model: "m" });
+    if (created.type !== "created") throw Error("create failed");
+    await store.insert({ workspaceId: "workspace_01", agent: { ...created.agent, metadata: metadata as never, mcpServers: [{ name: "srv", type: "url", url: "https://example.invalid" }] } });
+    expect(await service.updateAgent({ agentId: "agent_1", name: "new" })).toMatchObject({ type: "updated", agent: { name: "new", metadata, mcpServers: [{ name: "srv" }] } });
+    expect(await service.updateAgent({ agentId: "agent_1", tools: [] })).toMatchObject({ type: "invalid_request" });
+    expect(await service.updateAgent({ agentId: "agent_1", mcpServers: [{ name: "srv", type: "url", url: "https://example.invalid" }] })).toMatchObject({ type: "invalid_request" });
+  });
+  it.each([null, 1, {}, []])("rejects invalid metadata values without throwing %j", async (value) => {
+    const { service } = setup();
+    expect(await service.createAgent({ name: "bad", model: "m", metadata: { key: value } as never })).toMatchObject({ type: "invalid_request" });
+    await service.createAgent({ name: "ok", model: "m" });
+    if (value !== null) expect(await service.updateAgent({ agentId: "agent_1", metadata: { key: value } as never })).toMatchObject({ type: "invalid_request" });
+  });
+  const enabled = { type: "multiagent_20261001", workflows: { type: "disabled" },
+    subagents: { type: "enabled", predefinedAgents: [{ type: "self" }] } } as const;
+
+  it("preserves a pinned self across partial updates without a false depth error", async () => {
+    const { service } = setup();
+    const created = await service.createAgent({ name: "self", model: "m", multiagent: { ...enabled, subagents: { type: "enabled", predefinedAgents: [{ type: "self" }] } } });
+    expect(created.type).toBe("created");
+    const updated = await service.updateAgent({ agentId: "agent_1", multiagent: { type: "multiagent_20261001", subagents: { type: "enabled", inlineAgents: { type: "disabled" } } } });
+    expect(updated).toMatchObject({ type: "updated", agent: { multiagent: { subagents: { predefinedAgents: [{ agentId: "agent_1", version: 1 }] } } } });
+  });
+
+  it("rejects a historical pin when the current agent is archived", async () => {
+    const { service } = setup();
+    await service.createAgent({ name: "member", model: "m" });
+    await service.updateAgent({ agentId: "agent_1", name: "v2" });
+    await service.archiveAgent({ agentId: "agent_1" });
+    const result = await service.createAgent({ name: "parent", model: "m", multiagent: { ...enabled, subagents: { type: "enabled", predefinedAgents: [{ type: "agent", agentId: "agent_1", version: 1 }] } } });
+    expect(result.type).toBe("invalid_request");
+  });
+
+  it("pins versions, isolates workspaces, rejects depth and duplicate references", async () => {
+    const { service, store } = setup();
+    await service.createAgent({ name: "member", model: "m" });
+    await service.updateAgent({ agentId: "agent_1", name: "v2" });
+    const multiagent = { ...enabled, subagents: { type: "enabled" as const, predefinedAgents: [{ type: "agent" as const, agentId: "agent_1", version: 1 }] } };
+    expect(await service.createAgent({ name: "parent", model: "m", multiagent })).toMatchObject({ type: "created", agent: { multiagent: { subagents: { predefinedAgents: [{ agentId: "agent_1", version: 1 }] } } } });
+    const other = setup("other", store).service;
+    expect((await other.createAgent({ name: "other", model: "m", multiagent })).type).toBe("invalid_request");
+    for (const predefinedAgents of [["agent_1", "agent_1"], ["agent_2"]]) {
+      expect((await service.createAgent({ name: "bad", model: "m", multiagent: { ...multiagent, subagents: { type: "enabled", predefinedAgents } } })).type).toBe("invalid_request");
+    }
+  });
+
+  it("preserves omitted fields, replaces lists, and resets null to inline-only defaults", async () => {
+    const { service } = setup();
+    await service.createAgent({ name: "member", model: "m" });
+    await service.createAgent({ name: "parent", model: "m", multiagent: { ...enabled, subagents: { type: "enabled", predefinedAgents: ["agent_1"] } } });
+    expect(await service.updateAgent({ agentId: "agent_2", name: "renamed" })).toMatchObject({ type: "updated", agent: { multiagent: { subagents: { predefinedAgents: [{ agentId: "agent_1", version: 1 }] } } } });
+    for (const subagents of [{ type: "enabled" as const, predefinedAgents: [] }, null]) {
+      expect(await service.updateAgent({ agentId: "agent_2", multiagent: { type: "multiagent_20261001", subagents } })).toMatchObject({ type: "updated", agent: { multiagent: { subagents: { type: "enabled", inlineAgents: { type: "enabled" }, predefinedAgents: [] } } } });
+    }
+  });
+});
+
 describe("AgentsApplicationService", () => {
   it("rejects metadata that exceeds the official stored limits", async () => {
     const service = new AgentsApplicationService({

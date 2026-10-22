@@ -10,20 +10,20 @@ import {
 } from "../src";
 
 const SCHEMA_SQL = `
-CREATE TABLE managed_agents (
+CREATE TABLE agents (
   id text PRIMARY KEY NOT NULL,
-  workspace_id text NOT NULL,
-  document text NOT NULL,
+  tenant_id text NOT NULL,
+  config text NOT NULL,
   version integer NOT NULL,
   created_at integer NOT NULL,
   updated_at integer NOT NULL,
   archived_at integer
 );
-CREATE TABLE managed_agent_versions (
+CREATE TABLE agent_versions (
   agent_id text NOT NULL,
-  workspace_id text NOT NULL,
+  tenant_id text NOT NULL,
   version integer NOT NULL,
-  document text NOT NULL,
+  snapshot text NOT NULL,
   created_at integer NOT NULL,
   PRIMARY KEY (agent_id, version)
 );
@@ -56,6 +56,11 @@ const agent = (version: number): Agent => ({
   version,
 });
 
+const storedAgent = (version: number, archivedAt: string | null = null) => {
+  const { createdAt, updatedAt, mcpServers, ...rest } = agent(version);
+  return JSON.stringify({ ...rest, archivedAt: undefined, created_at: createdAt, updated_at: updatedAt, archived_at: archivedAt, mcp_servers: mcpServers });
+};
+
 const vault: Vault = {
   id: "vlt_01",
   archivedAt: null,
@@ -73,14 +78,14 @@ describe("Deployment SQL dependency sources", () => {
     await client.exec(SCHEMA_SQL);
     await client
       .prepare(
-        `INSERT INTO managed_agents
-          (id, workspace_id, document, version, created_at, updated_at, archived_at)
+        `INSERT INTO agents
+          (id, tenant_id, config, version, created_at, updated_at, archived_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         "agent_01",
         "workspace_01",
-        JSON.stringify(agent(3)),
+        storedAgent(3),
         3,
         Date.parse("2026-08-26T10:00:00.000Z"),
         Date.parse("2026-08-26T10:00:00.000Z"),
@@ -89,15 +94,15 @@ describe("Deployment SQL dependency sources", () => {
       .run();
     await client
       .prepare(
-        `INSERT INTO managed_agent_versions
-          (agent_id, workspace_id, version, document, created_at)
+        `INSERT INTO agent_versions
+          (agent_id, tenant_id, version, snapshot, created_at)
          VALUES (?, ?, ?, ?, ?)`,
       )
       .bind(
         "agent_01",
         "workspace_01",
         2,
-        JSON.stringify(agent(2)),
+        storedAgent(2),
         Date.parse("2026-08-26T10:00:00.000Z"),
       )
       .run();
@@ -147,12 +152,12 @@ describe("Deployment SQL dependency sources", () => {
     const archivedAt = "2026-08-26T11:00:00.000Z";
     await client
       .prepare(
-        `UPDATE managed_agents
-         SET document = ?, archived_at = ?
-         WHERE workspace_id = ? AND id = ?`,
+        `UPDATE agents
+         SET config = ?, archived_at = ?
+         WHERE tenant_id = ? AND id = ?`,
       )
       .bind(
-        JSON.stringify({ ...agent(3), archivedAt }),
+        storedAgent(3, archivedAt),
         Date.parse(archivedAt),
         "workspace_01",
         "agent_01",

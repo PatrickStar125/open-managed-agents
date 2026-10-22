@@ -16,6 +16,7 @@ import {
 import { DEFAULT_BRIDGE_SERVER_URL } from "./bridge/lib/defaults.js";
 import { currentProfile } from "./bridge/lib/platform.js";
 import { withNetworkCause } from "./network-error.js";
+import { parseAgentWrite } from "./agent-write.js";
 
 // ─── Config ───
 
@@ -853,58 +854,23 @@ const commands: Cmd[] = [
   },
   {
     group: "Agents", match: ["agents", "create"],
-    usage: "oma agents create <name> [--model <id>] [--inline-only|--subagent <id[:version]>]", desc: "Create agent",
+    usage: "oma agents create <name> [--model <id>] [--inline-only|--subagent <id[:version]>|--multiagent <JSON>]", desc: "Create agent (multiagent JSON preserves nulls and self/pinned references)",
     http: "POST   /v1/agents {name, model, system, tools, skills?, mcp_servers?, multiagent?, _oma?:{runtime_binding,harness? (default Pi; ai-sdk deprecated),...}}",
     async run(config, args) {
-      const name = flag(args, "--name") || args.find(a => !a.startsWith("--"));
-      const model = flag(args, "--model") || "claude-sonnet-4-6";
-      const system = flag(args, "--system") || "";
-      if (!name) { console.error("Usage: oma agents create <name> [--model <id>] [--system <prompt>] [--inline-only] [--subagent <id[:version]>]"); process.exit(1); }
-      // Local-runtime agent: routes turns to a user-registered `oma bridge daemon`
-      // running an ACP-compatible child (Claude Code etc.). Both flags must be
-      // present to opt in — partial config silently drops the binding.
-      const runtimeId = flag(args, "--runtime");
-      const acpAgentId = flag(args, "--acp-agent");
+      const { body, runtimeId, acpAgentId } = parseAgentWrite(args, false);
       const useAcpProxy = !!(runtimeId && acpAgentId);
-      const subagentRefs = flags(args, "--subagent");
-      const predefined_agents = subagentRefs.map((ref) => {
-        const [id, versionText, ...extra] = ref.split(":");
-        if (!id || extra.length > 0 || (versionText !== undefined && (!/^\d+$/u.test(versionText) || Number(versionText) < 1))) {
-          throw new Error(`Invalid --subagent value ${ref}; expected <agent-id>[:positive-version]`);
-        }
-        return {
-          type: "agent" as const,
-          id,
-          ...(versionText !== undefined && { version: Number(versionText) }),
-        };
-      });
-      const inlineOnly = args.includes("--inline-only");
-      if (inlineOnly && predefined_agents.length > 0) {
-        throw new Error("--inline-only cannot be combined with --subagent");
-      }
-      const body: Record<string, unknown> = {
-        name, model, system, tools: [{ type: "agent_toolset_20260401" }],
-        ...((inlineOnly || predefined_agents.length > 0) && {
-          multiagent: {
-            type: "multiagent_20261001",
-            advisor: { type: "disabled" },
-            subagents: {
-              type: "enabled",
-              inline_agents: { type: inlineOnly ? "enabled" : "disabled" },
-              predefined_agents,
-            },
-            workflows: { type: "disabled" },
-          },
-        }),
-      };
-      if (useAcpProxy) {
-        body._oma = {
-          harness: "acp-proxy",
-          runtime_binding: { runtime_id: runtimeId, acp_agent_id: acpAgentId },
-        };
-      }
       const agent = await apiFetch<{ id: string; name: string }>(config, "/v1/agents", { method: "POST", body: JSON.stringify(body) });
       console.log(`Agent created: ${agent.name} (${agent.id})${useAcpProxy ? `  [acp-proxy → ${acpAgentId} on ${runtimeId.slice(0, 8)}…]` : ""}`);
+    },
+  },
+  {
+    group: "Agents", match: ["agents", "update"],
+    usage: "oma agents update <id> [--name <name>] [--model <id>] [--system <prompt>] [--inline-only|--subagent <id[:version]>|--multiagent <JSON>]", desc: "Patch supplied agent fields only; --multiagent null clears configuration",
+    http: "POST   /v1/agents/:id {name?, model?, system?, multiagent?, _oma?}",
+    async run(config, args) {
+      const { target, body } = parseAgentWrite(args, true);
+      const agent = await apiFetch<{ id: string; name: string }>(config, `/v1/agents/${encodeURIComponent(target)}`, { method: "POST", body: JSON.stringify(body) });
+      console.log(`Agent updated: ${agent.name} (${agent.id})`);
     },
   },
   {

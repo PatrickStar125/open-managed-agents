@@ -240,6 +240,8 @@ const DEFAULT_SCRUB = [
   "x-oma-tenant",
   "x-oma-session",
   "x-oma-mcp-server",
+  "x-oma-agent-id",
+  "x-oma-agent-version",
 ];
 
 function buildUpstreamHeaders(

@@ -199,43 +199,32 @@ function mapSessionError(c: Context, err: unknown): Response {
 
 function snapshotToSessionAgent(
   agentId: string,
-  snapshot: AgentConfig | null,
+  snapshot: AgentConfig | import("@open-managed-agents/shared").RuntimeAgentConfig | null,
 ): Record<string, unknown> {
   if (!snapshot) return { type: "agent", id: agentId, version: 1 };
-  const {
-    aux_model: _a,
-    harness: _h,
-    runtime_binding: _rb,
-    appendable_prompts: _ap,
-    callable_agents,
-    archived_at: _ar,
-    created_at: _ca,
-    updated_at: _ua,
-    metadata: _md,
-    ...rest
-  } = snapshot;
-  const multiagent = (callable_agents ?? []).length > 0
-    ? {
-        type: "multiagent_20261001" as const,
-        advisor: { type: "disabled" as const },
-        subagents: {
-          type: "enabled" as const,
-          inline_agents: { type: "disabled" as const },
-          predefined_agents: (callable_agents ?? []).map((c) => ({
-            type: "agent" as const,
-            id: c.id,
-            version: c.version ?? 1,
-          })),
-        },
-        workflows: { type: "disabled" as const },
-      }
-    : null;
+  const multiagent = snapshot.multiagent;
   return {
     type: "agent",
-    ...rest,
     id: agentId,
     version: snapshot.version ?? 1,
-    multiagent,
+    name: snapshot.name,
+    model: snapshot.model,
+    system: snapshot.system,
+    description: snapshot.description,
+    tools: snapshot.tools,
+    skills: snapshot.skills ?? [],
+    mcp_servers: snapshot.mcp_servers ?? [],
+    multiagent: multiagent ? {
+      type: multiagent.type,
+      advisor: multiagent.advisor,
+      workflows: multiagent.workflows,
+      subagents: multiagent.subagents.type === "disabled" ? { type: "disabled" } : {
+        type: "enabled",
+        inline_agents: multiagent.subagents.inline_agents,
+        predefined_agents: multiagent.subagents.predefined_agents.map((member) =>
+          "model" in member ? snapshotToSessionAgent(member.id, member) : { type: "agent", id: member.id, version: member.version }),
+      },
+    } : null,
   };
 }
 
@@ -381,7 +370,8 @@ export function buildSessionRoutes(deps: SessionRoutesDeps) {
       envId = deps.localRuntimeEnvId ?? "env_local_runtime";
     }
 
-    const { tenant_id: _atid, ...agentSnapshot } = agentRow;
+    const agentSnapshot = await services.agents.getRuntimeSnapshot({ tenantId: t, agentId });
+    if (!agentSnapshot) return c.json({ error: "Agent not found" }, 404);
     const envSnap = deps.loadEnvironment
       ? await deps.loadEnvironment({ tenantId: t, environmentId: envId })
       : null;

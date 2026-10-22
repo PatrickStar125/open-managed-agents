@@ -259,6 +259,7 @@ describe("Managed session runtime codec", () => {
                   mcpServers: [],
                   model: { id: "claude-sonnet-4-6" },
                   name: "Reviewer",
+                  openma: { harness: "custom", auxiliaryModel: { id: "aux-child", providerOptions: { keep_key: true } }, appendablePrompts: ["child instructions"] },
                   skills: [],
                   system: null,
                   tools: [],
@@ -405,9 +406,11 @@ describe("Managed session runtime codec", () => {
             },
           },
         ],
-        callable_agents: [
-          { type: "agent", id: "agent_reviewer", version: 7 },
-        ],
+        multiagent: { subagents: { predefined_agents: [
+          { type: "agent", id: "agent_reviewer", version: 7, name: "Reviewer",
+            model: { id: "claude-sonnet-4-6" }, system: "", tools: [], mcp_servers: [], skills: [],
+            harness: "custom", aux_model: { id: "aux-child", provider_options: { keep_key: true } }, appendable_prompts: ["child instructions"] },
+        ] } },
       },
     });
   });

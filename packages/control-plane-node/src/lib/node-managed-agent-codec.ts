@@ -84,16 +84,16 @@ interface LegacyMultiagent {
   subagents: { type: "disabled" } | {
     type: "enabled";
     inline_agents: { type: "enabled" } | { type: "disabled" };
-    predefined_agents: Array<{ type: "agent"; id: string; version: number }>;
+    predefined_agents: Array<LegacyManagedHarnessAgentConfig & { type: "agent" }>;
   };
   workflows: { type: "disabled" };
 }
 
 export interface LegacyManagedHarnessAgentConfig
-  extends Omit<AgentConfig, "tools" | "skills" | "callable_agents"> {
+  extends Omit<AgentConfig, "tools" | "skills" | "callable_agents" | "multiagent"> {
   tools: LegacyAgentTool[];
+  mcp_servers: NonNullable<AgentConfig["mcp_servers"]>;
   skills: Array<{ type: "anthropic" | "custom"; skill_id: string; version: string }>;
-  callable_agents?: Array<{ type: "agent"; id: string; version: number }>;
   multiagent?: LegacyMultiagent;
 }
 
@@ -232,11 +232,6 @@ export function toLegacyHarnessAgentConfig(
   const roster = agent.multiagent?.subagents.type === "enabled"
     ? agent.multiagent.subagents.predefinedAgents
     : [];
-  const callableAgents = roster.flatMap((member) =>
-    member.type === "agent"
-      ? [{ type: "agent" as const, id: member.id, version: member.version }]
-      : [],
-  );
   return {
     id: agent.id,
     name: agent.name,
@@ -260,7 +255,6 @@ export function toLegacyHarnessAgentConfig(
       skill_id: skill.skillId,
       version: skill.version,
     })),
-    ...(callableAgents.length > 0 && { callable_agents: callableAgents }),
     ...(agent.multiagent !== null && {
       multiagent: {
         type: agent.multiagent.type,
@@ -271,7 +265,7 @@ export function toLegacyHarnessAgentConfig(
               type: "enabled",
               inline_agents: agent.multiagent.subagents.inlineAgents,
               predefined_agents: roster.flatMap((member) => member.type === "agent"
-                ? [{ type: "agent" as const, id: member.id, version: member.version }]
+                ? [{ ...toLegacyHarnessAgentConfig({ ...session, agent: { ...member, multiagent: null } }), type: "agent" as const }]
                 : []),
             },
         workflows: { type: "disabled" },

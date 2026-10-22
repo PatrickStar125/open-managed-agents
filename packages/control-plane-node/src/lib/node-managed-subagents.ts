@@ -13,6 +13,21 @@ export interface ManagedNodeCreateSubagent {
   parentToolUseId?: string;
 }
 
+export function resolveManagedSubagentSession(session: Session, request: ManagedNodeCreateSubagent): Session {
+  const policy = session.agent.multiagent?.subagents;
+  if (policy?.type !== "enabled") throw new Error("Subagents are disabled");
+  if (request.agentId !== undefined && request.agentId !== "general") {
+    const member = policy.predefinedAgents.find(item => item.type === "agent" && item.id === request.agentId);
+    if (member?.type !== "agent") throw new Error("Subagent is not in the configured multiagent roster");
+    const { type: _type, ...agent } = structuredClone(member);
+    return { ...session, agent: { ...agent, multiagent: null } };
+  }
+  if (policy.inlineAgents.type !== "enabled") throw new Error("Inline subagents are disabled");
+  return { ...session, agent: { ...structuredClone(session.agent), multiagent: null,
+    name: request.name ?? session.agent.name,
+    system: request.instructions ? `${session.agent.system}\n\n${request.instructions}` : session.agent.system } };
+}
+
 export interface ManagedNodeSubagentState {
   threadId: string;
   status: "idle" | "running" | "completed" | "interrupted" | "closed" | "failed";
@@ -183,6 +198,7 @@ export class ManagedNodeSubagents implements ManagedNodeSubagentControl {
   }
 
   private defaultSession(request: ManagedNodeCreateSubagent): Session {
+    if (this.input.session.agent.multiagent !== null) return resolveManagedSubagentSession(this.input.session, request);
     let agent = structuredClone(this.input.session.agent);
     if (request.agentId !== undefined && request.agentId !== "general") {
       const configured = agent.multiagent?.subagents.type === "enabled"

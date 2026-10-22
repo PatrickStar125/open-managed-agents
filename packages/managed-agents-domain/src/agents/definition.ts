@@ -59,12 +59,6 @@ export interface AgentMultiagentInput {
   workflows?: { type: "disabled" } | null;
 }
 
-/** Legacy storage shape accepted only by migration code. */
-export interface LegacyAgentMultiagentInput {
-  agents: Array<string | { agentId: string; type: "agent"; version?: number } | { type: "self" } | { model: string; type: "advisor" }>;
-  type: "coordinator";
-}
-
 export interface AgentToolDefaultConfigInput {
   enabled?: boolean | null;
   permissionPolicy?: AgentPermissionPolicy | null;
@@ -161,8 +155,7 @@ export type AgentSkill =
   | { skillId: string; type: "custom"; version: string };
 
 export type AgentMultiagentPredefinedAgent =
-  | { agentId: string; type: "agent"; version: number }
-  | { type: "self" };
+  { agentId: string; type: "agent"; version: number };
 
 export interface AgentMultiagentSubagents {
   type: "enabled";

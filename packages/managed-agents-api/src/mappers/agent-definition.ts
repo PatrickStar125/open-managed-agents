@@ -2,6 +2,7 @@ import type {
   AgentCustomToolInputSchema,
   AgentMcpServerInput,
   AgentMultiagentInput,
+  AgentMultiagent,
   AgentPermissionPolicy,
   AgentSkillInput,
   AgentToolConfigInput,
@@ -403,27 +404,26 @@ export function fromAgentSkillInput(skill: AgentSkillInput): object {
 }
 
 export function fromAgentMultiagentInput(
-  multiagent: AgentMultiagentInput,
+  multiagent: AgentMultiagent,
 ): object {
-  const subagents = multiagent.subagents;
-  if (subagents === null || subagents === undefined || subagents.type === "disabled") {
+  const subagents = requireResolved(multiagent.subagents, "multiagent.subagents");
+  const advisor = requireResolved(multiagent.advisor, "multiagent.advisor");
+  const workflows = requireResolved(multiagent.workflows, "multiagent.workflows");
+  if (subagents.type === "disabled") {
     return {
       type: multiagent.type,
-      advisor: { type: "disabled" },
+      advisor,
       subagents: { type: "disabled" },
-      workflows: { type: "disabled" },
+      workflows,
     };
   }
   return {
     type: multiagent.type,
-    advisor: { type: "disabled" },
+    advisor,
     subagents: {
       type: "enabled",
-      inline_agents: subagents.inlineAgents,
-      predefined_agents: (subagents.predefinedAgents ?? []).map((entry) => {
-        if (typeof entry === "string" || entry.type === "self") {
-          throw new Error("Application returned an unresolved multiagent entry");
-        }
+      inline_agents: requireResolved(subagents.inlineAgents, "multiagent.inlineAgents"),
+      predefined_agents: requireResolved(subagents.predefinedAgents, "multiagent.predefinedAgents").map((entry) => {
         return {
           type: entry.type,
           id: entry.agentId,
@@ -431,7 +431,7 @@ export function fromAgentMultiagentInput(
         };
       }),
     },
-    workflows: { type: "disabled" },
+    workflows,
   };
 }
 

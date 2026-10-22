@@ -236,7 +236,7 @@ export class SqlAgentRepo implements AgentRepo {
     // Two-statement batch: drop history rows first then the agent row.
     const deleteVersionsQ = this.db
       .delete(agent_versions)
-      .where(eq(agent_versions.agent_id, agentId));
+      .where(and(eq(agent_versions.agent_id, agentId), eq(agent_versions.tenant_id, tenantId)));
     const deleteAgentQ = this.db
       .delete(agents)
       .where(and(eq(agents.id, agentId), eq(agents.tenant_id, tenantId)));

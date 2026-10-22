@@ -1,4 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
+import { assertRuntimeAgentSnapshot, resolvePinnedSubagent, resolveThreadAgentSnapshot, resolveSubagentSkillReminders, resolveRuntimeSkillFiles } from "./multiagent";
+import type { RuntimeAgentConfig as AgentConfig } from "@open-managed-agents/api-types";
 import { nanoid } from "nanoid";
 import type { SharedV3ProviderOptions } from "@ai-sdk/provider";
 import { parseCronExpression } from "cron-schedule";
@@ -53,7 +55,6 @@ import { CfD1SqlClient } from "@open-managed-agents/sql-client/adapters/cf-d1";
 import { cfWorkersAiToMarkdown } from "@open-managed-agents/markdown";
 import { isSpecEvent } from "@open-managed-agents/api-types";
 import type {
-  AgentConfig,
   EnvironmentConfig,
   CredentialConfig,
   SessionEvent,
@@ -559,38 +560,49 @@ export class SessionDO extends DurableObject<Env> {
       this.state.session_id &&
       this.state.tenant_id
     ) {
+      let reloadedSnapshot: unknown;
       try {
         const services = await getCfServicesForTenant(this.env, this.state.tenant_id);
         const session = await services.sessions.get({
           tenantId: this.state.tenant_id,
           sessionId: this.state.session_id,
         });
-        if (session?.agent_snapshot) {
-          if (JSON.stringify(this.state.agent_snapshot) !== JSON.stringify(session.agent_snapshot)) {
-            this.setState({ ...this.state, agent_snapshot: session.agent_snapshot });
-          }
-          return session.agent_snapshot;
-        }
+        reloadedSnapshot = session?.agent_snapshot;
       } catch (err) {
         logWarn(
           { op: "session_do.agent_snapshot_reload", session_id: this.state.session_id, err },
           "failed to reload agent snapshot; using the DO copy",
         );
       }
+      if (reloadedSnapshot != null) {
+        assertRuntimeAgentSnapshot(reloadedSnapshot);
+        if (JSON.stringify(this.state.agent_snapshot) !== JSON.stringify(reloadedSnapshot)) {
+          this.setState({ ...this.state, agent_snapshot: reloadedSnapshot });
+        }
+        return reloadedSnapshot;
+      }
     }
     if (this.state.agent_snapshot && agentId === this.state.agent_id) {
+      assertRuntimeAgentSnapshot(this.state.agent_snapshot);
       return this.state.agent_snapshot;
     }
-    // Cross-tenant lookup — DO has no tenant scope here. Trusts the caller.
-    // Phase 1: still queries against the shared MAIN_DB. Phase 4: per-tenant
-    // DB will scope this naturally — `WHERE id = ?` in the tenant's DB only
-    // returns the tenant's row. Either way, this.state.tenant_id is the
-    // right routing key.
-    const services = await getCfServicesForTenant(this.env, this.state.tenant_id);
-    const row = await services.agents.getById({ agentId });
-    if (!row) return null;
-    const { tenant_id: _t, ...config } = row;
-    return config;
+    return null;
+  }
+
+  private async getThreadAgentConfig(threadId: string): Promise<AgentConfig | null> {
+    if (threadId === "sthr_primary") return this.getAgentConfig(this.state.agent_id);
+    const cached = this.threads.get(threadId)?.agentConfig;
+    if (cached) {
+      assertRuntimeAgentSnapshot(cached);
+      return cached;
+    }
+    const row = [...this.ctx.storage.sql.exec<{ agent_id: string }>(
+      "SELECT agent_id FROM threads WHERE id = ? LIMIT 1", threadId,
+    )][0];
+    if (!row || !this.state.agent_snapshot) throw new Error("Pinned child lane snapshot is unavailable");
+    const agent = resolveThreadAgentSnapshot(this.state.agent_snapshot, row.agent_id);
+    this.threads.set(threadId, { agentId: row.agent_id, agentConfig: agent });
+    return agent;
   }
 
   /** Same idea as getAgentConfig but for environments. */
@@ -4194,8 +4206,9 @@ export class SessionDO extends DurableObject<Env> {
 
     if (confirmation.result === "allow" && pending) {
       // Execute the tool
-      const agentId = this.state.agent_id;
-      const agent = agentId ? await this.getAgentConfig(agentId) : null;
+      const agent = await this.getThreadAgentConfig(
+        (confirmation as unknown as { session_thread_id?: string }).session_thread_id ?? "sthr_primary",
+      );
 
       if (agent) {
         // Fetch environment config for networking restrictions
@@ -4527,67 +4540,11 @@ export class SessionDO extends DurableObject<Env> {
     // the child event carries its own session_thread_id.
     this._executionParentLane.set(threadId, parentThreadId);
 
-    // Reserved id "general" → opt-in built-in delegation tool. Uses a
-    // synthesized config: parent's model + a generic system prompt + a
-    // safe built-in tool subset. Bypasses getAgentConfig (no KV lookup,
-    // no snapshot dependency — works around the staging-KV miss for
-    // arbitrary sub-agent ids documented below).
-    let subAgent: AgentConfig | null;
-    if (agentId === "general") {
-      const parentSnapshot = this.state.agent_snapshot;
-      subAgent = {
-        id: "general",
-        name: "general",
-        // Inherit parent's model so the delegation cost mirrors the
-        // caller's per-token rate. aux_model isn't used here — the
-        // sub-agent's full LLM call should match the caller.
-        model: parentSnapshot?.model ?? "claude-sonnet-4-6",
-        system:
-          "You are a focused sub-agent. The user message contains a single " +
-          "task delegated to you by another agent. Do exactly that task and " +
-          "return a concise text result — no preamble, no follow-up questions, " +
-          "no offers to do additional work. You share the same sandbox as the " +
-          "calling agent (files persist) but cannot delegate further or use " +
-          "MCP tools.",
-        tools: [
-          {
-            type: "agent_toolset_20260401",
-            // Explicit subset — bash + file ops only. No web tools (the
-            // caller controls those). No schedule (sub-agents can't
-            // outlive their parent turn). Permission inherited from the
-            // toolset's default (always_allow) — no per-tool override
-            // needed.
-            configs: [
-              { name: "bash", enabled: true },
-              { name: "read", enabled: true },
-              { name: "write", enabled: true },
-              { name: "edit", enabled: true },
-              { name: "grep", enabled: true },
-              { name: "glob", enabled: true },
-              // explicitly off:
-              { name: "web_fetch", enabled: false },
-              { name: "web_search", enabled: false },
-            ],
-          },
-        ],
-        // No callable_agents → can't delegate further (matches AMA spec
-        // "Only one level of delegation"). No MCP. No skills. No
-        // appendable_prompts. No schedule wakeup wiring.
-        version: 1,
-        created_at: new Date().toISOString(),
-      } as AgentConfig;
-    } else {
-      // Fetch sub-agent config. Uses getAgentConfig so the parent agent's
-      // snapshot is consulted when the sub-agent id matches the session's
-      // agent_id; otherwise falls back to KV (broken in staging — sub-agents
-      // with arbitrary ids aren't snapshotted).
-      // TODO(staging-kv): pre-fetch sub-agent configs at /init when the agent
-      // declares them in mcp_servers / sub_agents.
-      subAgent = await this.getAgentConfig(agentId);
-      if (!subAgent) {
-        return `Sub-agent error: agent "${agentId}" not found`;
-      }
-    }
+    // Both inline and predefined children use the immutable Session snapshot.
+    const parentConfig = parentThreadId === "sthr_primary"
+      ? this.state.agent_snapshot : this.threads.get(parentThreadId)?.agentConfig;
+    if (!parentConfig) throw new Error("Pinned parent agent snapshot is unavailable");
+    const subAgent = resolvePinnedSubagent(parentConfig, agentId);
 
     // In-memory map (hot path config lookup) + persistent threads row
     // (Phase 1 — survives DO eviction, lets HTTP CRUD see this thread).
@@ -4693,7 +4650,8 @@ export class SessionDO extends DurableObject<Env> {
       },
     });
     const subModelId = typeof subAgent.model === "string" ? subAgent.model : subAgent.model?.id;
-    const subHandle = subModelId || this.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+    if (!subModelId) throw new Error("Incomplete runtime agent snapshot: missing model");
+    const subHandle = subModelId;
     const subCreds = await this.resolveModelCardCredentials(subHandle);
     const subPiRuntime = createPiModelRuntime({
       model: subCreds.model,
@@ -4714,6 +4672,15 @@ export class SessionDO extends DurableObject<Env> {
     });
     const subModel = toAiSdkLanguageModel(subPiRuntime);
 
+    const skillBinding = this.env.MAIN_MCP;
+    const subSkillFiles = await resolveRuntimeSkillFiles(subAgent,
+      skillBinding?.resolveManagedSkillVersion
+        ? { resolveManagedSkillVersion: input => skillBinding.resolveManagedSkillVersion!({ tenantId: this.state.tenant_id, ...input }) }
+        : undefined,
+      this.env.CONFIG_KV ? () => getSkillFiles(subAgent.skills ?? [], this.env.CONFIG_KV!, this.env.FILES_BUCKET, this.state.tenant_id) : undefined,
+    );
+    const subSkillReminders = await resolveSubagentSkillReminders(subAgent, undefined, subSkillFiles);
+    await mountSkillFiles(childSandbox, subSkillFiles);
     // Build sub-agent context: own history, shared sandbox, parent event log
     const subCtx: HarnessContext = {
       agent: subAgent,
@@ -4721,7 +4688,8 @@ export class SessionDO extends DurableObject<Env> {
       tools: subTools,
       model: subModel,
       pi: subPiRuntime,
-      systemPrompt: subAgent.system || "",
+      systemPrompt: composeSystemPrompt(subAgent.system || "", subSkillReminders),
+      platformReminders: subSkillReminders,
       // Sub-agent inherits the parent's tenant — same daemon, same per-tenant
       // ACP child key resolution. AcpProxyHarness reads this to forward
       // x-harness-tenant when opening a RuntimeRoom WS for the sub-agent.
@@ -4854,7 +4822,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!agentId) return;
     const activeFence = executionFence ?? this._executionFences.get(turnThreadId);
 
-    const agent = await this.getAgentConfig(agentId);
+    const agent = await this.getThreadAgentConfig(turnThreadId);
     if (!agent) {
       const history = this.guardHistoryForExecution(
         new SqliteHistory(this.ctx.storage.sql, this.env.FILES_BUCKET ?? null, `t/${this.state.tenant_id ?? "default"}/sessions/${this.state.session_id ?? "unknown"}`),
@@ -5117,8 +5085,8 @@ export class SessionDO extends DurableObject<Env> {
         }
       }
 
-      // Custom skills from KV
-      if (this.env.CONFIG_KV) {
+      // Legacy prompt assembly is used only without the managed skill source.
+      if (this.env.CONFIG_KV && !this.env.MAIN_MCP?.resolveManagedSkillVersion) {
         try {
           if (assemblySkillMount) {
             const customMounts = await resolveCustomSkillMounts(
@@ -5154,22 +5122,18 @@ export class SessionDO extends DurableObject<Env> {
       // Mount custom skill files into sandbox (progressive disclosure).
       // Unrelated to systemPrompt — keeps the sandbox-side files for the
       // model to read on demand via skill tools.
-      if (this.env.CONFIG_KV) {
+      {
         try {
           const managedSkillBinding = this.env.MAIN_MCP;
-          const skillFilesResults = managedSkillBinding?.resolveManagedSkillVersion
-            ? await getSkillFilesFromManagedSource(agent.skills, {
-                resolveManagedSkillVersion: (input) => managedSkillBinding.resolveManagedSkillVersion!({
-                  tenantId: this.state.tenant_id,
-                  ...input,
-                }),
-              })
-            : await getSkillFiles(
-                agent.skills,
-                this.env.CONFIG_KV,
-                this.env.FILES_BUCKET,
-                this.state.tenant_id,
-              );
+          const skillFilesResults = await resolveRuntimeSkillFiles(agent,
+            managedSkillBinding?.resolveManagedSkillVersion
+              ? { resolveManagedSkillVersion: input => managedSkillBinding.resolveManagedSkillVersion!({ tenantId: this.state.tenant_id, ...input }) }
+              : undefined,
+            this.env.CONFIG_KV ? () => getSkillFiles(agent.skills ?? [], this.env.CONFIG_KV!, this.env.FILES_BUCKET, this.state.tenant_id) : undefined,
+          );
+          if (managedSkillBinding?.resolveManagedSkillVersion) {
+            platformReminders.push(...await resolveSubagentSkillReminders({ ...agent, skills: [] }, undefined, skillFilesResults));
+          }
           // The canonical location is shared with Node and ACP Managed
           // Runtimes. A compatibility mirror keeps historical prompts valid.
           // Requested skills are required inputs, so a failed write aborts
