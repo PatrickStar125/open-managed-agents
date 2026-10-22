@@ -450,6 +450,20 @@ function flag(args: string[], name: string): string | undefined {
   return undefined;
 }
 
+function flags(args: string[], name: string): string[] {
+  const values: string[] = [];
+  const eqPrefix = `${name}=`;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === name) {
+      const value = args[i + 1];
+      if (value !== undefined) values.push(value);
+    } else if (args[i].startsWith(eqPrefix)) {
+      values.push(args[i].slice(eqPrefix.length));
+    }
+  }
+  return values;
+}
+
 /**
  * Read memory content from either --content <string> or --from-file <path>.
  * Returns undefined if neither was specified, throws if both were.
@@ -839,21 +853,49 @@ const commands: Cmd[] = [
   },
   {
     group: "Agents", match: ["agents", "create"],
-    usage: "oma agents create <name> [--model <id>]", desc: "Create agent",
+    usage: "oma agents create <name> [--model <id>] [--inline-only|--subagent <id[:version]>]", desc: "Create agent",
     http: "POST   /v1/agents {name, model, system, tools, skills?, mcp_servers?, multiagent?, _oma?:{runtime_binding,harness? (default Pi; ai-sdk deprecated),...}}",
     async run(config, args) {
       const name = flag(args, "--name") || args.find(a => !a.startsWith("--"));
       const model = flag(args, "--model") || "claude-sonnet-4-6";
       const system = flag(args, "--system") || "";
-      if (!name) { console.error("Usage: oma agents create <name> [--model <id>] [--system <prompt>] [--runtime <id> --acp-agent <agent-id>]"); process.exit(1); }
+      if (!name) { console.error("Usage: oma agents create <name> [--model <id>] [--system <prompt>] [--inline-only] [--subagent <id[:version]>]"); process.exit(1); }
       // Local-runtime agent: routes turns to a user-registered `oma bridge daemon`
       // running an ACP-compatible child (Claude Code etc.). Both flags must be
       // present to opt in — partial config silently drops the binding.
       const runtimeId = flag(args, "--runtime");
       const acpAgentId = flag(args, "--acp-agent");
       const useAcpProxy = !!(runtimeId && acpAgentId);
+      const subagentRefs = flags(args, "--subagent");
+      const predefined_agents = subagentRefs.map((ref) => {
+        const [id, versionText, ...extra] = ref.split(":");
+        if (!id || extra.length > 0 || (versionText !== undefined && (!/^\d+$/u.test(versionText) || Number(versionText) < 1))) {
+          throw new Error(`Invalid --subagent value ${ref}; expected <agent-id>[:positive-version]`);
+        }
+        return {
+          type: "agent" as const,
+          id,
+          ...(versionText !== undefined && { version: Number(versionText) }),
+        };
+      });
+      const inlineOnly = args.includes("--inline-only");
+      if (inlineOnly && predefined_agents.length > 0) {
+        throw new Error("--inline-only cannot be combined with --subagent");
+      }
       const body: Record<string, unknown> = {
         name, model, system, tools: [{ type: "agent_toolset_20260401" }],
+        ...((inlineOnly || predefined_agents.length > 0) && {
+          multiagent: {
+            type: "multiagent_20261001",
+            advisor: { type: "disabled" },
+            subagents: {
+              type: "enabled",
+              inline_agents: { type: inlineOnly ? "enabled" : "disabled" },
+              predefined_agents,
+            },
+            workflows: { type: "disabled" },
+          },
+        }),
       };
       if (useAcpProxy) {
         body._oma = {

@@ -216,12 +216,18 @@ function snapshotToSessionAgent(
   } = snapshot;
   const multiagent = (callable_agents ?? []).length > 0
     ? {
-        type: "coordinator" as const,
-        agents: (callable_agents ?? []).map((c) => ({
-          type: "agent" as const,
-          id: c.id,
-          version: c.version ?? 1,
-        })),
+        type: "multiagent_20261001" as const,
+        advisor: { type: "disabled" as const },
+        subagents: {
+          type: "enabled" as const,
+          inline_agents: { type: "disabled" as const },
+          predefined_agents: (callable_agents ?? []).map((c) => ({
+            type: "agent" as const,
+            id: c.id,
+            version: c.version ?? 1,
+          })),
+        },
+        workflows: { type: "disabled" as const },
       }
     : null;
   return {

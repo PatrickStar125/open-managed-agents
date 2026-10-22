@@ -140,17 +140,22 @@ async function snapshotAgent(
   workspaceId: string,
 ): Promise<SessionAgent | null> {
   const roster: SessionThreadAgent[] = [];
-  for (const entry of agent.multiagent?.agents ?? []) {
-    if (entry.type === "advisor") {
-      roster.push({ type: entry.type, model: entry.model });
-      continue;
-    }
-    const member = await findPinnedAgent(
-      source,
-      workspaceId,
-      entry.agentId,
-      entry.version,
-    );
+  const configuredMultiagent = agent.multiagent as Agent["multiagent"] & {
+    agents?: Array<
+      | { type: "agent"; agentId: string; version?: number }
+      | { type: "advisor"; model: string }
+    >;
+  };
+  const legacyEntries = configuredMultiagent?.agents ?? [];
+  const subagents = configuredMultiagent?.subagents;
+  const entries = subagents?.type === "enabled"
+    ? subagents.predefinedAgents ?? []
+    : legacyEntries
+        .filter((entry): entry is { type: "agent"; agentId: string; version?: number } => entry.type === "agent")
+        .map((entry) => ({ type: "agent" as const, agentId: entry.agentId, version: entry.version }));
+  for (const entry of entries) {
+    if (typeof entry === "string" || entry.type === "self" || entry.version === undefined) return null;
+    const member = await findPinnedAgent(source, workspaceId, entry.agentId, entry.version);
     if (member === null) return null;
     roster.push(snapshotThreadAgent(member));
   }
@@ -162,7 +167,21 @@ async function snapshotAgent(
     multiagent:
       agent.multiagent === null
         ? null
-        : { type: "coordinator", agents: roster },
+        : {
+            type: "multiagent_20261001",
+            advisor: { type: "disabled" },
+            subagents:
+              subagents?.type === "disabled"
+                ? { type: "disabled" }
+                : {
+                    type: "enabled",
+                    inlineAgents: subagents?.type === "enabled"
+                      ? subagents.inlineAgents
+                      : { type: "disabled" },
+                    predefinedAgents: roster,
+                  },
+            workflows: { type: "disabled" },
+          },
     name: agent.name,
     ...(agent.openma !== undefined && { openma: agent.openma }),
     skills: agent.skills,

@@ -35,14 +35,33 @@ export type AgentSkillInput =
       version?: string | null;
     };
 
-export type AgentMultiagentRosterEntryInput =
+export type AgentMultiagentPredefinedAgentInput =
   | string
   | { agentId: string; type: "agent"; version?: number }
-  | { type: "self" }
-  | { model: string; type: "advisor" };
+  | { type: "self" };
+
+export type AgentMultiagentToggle = { type: "enabled" } | { type: "disabled" };
+
+export interface AgentMultiagentSubagentsInput {
+  type: "enabled";
+  inlineAgents?: AgentMultiagentToggle | null;
+  predefinedAgents?: AgentMultiagentPredefinedAgentInput[] | null;
+}
+
+export type AgentMultiagentSubagentsInputValue =
+  | { type: "disabled" }
+  | AgentMultiagentSubagentsInput;
 
 export interface AgentMultiagentInput {
-  agents: AgentMultiagentRosterEntryInput[];
+  type: "multiagent_20261001";
+  advisor?: { type: "disabled" } | { type: "enabled"; model?: string } | null;
+  subagents?: AgentMultiagentSubagentsInputValue | null;
+  workflows?: { type: "disabled" } | null;
+}
+
+/** Legacy storage shape accepted only by migration code. */
+export interface LegacyAgentMultiagentInput {
+  agents: Array<string | { agentId: string; type: "agent"; version?: number } | { type: "self" } | { model: string; type: "advisor" }>;
   type: "coordinator";
 }
 
@@ -141,13 +160,27 @@ export type AgentSkill =
   | { skillId: string; type: "anthropic"; version: string }
   | { skillId: string; type: "custom"; version: string };
 
-export type AgentMultiagentRosterEntry =
+export type AgentMultiagentPredefinedAgent =
   | { agentId: string; type: "agent"; version: number }
-  | { model: string; type: "advisor" };
+  | { type: "self" };
+
+export interface AgentMultiagentSubagents {
+  type: "enabled";
+  inlineAgents: AgentMultiagentToggle;
+  predefinedAgents: AgentMultiagentPredefinedAgent[];
+}
+
+export interface AgentMultiagentResolvedSubagents {
+  type: "enabled";
+  inlineAgents: AgentMultiagentToggle;
+  predefinedAgents: AgentMultiagentPredefinedAgent[];
+}
 
 export interface AgentMultiagent {
-  agents: AgentMultiagentRosterEntry[];
-  type: "coordinator";
+  type: "multiagent_20261001";
+  advisor: { type: "disabled" };
+  subagents: { type: "disabled" } | AgentMultiagentResolvedSubagents;
+  workflows: { type: "disabled" };
 }
 
 export interface AgentToolDefaultConfig {

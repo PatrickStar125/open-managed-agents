@@ -200,10 +200,23 @@ export function toSessionAgentResponse(agent: SessionAgentView): object {
     multiagent:
       agent.multiagent === null
         ? null
-        : {
-            type: agent.multiagent.type,
-            agents: agent.multiagent.agents.map(fromSessionThreadAgent),
-          },
+        : agent.multiagent.subagents.type === "disabled"
+          ? {
+              type: agent.multiagent.type,
+              advisor: { type: "disabled" },
+              subagents: { type: "disabled" },
+              workflows: { type: "disabled" },
+            }
+          : {
+              type: agent.multiagent.type,
+              advisor: { type: "disabled" },
+              subagents: {
+                type: "enabled",
+                inline_agents: agent.multiagent.subagents.inlineAgents,
+                predefined_agents: agent.multiagent.subagents.predefinedAgents.map(fromSessionThreadAgent),
+              },
+              workflows: { type: "disabled" },
+            },
     name: agent.name,
     ...(agent.openma !== undefined &&
       Object.keys(agent.openma).length > 0 && {

@@ -246,22 +246,27 @@ describe("Managed session runtime codec", () => {
             speed: "fast",
           },
           multiagent: {
-            type: "coordinator",
-            agents: [
-              {
-                type: "agent",
-                id: "agent_reviewer",
-                description: null,
-                mcpServers: [],
-                model: { id: "claude-sonnet-4-6" },
-                name: "Reviewer",
-                skills: [],
-                system: null,
-                tools: [],
-                version: 7,
-              },
-              { type: "advisor", model: "claude-haiku-4-5" },
-            ],
+            type: "multiagent_20261001",
+            advisor: { type: "disabled" },
+            subagents: {
+              type: "enabled",
+              inlineAgents: { type: "disabled" },
+              predefinedAgents: [
+                {
+                  type: "agent",
+                  id: "agent_reviewer",
+                  description: null,
+                  mcpServers: [],
+                  model: { id: "claude-sonnet-4-6" },
+                  name: "Reviewer",
+                  skills: [],
+                  system: null,
+                  tools: [],
+                  version: 7,
+                },
+              ],
+            },
+            workflows: { type: "disabled" },
           },
           name: "Coordinator",
           skills: [

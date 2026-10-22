@@ -210,21 +210,36 @@ export function toAgentMultiagentInput(
 ): AgentMultiagentInput {
   return {
     type: multiagent.type,
-    agents: multiagent.agents.map((entry) => {
-      if (typeof entry === "string") return entry;
-      switch (entry.type) {
-        case "agent":
-          return {
-            type: entry.type,
-            agentId: entry.id,
-            ...(entry.version !== undefined && { version: entry.version }),
-          };
-        case "self":
-          return { type: entry.type };
-        case "advisor":
-          return { type: entry.type, model: entry.model };
-      }
+    ...(multiagent.advisor !== undefined && { advisor: multiagent.advisor }),
+    ...(multiagent.subagents !== undefined && {
+      subagents:
+        multiagent.subagents === null
+          ? null
+          : multiagent.subagents.type === "disabled"
+          ? { type: "disabled" }
+          : {
+              type: "enabled",
+              ...(multiagent.subagents.inline_agents !== undefined && {
+                inlineAgents: multiagent.subagents.inline_agents,
+              }),
+              ...(multiagent.subagents.predefined_agents !== undefined && {
+                predefinedAgents: multiagent.subagents.predefined_agents === null
+                  ? null
+                  : multiagent.subagents.predefined_agents.map((entry) =>
+                  typeof entry === "string"
+                    ? entry
+                    : entry.type === "agent"
+                      ? {
+                          type: "agent",
+                          agentId: entry.id,
+                          ...(entry.version !== undefined && { version: entry.version }),
+                        }
+                      : { type: "self" },
+                ),
+              }),
+            },
     }),
+    ...(multiagent.workflows !== undefined && { workflows: multiagent.workflows }),
   };
 }
 
@@ -390,21 +405,33 @@ export function fromAgentSkillInput(skill: AgentSkillInput): object {
 export function fromAgentMultiagentInput(
   multiagent: AgentMultiagentInput,
 ): object {
+  const subagents = multiagent.subagents;
+  if (subagents === null || subagents === undefined || subagents.type === "disabled") {
+    return {
+      type: multiagent.type,
+      advisor: { type: "disabled" },
+      subagents: { type: "disabled" },
+      workflows: { type: "disabled" },
+    };
+  }
   return {
     type: multiagent.type,
-    agents: multiagent.agents.map((entry) => {
-      if (typeof entry === "string" || entry.type === "self") {
-        throw new Error("Application returned an unresolved multiagent roster entry");
-      }
-      if (entry.type === "advisor") {
-        return { type: entry.type, model: entry.model };
-      }
-      return {
-        type: entry.type,
-        id: entry.agentId,
-        version: requireResolved(entry.version, "multiagent agent version"),
-      };
-    }),
+    advisor: { type: "disabled" },
+    subagents: {
+      type: "enabled",
+      inline_agents: subagents.inlineAgents,
+      predefined_agents: (subagents.predefinedAgents ?? []).map((entry) => {
+        if (typeof entry === "string" || entry.type === "self") {
+          throw new Error("Application returned an unresolved multiagent entry");
+        }
+        return {
+          type: entry.type,
+          id: entry.agentId,
+          version: requireResolved(entry.version, "multiagent agent version"),
+        };
+      }),
+    },
+    workflows: { type: "disabled" },
   };
 }
 

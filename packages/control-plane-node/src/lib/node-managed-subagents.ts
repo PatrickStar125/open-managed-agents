@@ -185,7 +185,9 @@ export class ManagedNodeSubagents implements ManagedNodeSubagentControl {
   private defaultSession(request: ManagedNodeCreateSubagent): Session {
     let agent = structuredClone(this.input.session.agent);
     if (request.agentId !== undefined && request.agentId !== "general") {
-      const configured = agent.multiagent?.agents.find((candidate) => candidate.type === "agent" && candidate.id === request.agentId);
+      const configured = agent.multiagent?.subagents.type === "enabled"
+        ? agent.multiagent.subagents.predefinedAgents.find((candidate) => candidate.type === "agent" && candidate.id === request.agentId)
+        : undefined;
       if (configured?.type !== "agent") throw new Error(`Subagent ${request.agentId} is not in the Session roster`);
       const { type: _type, ...snapshot } = configured;
       agent = { ...snapshot, multiagent: null };

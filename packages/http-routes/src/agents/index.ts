@@ -54,12 +54,18 @@ function formatAgent(agent: AgentConfig) {
   const multiagent =
     callable.length > 0
       ? {
-          type: "coordinator" as const,
-          agents: callable.map((c) => ({
-            type: "agent" as const,
-            id: c.id,
-            version: c.version ?? 1,
-          })),
+          type: "multiagent_20261001" as const,
+          advisor: { type: "disabled" as const },
+          subagents: {
+            type: "enabled" as const,
+            inline_agents: { type: "disabled" as const },
+            predefined_agents: callable.map((c) => ({
+              type: "agent" as const,
+              id: c.id,
+              version: c.version ?? 1,
+            })),
+          },
+          workflows: { type: "disabled" as const },
         }
       : null;
 
@@ -100,13 +106,19 @@ function multiagentToCallableAgents(
   if (multiagent === null || multiagent === undefined) return { list: undefined };
   if (typeof multiagent !== "object")
     return { list: [], error: "multiagent must be an object" };
-  const m = multiagent as { type?: string; agents?: unknown };
-  if (m.type !== "coordinator")
-    return { list: [], error: `multiagent.type must be "coordinator"` };
-  if (!Array.isArray(m.agents))
-    return { list: [], error: "multiagent.agents must be an array" };
+  const m = multiagent as { type?: string; agents?: unknown; subagents?: unknown };
+  const entries = m.type === "multiagent_20261001"
+    ? (m.subagents && typeof m.subagents === "object" &&
+        (m.subagents as { type?: string }).type === "enabled"
+        ? (m.subagents as { predefined_agents?: unknown }).predefined_agents
+        : [])
+    : m.type === "coordinator"
+      ? m.agents
+      : undefined;
+  if (entries === undefined || !Array.isArray(entries))
+    return { list: [], error: "multiagent predefined_agents must be an array" };
   const out: NonNullable<AgentConfig["callable_agents"]> = [];
-  for (const entry of m.agents) {
+  for (const entry of entries) {
     if (typeof entry === "string") {
       out.push({ type: "agent", id: entry, version: 1 });
       continue;
@@ -114,7 +126,7 @@ function multiagentToCallableAgents(
     if (entry && typeof entry === "object") {
       const e = entry as { type?: string; id?: string; version?: number };
       if (e.type === "self") {
-        return { list: [], error: `multiagent.agents: {"type":"self"} is not yet supported` };
+        return { list: [], error: `multiagent predefined_agents: {"type":"self"} is not yet supported` };
       }
       if (e.type === "agent" && typeof e.id === "string") {
         out.push({
@@ -169,7 +181,7 @@ export function buildAgentRoutes(deps: AgentRoutesDeps) {
       mcp_servers?: AgentConfig["mcp_servers"];
       skills?: AgentConfig["skills"];
       callable_agents?: AgentConfig["callable_agents"];
-      multiagent?: { type: "coordinator"; agents: unknown[] } | null;
+      multiagent?: { type: string; agents?: unknown[]; subagents?: unknown } | null;
       metadata?: Record<string, unknown>;
       harness?: string;
       _oma?: {
@@ -376,7 +388,7 @@ export function buildAgentRoutes(deps: AgentRoutesDeps) {
       mcp_servers?: AgentConfig["mcp_servers"] | null;
       skills?: AgentConfig["skills"] | null;
       callable_agents?: AgentConfig["callable_agents"] | null;
-      multiagent?: { type: "coordinator"; agents: unknown[] } | null;
+      multiagent?: { type: string; agents?: unknown[]; subagents?: unknown } | null;
       metadata?: Record<string, unknown>;
       version?: number;
       harness?: string;

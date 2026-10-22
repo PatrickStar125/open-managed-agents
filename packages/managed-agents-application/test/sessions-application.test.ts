@@ -644,8 +644,14 @@ describe("SessionsApplicationService", () => {
       id: "agent_coordinator",
       name: "Coordinator",
       multiagent: {
-        type: "coordinator",
-        agents: [{ type: "agent", agentId: member.id, version: member.version }],
+        type: "multiagent_20261001",
+        advisor: { type: "disabled" },
+        subagents: {
+          type: "enabled",
+          inlineAgents: { type: "disabled" },
+          predefinedAgents: [{ type: "agent", agentId: member.id, version: member.version }],
+        },
+        workflows: { type: "disabled" },
       },
       version: 4,
     };
@@ -685,15 +691,21 @@ describe("SessionsApplicationService", () => {
         agent: {
           id: coordinator.id,
           multiagent: {
-            type: "coordinator",
-            agents: [
-              {
-                type: "agent",
-                id: member.id,
-                name: member.name,
-                version: member.version,
-              },
-            ],
+            type: "multiagent_20261001",
+            advisor: { type: "disabled" },
+            subagents: {
+              type: "enabled",
+              inlineAgents: { type: "disabled" },
+              predefinedAgents: [
+                {
+                  type: "agent",
+                  id: member.id,
+                  name: member.name,
+                  version: member.version,
+                },
+              ],
+            },
+            workflows: { type: "disabled" },
           },
         },
       },

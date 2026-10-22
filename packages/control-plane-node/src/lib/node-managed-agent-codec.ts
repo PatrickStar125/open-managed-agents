@@ -79,11 +79,14 @@ type LegacyAgentTool =
     };
 
 interface LegacyMultiagent {
-  type: "coordinator";
-  agents: Array<
-    | { type: "agent"; id: string; version: number }
-    | { type: "advisor"; model: string }
-  >;
+  type: "multiagent_20261001";
+  advisor: { type: "disabled" };
+  subagents: { type: "disabled" } | {
+    type: "enabled";
+    inline_agents: { type: "enabled" } | { type: "disabled" };
+    predefined_agents: Array<{ type: "agent"; id: string; version: number }>;
+  };
+  workflows: { type: "disabled" };
 }
 
 export interface LegacyManagedHarnessAgentConfig
@@ -226,10 +229,12 @@ export function toLegacyHarnessAgentConfig(
   session: Session,
 ): LegacyManagedHarnessAgentConfig {
   const { agent } = session;
-  const roster = agent.multiagent?.agents ?? [];
+  const roster = agent.multiagent?.subagents.type === "enabled"
+    ? agent.multiagent.subagents.predefinedAgents
+    : [];
   const callableAgents = roster.flatMap((member) =>
     member.type === "agent"
-      ? [{ type: member.type, id: member.id, version: member.version }]
+      ? [{ type: "agent" as const, id: member.id, version: member.version }]
       : [],
   );
   return {
@@ -259,11 +264,18 @@ export function toLegacyHarnessAgentConfig(
     ...(agent.multiagent !== null && {
       multiagent: {
         type: agent.multiagent.type,
-        agents: roster.map((member) =>
-          member.type === "advisor"
-            ? { type: member.type, model: member.model }
-            : { type: member.type, id: member.id, version: member.version },
-        ),
+        advisor: { type: "disabled" },
+        subagents: agent.multiagent.subagents.type === "disabled"
+          ? { type: "disabled" }
+          : {
+              type: "enabled",
+              inline_agents: agent.multiagent.subagents.inlineAgents,
+              predefined_agents: roster.flatMap((member) => member.type === "agent"
+                ? [{ type: "agent" as const, id: member.id, version: member.version }]
+                : []),
+            },
+        workflows: { type: "disabled" },
+
       },
     }),
     ...(agent.description !== null && { description: agent.description }),

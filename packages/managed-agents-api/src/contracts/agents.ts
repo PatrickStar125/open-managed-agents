@@ -111,14 +111,34 @@ export interface OpenMaAgentExtensionBody {
   enable_general_subagent?: boolean | null;
 }
 
-export type AgentCreateBody = Omit<OfficialAgentCreateBody, "model" | "mcp_servers"> & {
+type OpenMaAgentMultiagentBody = {
+  type: "multiagent_20261001";
+  advisor?: { type: "disabled" } | null;
+  subagents?:
+    | { type: "disabled" }
+    | {
+        type: "enabled";
+        inline_agents?: { type: "enabled" } | { type: "disabled" } | null;
+        predefined_agents?: Array<
+          | string
+          | { type: "agent"; id: string; version?: number }
+          | { type: "self" }
+        > | null;
+      }
+    | null;
+  workflows?: { type: "disabled" } | null;
+};
+
+export type AgentCreateBody = Omit<OfficialAgentCreateBody, "model" | "mcp_servers" | "multiagent"> & {
   model: OpenMaAgentModelBody;
   mcp_servers?: OpenMaMcpServerBody[];
+  multiagent?: OpenMaAgentMultiagentBody | null;
   _oma?: OpenMaAgentExtensionBody;
 };
-export type AgentUpdateBody = Omit<OfficialAgentUpdateBody, "model" | "mcp_servers"> & {
+export type AgentUpdateBody = Omit<OfficialAgentUpdateBody, "model" | "mcp_servers" | "multiagent"> & {
   model?: OpenMaAgentModelBody;
   mcp_servers?: OpenMaMcpServerBody[] | null;
+  multiagent?: OpenMaAgentMultiagentBody | null;
   _oma?: OpenMaAgentExtensionBody;
 };
 

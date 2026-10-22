@@ -379,8 +379,10 @@ export async function createManagedNodeRuntime(
     resolveSubagentSession: async ({ workspaceId, session, request }) => {
       const saved = await readManagedSessionMappingMetadata(session, openAIAgentsSecrets);
       if (saved) return openAISubagentSession(session, request);
-      const member = session.agent.multiagent?.agents.find(item => item.type === "agent" && item.id === request.agentId);
-      if (!member || member.type !== "agent") throw new Error("Subagent is not in the configured callable agent roster");
+      const member = session.agent.multiagent?.subagents.type === "enabled"
+        ? session.agent.multiagent.subagents.predefinedAgents.find(item => item.type === "agent" && item.id === request.agentId)
+        : undefined;
+      if (!member || member.type !== "agent") throw new Error("Subagent is not in the configured multiagent roster");
       const selected = await managedPlatform.app({ workspaceId }).port(managedAgentsPortTokens.agents).retrieveAgent({ agentId: member.id, version: member.version });
       if (selected.type !== "found" || selected.agent.archivedAt !== null) throw new Error("Configured subagent is unavailable");
       return { ...session, agent: { ...selected.agent, multiagent: null } };

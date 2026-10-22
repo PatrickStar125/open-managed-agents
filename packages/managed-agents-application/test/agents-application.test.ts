@@ -190,7 +190,7 @@ describe("AgentsApplicationService", () => {
     ).toMatchObject({ type: "invalid_request", message: expect.stringMatching(/referenced/i) });
   });
 
-  it("rejects invalid multiagent roster cardinality and duplicates", async () => {
+  it("supports inline-only multiagent agents and rejects duplicate predefined references", async () => {
     const service = new AgentsApplicationService({
       workspaceId: "workspace_01",
       store: new MemoryAgentStore(),
@@ -200,18 +200,23 @@ describe("AgentsApplicationService", () => {
 
     expect(
       await service.createAgent({
-        name: "Empty coordinator",
+        name: "Inline only",
         model: "claude-opus-5",
-        multiagent: { type: "coordinator", agents: [] },
+        multiagent: {
+          type: "multiagent_20261001",
+          workflows: { type: "disabled" },
+          subagents: { type: "enabled", predefinedAgents: [] },
+        },
       }),
-    ).toMatchObject({ type: "invalid_request", message: expect.stringMatching(/1.*20/i) });
+    ).toMatchObject({ type: "created", agent: { multiagent: { subagents: { type: "enabled", predefinedAgents: [] } } } });
     expect(
       await service.createAgent({
         name: "Duplicate self",
         model: "claude-opus-5",
         multiagent: {
-          type: "coordinator",
-          agents: [{ type: "self" }, { type: "self" }],
+          type: "multiagent_20261001",
+          workflows: { type: "disabled" },
+          subagents: { type: "enabled", predefinedAgents: [{ type: "self" }, { type: "self" }] },
         },
       }),
     ).toMatchObject({ type: "invalid_request", message: expect.stringMatching(/distinct|self/i) });

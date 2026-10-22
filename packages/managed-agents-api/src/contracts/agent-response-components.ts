@@ -273,12 +273,27 @@ const resolvedAgentReferenceSchema = z
   })
   .strict();
 
+const multiagentToggleResponseSchema = z
+  .object({ type: z.enum(["enabled", "disabled"]) })
+  .strict();
+
 export const agentMultiagentResponseSchema = z
   .object({
-    agents: z.array(z.union([resolvedAgentReferenceSchema, advisorResponseSchema])),
-    type: z.literal("coordinator"),
+    type: z.literal("multiagent_20261001"),
+    advisor: z.object({ type: z.literal("disabled") }).strict(),
+    subagents: z.union([
+      z.object({ type: z.literal("disabled") }).strict(),
+      z
+        .object({
+          type: z.literal("enabled"),
+          inline_agents: multiagentToggleResponseSchema,
+          predefined_agents: z.array(resolvedAgentReferenceSchema),
+        })
+        .strict(),
+    ]),
+    workflows: z.object({ type: z.literal("disabled") }).strict(),
   })
-  .strict() satisfies z.ZodType<NonNullable<BetaManagedAgentsAgent["multiagent"]>>;
+  .strict();
 
 export const sessionThreadAgentResponseSchema = z
   .object({
@@ -298,10 +313,19 @@ export const sessionThreadAgentResponseSchema = z
 
 export const sessionAgentMultiagentResponseSchema = z
   .object({
-    agents: z.array(
-      z.union([sessionThreadAgentResponseSchema, advisorResponseSchema]),
-    ),
-    type: z.literal("coordinator"),
+    type: z.literal("multiagent_20261001"),
+    advisor: z.object({ type: z.literal("disabled") }).strict(),
+    subagents: z.union([
+      z.object({ type: z.literal("disabled") }).strict(),
+      z
+        .object({
+          type: z.literal("enabled"),
+          inline_agents: multiagentToggleResponseSchema,
+          predefined_agents: z.array(sessionThreadAgentResponseSchema),
+        })
+        .strict(),
+    ]),
+    workflows: z.object({ type: z.literal("disabled") }).strict(),
   })
   .strict();
 

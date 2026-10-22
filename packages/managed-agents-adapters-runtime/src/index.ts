@@ -580,13 +580,19 @@ interface RuntimeAgentSnapshot {
   version: number;
   created_at: string;
   updated_at: string;
+  /** Transitional harness field; remove with the legacy consumer migration. */
   callable_agents?: Array<{ type: "agent"; id: string; version: number }>;
   multiagent?: {
-    type: "coordinator";
-    agents: Array<
-      | { type: "agent"; id: string; version: number }
-      | { type: "advisor"; model: string }
-    >;
+    type: "multiagent_20261001";
+    advisor: { type: "disabled" };
+    subagents:
+      | { type: "disabled" }
+      | {
+          type: "enabled";
+          inline_agents: { type: "enabled" } | { type: "disabled" };
+          predefined_agents: Array<{ type: "agent"; id: string; version: number }>;
+        };
+    workflows: { type: "disabled" };
   };
 }
 
@@ -704,12 +710,15 @@ function runtimeAgentTool(tool: AgentTool): RuntimeAgentTool {
 
 function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapshot {
   const { agent } = input.session;
-  const roster = agent.multiagent?.agents ?? [];
-  const callableAgents = roster.flatMap((member) =>
-    member.type === "agent"
-      ? [{ type: member.type, id: member.id, version: member.version }]
-      : [],
-  );
+  const roster = agent.multiagent?.subagents.type === "enabled"
+    ? agent.multiagent.subagents.predefinedAgents
+        .filter((member): member is Extract<typeof member, { type: "agent" }> => member.type === "agent")
+    : [];
+  const callableAgents = roster.map((member) => ({
+    type: member.type,
+    id: member.id,
+    version: member.version,
+  }));
   return {
     id: agent.id,
     name: agent.name,
@@ -740,11 +749,20 @@ function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapsho
     ...(agent.multiagent !== null && {
       multiagent: {
         type: agent.multiagent.type,
-        agents: roster.map((member) =>
-          member.type === "advisor"
-            ? { type: member.type, model: member.model }
-            : { type: member.type, id: member.id, version: member.version },
-        ),
+        advisor: { type: "disabled" },
+        subagents:
+          agent.multiagent.subagents.type === "disabled"
+            ? { type: "disabled" }
+            : {
+                type: "enabled",
+                inline_agents: agent.multiagent.subagents.inlineAgents,
+                predefined_agents: roster.map((member) => ({
+                  type: "agent" as const,
+                  id: member.id,
+                  version: member.version,
+                })),
+              },
+        workflows: { type: "disabled" },
       },
     }),
   };
