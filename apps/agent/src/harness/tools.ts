@@ -149,6 +149,22 @@ If the page is an error/404/login wall/empty result, output exactly one line sta
  * converts for the AI SDK.
  */
 type ToolResultValue = string | Record<string, unknown>;
+
+/**
+ * The part of a tool failure the model can act on: the error message, plus
+ * the message of its cause when that adds something (e.g. ECONNREFUSED under
+ * "fetch failed"). Never a stack trace.
+ */
+export function modelFacingError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  let msg = err.message || err.name;
+  const cause = err.cause;
+  if (cause !== undefined && cause !== null) {
+    const causeMessage = cause instanceof Error ? cause.message || cause.name : String(cause);
+    if (causeMessage && !msg.includes(causeMessage)) msg += `\ncause: ${causeMessage}`;
+  }
+  return msg;
+}
 type ToolExecuteOptions = { abortSignal?: AbortSignal };
 function safe<T>(
   fn: (args: T, toolOpts?: ToolExecuteOptions) => Promise<ToolResultValue>,
@@ -160,15 +176,10 @@ function safe<T>(
       if (typeof result === "string" && result.trim() === "") return "(completed with no output)";
       return result;
     } catch (err) {
-      let msg = err instanceof Error ? err.message : String(err);
-      // Include stack trace for better debugging
-      if (err instanceof Error && err.stack) {
-        msg += "\n" + err.stack.split("\n").slice(1, 5).join("\n");
-      }
-      // Include cause if present
-      if (err instanceof Error && err.cause) {
-        msg += "\ncause: " + String(err.cause);
-      }
+      const msg = modelFacingError(err);
+      // Stack traces and the full cause chain are for operators, not the
+      // model: it cannot act on server source locations.
+      console.warn("[tool] execution failed:", err);
       const truncated = msg.length > 10000
         ? msg.slice(0, 5000) + `\n[${msg.length - 10000} characters truncated]\n` + msg.slice(-5000)
         : msg;

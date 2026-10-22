@@ -386,7 +386,8 @@ function checkInvariants(result: Awaited<ReturnType<typeof runChaos>>, seed: num
     }
     // 5. The agent is told explicitly what it lost.
     for (const message of record.replacedErrors) {
-      expect(message, where).toMatch(/has been replaced\. \/workspace was restored to (the checkpoint published at|its initial state)/);
+      expect(message, where).toMatch(/^This tool call was interrupted because the environment restarted\. \/workspace is back to (its state as of \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC|its initial state)/);
+      expect(message, where).not.toMatch(/sandbox|not running anymore|checkpoint/i);
     }
   }
   // 6. Liveness: with chaos off the Session recovers and the workspace holds

@@ -129,10 +129,10 @@ export function withSandboxRecovery(options: SandboxRecoveryOptions): SandboxRec
       return Promise.resolve(lastReplacement.summary);
     }
     if (failure !== null) return Promise.reject(failure);
-    if (closed) return Promise.reject(new SandboxRecoveryFailedError("The sandbox was lost after the turn ended.", { cause }));
+    if (closed) return Promise.reject(new SandboxRecoveryFailedError("The environment stopped after the turn ended.", { cause }));
     if (replacements >= maxReplacements) {
       return Promise.reject(giveUp(new SandboxRecoveryFailedError(
-        `The sandbox was lost ${replacements + 1} times in this turn; giving up.`,
+        `The environment restarted ${replacements + 1} times in this turn; giving up.`,
         { cause },
       )));
     }
@@ -143,8 +143,9 @@ export function withSandboxRecovery(options: SandboxRecoveryOptions): SandboxRec
         return summary;
       },
       (error: unknown) => {
+        // The provider's reason stays with the host (cause), not the model.
         throw giveUp(new SandboxRecoveryFailedError(
-          `The sandbox was lost and could not be replaced: ${error instanceof Error ? error.message : String(error)}`,
+          "The environment stopped and could not be restarted.",
           { cause: error },
         ));
       },
@@ -155,8 +156,10 @@ export function withSandboxRecovery(options: SandboxRecoveryOptions): SandboxRec
     return done;
   };
 
-  const notice = (cause: unknown, summary: string) =>
-    `The sandbox was lost (${cause instanceof Error ? cause.message : String(cause)}) and has been replaced. ${summary} Running processes were stopped. This operation was not retried; redo it if it is still needed.`;
+  // What the agent sees: the effect on its environment, never the sandbox,
+  // the provider or its error (hosts log those from `replace`).
+  const notice = (summary: string) =>
+    `This tool call was interrupted because the environment restarted. ${summary} Background processes were stopped. Re-run the tool call if it is still needed.`;
 
   /** Turn an operation failure into a replacement when the sandbox is gone. */
   const recover = async (used: SandboxPort, error: unknown): Promise<never> => {
@@ -166,7 +169,7 @@ export function withSandboxRecovery(options: SandboxRecoveryOptions): SandboxRec
     if (!lost) throw error;
     const summary = await replace(used, error);
     unreported = null;
-    throw new SandboxReplacedError(notice(error, summary), { cause: error });
+    throw new SandboxReplacedError(notice(summary));
   };
 
   const sandbox = new Proxy({} as SandboxPort, {
@@ -208,7 +211,7 @@ export function withSandboxRecovery(options: SandboxRecoveryOptions): SandboxRec
       if (closed || used !== options.current()) return;
       const pending = replace(used, cause);
       try {
-        unreported = notice(cause, await pending);
+        unreported = notice(await pending);
       } catch {
         // Recovery gave up; every later operation reports that failure.
       }
