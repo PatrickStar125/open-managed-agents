@@ -142,13 +142,21 @@ function buildSetupScript(
   options: EnvironmentPackagesOptions,
   dropVenv: boolean,
 ): string {
-  if (!hasEnvironmentPackages(packages)) return "";
+  // On a catalog image, or when the workspace was last set up on one, the
+  // fresh path never trusts a restored venv: it may target the Python of
+  // another image. It is dropped even when no pip packages are listed now,
+  // so a stale interpreter is not left first on PATH or reused later.
+  const dropStaleVenv = dropVenv ? [`rm -rf /workspace/.venv`] : [];
+  if (!hasEnvironmentPackages(packages)) {
+    return dropStaleVenv.length > 0 ? `(\nset -e\n${dropStaleVenv.join("\n")}\n)` : "";
+  }
   const sections: string[] = ["set -e"];
 
   const apt = buildAptScript(packages!.apt);
   if (apt) sections.push(apt);
 
   const pip = packages!.pip ?? [];
+  if (pip.length === 0) sections.push(...dropStaleVenv);
   if (pip.length > 0) {
     const index = options.pipIndexUrl?.trim();
     if (index) {
@@ -156,10 +164,7 @@ function buildSetupScript(
     }
     sections.push(
       `mkdir -p /workspace`,
-      // On a catalog image, or when the workspace was last set up on one,
-      // the fresh path never trusts a restored venv: it may target the
-      // Python of another image.
-      ...(dropVenv ? [`rm -rf /workspace/.venv`] : []),
+      ...dropStaleVenv,
       // Images without uv get it from pip; PEP 668 images need the override.
       `if command -v uv >/dev/null 2>&1; then UV=uv; else python3 -m pip install -q --user --break-system-packages uv 2>/dev/null || python3 -m pip install -q --user uv; UV="python3 -m uv"; fi`,
       // --system-site-packages: packages baked into the image's system Python

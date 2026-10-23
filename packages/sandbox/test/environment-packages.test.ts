@@ -135,6 +135,21 @@ describe("environment packages", () => {
       for (const script of setups(commands)) expect(script).not.toContain("rm -rf /workspace/.venv");
     });
 
+    it("drops a catalog image's venv on switch-back even when no pip packages remain", async () => {
+      for (const next of [{ npm: ["typescript"] }, {}]) {
+        const { sandbox, files, commands } = fakeSandbox();
+        await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, { sandboxImage: "analytics" });
+        files.delete("warm");
+        const back = await ensureEnvironmentPackages(sandbox, next, undefined, {});
+        expect(back.path).toBe("fresh");
+        expect(setups(commands)[1]).toContain("rm -rf /workspace/.venv");
+      }
+      // Default-only workspaces without packages still run no setup at all.
+      const { sandbox, commands } = fakeSandbox();
+      await ensureEnvironmentPackages(sandbox, {}, undefined, {});
+      expect(setups(commands)).toHaveLength(0);
+    });
+
     it("rejects an alias that could not be a catalog alias", async () => {
       const { sandbox } = fakeSandbox();
       await expect(ensureEnvironmentPackages(sandbox, { pip: ["x"] }, undefined, { sandboxImage: "bad alias\"" }))
