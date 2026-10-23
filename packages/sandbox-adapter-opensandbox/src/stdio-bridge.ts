@@ -48,6 +48,7 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && req.url === '/close') { child.stdin.end(); res.end(); return; }
   if (req.method === 'DELETE' && (req.url === '/SIGTERM' || req.url === '/SIGKILL')) {
+    if (outcome) { res.end(); return; }
     try { process.kill(-child.pid, req.url.slice(1)); } catch (e) { if (e.code !== 'ESRCH') throw e; }
     res.end(); return;
   }

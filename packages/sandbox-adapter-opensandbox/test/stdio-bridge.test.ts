@@ -37,6 +37,7 @@ it("preserves binary stdin/stdout/stderr and real exit codes without a PTY", asy
   await sandbox.setEnvVars({ COMMON: "inherited" });
   const child = await sandbox.spawnDuplexProcess({
     command: process.execPath,
+    cwd: process.cwd(),
     args: ["-e", "if(process.env.COMMON !== 'inherited') process.exit(99); process.stdin.on('data', b => { process.stdout.write(b); process.stderr.write(b); }); process.stdin.on('end', () => process.exitCode = 7)"],
   });
   expect((await fetch(`http://127.0.0.1:${port}/ready`)).status).toBe(401);
@@ -55,10 +56,21 @@ it("preserves binary stdin/stdout/stderr and real exit codes without a PTY", asy
 
 it("terminates a sandbox child with the requested signal", async () => {
   const { sandbox } = await fixture();
-  const child = await sandbox.spawnDuplexProcess({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] });
+  const child = await sandbox.spawnDuplexProcess({ command: process.execPath, cwd: process.cwd(), args: ["-e", "setInterval(() => {}, 1000)"] });
   const stdout = new Response(child.stdout).text();
   const stderr = new Response(child.stderr).text();
   await child.kill("SIGKILL");
   expect(await child.exited).toEqual({ code: null, signal: "SIGKILL" });
+  await Promise.all([stdout, stderr]);
+});
+
+
+it("reports a failed child spawn and allows idempotent termination", async () => {
+  const { sandbox } = await fixture();
+  const child = await sandbox.spawnDuplexProcess({ command: process.execPath, cwd: "/openma-missing-test-directory", args: ["-e", ""] });
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+  expect(await child.exited).toEqual({ code: 127, signal: null });
+  await child.kill();
   await Promise.all([stdout, stderr]);
 });
