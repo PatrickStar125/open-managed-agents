@@ -18,11 +18,12 @@ export const DEFAULT_SANDBOX_IMAGE = "__default__";
 
 /**
  * The operator's sandbox image catalog. A deployment without the endpoint
- * or with an empty catalog yields `[]`, which hides the selector.
+ * (silent 404) or with an empty catalog yields `[]`, which hides the selector.
  */
 export function useSandboxImages(): SandboxImageOption[] {
   const { data } = useApiQuery<SandboxImageListResponse>("/v1/oma/sandbox_images", undefined, {
     staleTime: 5 * 60_000,
+    retry: false,
   });
   return (data?.data ?? []).flatMap((item) =>
     typeof item.alias === "string" && item.alias.length > 0
