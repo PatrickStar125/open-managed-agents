@@ -538,7 +538,30 @@ The same demo works on the Postgres compose unchanged.
 | `BoxRunSandbox` | Remote BoxLite REST endpoint (no KVM on the OMA host) | `SANDBOX_PROVIDER=boxrun`, `BOXRUN_URL=http://host:8100/v1/default`, optional `BOXRUN_TOKEN`. No mount primitive — bake a custom image with s3fs preinstalled if you need `/mnt/memory`. |
 | `CloudflareSandbox` | If you happen to deploy on CF Workers + Containers | Use the regular `apps/agent` worker, not main-node. |
 
-Every provider installs an Environment's `packages` when a sandbox starts: pip into `/workspace/.venv` (with `uv`, installed from pip when the image lacks it), npm into `/workspace/.npm-global`, cargo into `/workspace/.cargo`, go into `/workspace/.go`, apt system-wide. Those directories are put on `PATH` for the agent's commands. A container that already ran the same list, or whose restored `/workspace` carries it, skips the install; a failed install fails the session with the installer's output. Set `SANDBOX_PIP_INDEX_URL` to install pip packages from a mirror when the sandbox network reaches one faster than pypi.org.
+Every provider installs an Environment's `packages` when a sandbox starts: pip into `/workspace/.venv` (with `uv`, installed from pip when the image lacks it; the venv is created with `--system-site-packages`, so packages installed into the image's system Python stay importable), npm into `/workspace/.npm-global`, cargo into `/workspace/.cargo`, go into `/workspace/.go`, apt system-wide. Those directories are put on `PATH` for the agent's commands. A container that already ran the same list, or whose restored `/workspace` carries it, skips the install; a failed install fails the session with the installer's output. Set `SANDBOX_PIP_INDEX_URL` to install pip packages from a mirror when the sandbox network reaches one faster than pypi.org.
+
+### Pre-built images per Environment (`SANDBOX_IMAGES`)
+
+`SANDBOX_IMAGE` is the deployment default. To let users pick a pre-built image per Environment, publish a catalog in `SANDBOX_IMAGES`, a JSON object keyed by alias:
+
+```bash
+SANDBOX_IMAGE=node:22-slim
+SANDBOX_IMAGES='{
+  "analytics": {
+    "reference": "registry.example.com/oma/analytics:2026-10",
+    "label": "Analytics",
+    "description": "Python 3.12, pandas, polars, Claude ACP"
+  },
+  "web": { "reference": "registry.example.com/oma/web:2026-10" }
+}'
+```
+
+- **Aliases** are lowercase (`[a-z0-9][a-z0-9._-]*`, up to 63 characters). `reference` is required and is whatever the provider takes as an image: an OCI image for Daytona, LiteBox and BoxRun, or a template id for E2B. `label` (defaults to the alias) and `description` are optional and shown in the Console. Invalid JSON, an empty `reference` or an unknown key stops the server at startup.
+- **Users choose an alias, never a reference.** An Environment carries the choice as an OpenMA extension next to the CMA fields: `POST /v1/environments` with `{"name": "...", "config": {...}, "_oma": {"sandbox_image": "analytics"}}`. An alias that is not in the catalog is rejected with `400 invalid_request_error`. On update, `"_oma": {"sandbox_image": null}` goes back to the default image, and leaving `_oma` out keeps the current choice. Responses include `_oma` only when an image is selected, so requests and responses without it look exactly like plain CMA. Self-hosted Environments cannot select an image.
+- **`GET /v1/oma/sandbox_images`** lists `alias`, `label` and `description` for the Console's Environment forms. It never returns `reference`, because image references often expose internal registry hosts and users never need them. When the catalog is empty, the Console hides the selector.
+- **At session start** the alias is looked up again. If the operator has since removed it from `SANDBOX_IMAGES`, the session fails with an error naming the alias and the Environment. It never falls back to `SANDBOX_IMAGE`. The resolved image is passed to the sandbox factory as `ctx.image = { alias, reference }`, along with `ctx.environmentId` and `ctx.workspaceId`. The e2b, daytona, litebox and boxrun adapters use it in place of `SANDBOX_IMAGE`. Sprites (a fixed runtime) and the test-only local subprocess reject a selected image instead of ignoring it. A custom factory passed to `nodeDefaults(config, { sandbox })` receives the same `ctx.image` and can map it to its provider's create options.
+
+Recommended setup: bake the heavy, slow-to-install parts (the language runtime, analysis libraries installed into the system Python, `uv`, the ACP agent CLI) into an image. Publish it under an alias, and keep each Environment's `packages` for the few extras on top. Because of `--system-site-packages`, pip packages listed on the Environment install into `/workspace/.venv` without hiding the image's own packages, and a requirement the image already satisfies is normally not installed again. A sandbox whose `/workspace` was restored from a checkpoint reuses its existing venv. The install markers hash only the package lists, so changing the image or this flag does not trigger a reinstall.
 
 Vault credentials of type `environment_variable` are set in the sandbox of every session that attaches the Vault (an earlier Vault wins on a name clash), so the agent's commands can read them. The sandbox holds the real value: there is no egress proxy substituting it, and `networking` / `injection_location` are not enforced, so only store secrets the agent may see.
 
