@@ -2,7 +2,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
+import { Activity, BookOpen, ChartNoAxesCombined, FileText, ListTodo, MessageCircle, Plug, Workflow } from "lucide-react";
+import { GitHubIcon, LinearIcon, SlackIcon } from "../../components/icons";
 import { useNavigate } from "react-router";
 import yaml from "js-yaml";
 import type {
@@ -63,6 +65,20 @@ function validateMultiagent(value: MultiagentDraft | null | undefined) {
     }
   }
 }
+
+// Reuse local connector marks; other integrations/skills use Lucide, never remote favicons.
+const TEMPLATE_TAG_ICONS: Record<string, { label: string; Icon: ComponentType<{ className?: string }> }> = {
+  github: { label: "GitHub", Icon: GitHubIcon },
+  linear: { label: "Linear", Icon: LinearIcon },
+  slack: { label: "Slack", Icon: SlackIcon },
+  notion: { label: "Notion", Icon: BookOpen },
+  sentry: { label: "Sentry", Icon: Activity },
+  asana: { label: "Asana", Icon: ListTodo },
+  intercom: { label: "Intercom", Icon: MessageCircle },
+  atlassian: { label: "Atlassian", Icon: Workflow },
+  amplitude: { label: "Amplitude", Icon: ChartNoAxesCombined },
+  docx: { label: "Word (docx)", Icon: FileText },
+};
 
 const ANTHROPIC_SKILLS = [
   { id: "xlsx", label: "Excel (xlsx)" },
@@ -515,28 +531,35 @@ export function AgentFormDialog({
                 />
               </div>
               <div className="flex-1 overflow-y-auto px-6 py-4">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {filteredTemplates.map((tmpl) => (
                     <Button variant="ghost"
                       key={tmpl.id}
+                      type="button"
                       onClick={() => selectTemplate(tmpl)}
-                      className="text-left border border-border rounded-lg p-4 hover:border-brand hover:bg-bg-surface transition-colors duration-[var(--dur-quick)] ease-[var(--ease-soft)]"
+                      className="h-auto min-w-0 flex-col items-start justify-start gap-0 whitespace-normal text-left border border-border rounded-lg p-4 hover:border-brand hover:bg-bg-surface transition-colors duration-[var(--dur-quick)] ease-[var(--ease-soft)]"
                     >
-                      <div className="font-medium text-sm text-fg">{tmpl.name}</div>
-                      <div className="text-xs text-fg-muted mt-1 line-clamp-2">
+                      <span className="w-full min-w-0 break-words font-medium text-sm text-fg">{tmpl.name}</span>
+                      <span className="w-full min-w-0 break-words text-xs font-normal text-fg-muted mt-1">
                         {tmpl.description}
-                      </div>
+                      </span>
                       {tmpl.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {tmpl.tags.map((tag) => (
-                            <span
-                              key={tag}
-                              className="px-1.5 py-0.5 bg-bg-surface text-fg-muted rounded text-xs"
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
+                        <span className="flex w-full min-w-0 flex-wrap gap-1.5 mt-3">
+                          {tmpl.tags.map((tag) => {
+                            const { label, Icon } = TEMPLATE_TAG_ICONS[tag] ?? { label: tag, Icon: Plug };
+                            return (
+                              <span
+                                key={tag}
+                                role="img"
+                                title={label}
+                                aria-label={label}
+                                className="inline-flex size-7 shrink-0 items-center justify-center rounded bg-bg-surface text-fg-muted"
+                              >
+                                <span aria-hidden="true"><Icon className="size-4" /></span>
+                              </span>
+                            );
+                          })}
+                        </span>
                       )}
                     </Button>
                   ))}

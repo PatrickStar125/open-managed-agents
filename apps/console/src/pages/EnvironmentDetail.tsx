@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectOption } from "../components/Select";
 import { toast } from "sonner";
 import { Page } from "../components/Page";
+import { OpenmaStartupLoader } from "../components/OpenmaStartupLoader";
 import { Field } from "../components/Field";
 
 // =================================================================
@@ -172,7 +173,7 @@ export function EnvironmentDetail() {
     );
   }
   if (!env) {
-    return <div className="flex-1 p-8 text-fg-muted">Loading...</div>;
+    return <div className="flex flex-1 items-center justify-center p-8"><OpenmaStartupLoader /></div>;
   }
 
   return (

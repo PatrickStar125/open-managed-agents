@@ -20,6 +20,7 @@ import { AuthProvider } from "./lib/auth";
 import { I18nProvider } from "./i18n";
 import { Toaster } from "./components/ui/sonner";
 import { AppShell } from "./components/AppShell";
+import { OpenmaStartupLoader } from "./components/OpenmaStartupLoader";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { queryClient } from "./lib/query-client";
 import { loadBranding } from "./lib/branding";
@@ -295,7 +296,7 @@ createRoot(document.getElementById("root")!).render(
       <I18nProvider>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
-          <Suspense fallback={null}>
+          <Suspense fallback={<div className="flex h-screen items-center justify-center bg-bg"><OpenmaStartupLoader /></div>}>
               <RouterProvider router={router} />
             </Suspense>
           </AuthProvider>
