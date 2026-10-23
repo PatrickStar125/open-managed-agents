@@ -290,7 +290,9 @@ export class AgentService {
   async getRuntimeSnapshot(opts: { tenantId: string; agentId: string }): Promise<import("@open-managed-agents/shared").RuntimeAgentConfig | null> {
     const row = await this.get(opts);
     if (!row || row.archived_at) return null;
-    const { tenant_id: _tenant, multiagent, ...base } = row;
+    const { tenant_id: _tenant, multiagent, ...stored } = row;
+    // The public API stores an omitted system prompt as null; runtime snapshots require a string.
+    const base = { ...stored, system: stored.system ?? "" };
     if (!multiagent) return base;
     if (multiagent.type !== "multiagent_20261001" || multiagent.advisor.type !== "disabled" || multiagent.workflows.type !== "disabled") throw new Error("Unsupported runtime multiagent configuration");
     if (multiagent.subagents.type === "disabled") return { ...base, multiagent: { ...multiagent, subagents: multiagent.subagents } };
@@ -305,7 +307,7 @@ export class AgentService {
       if (!selected || selected.archived_at) throw new Error(`Pinned agent ${ref.id} version ${ref.version} unavailable`);
       if (ref.id !== row.id && selected.multiagent) throw new Error("Nested multiagent is not supported");
       const { multiagent: _nested, ...member } = selected;
-      members.push({ ...member, type: "agent" as const, mcp_servers: member.mcp_servers ?? [], skills: member.skills ?? [] });
+      members.push({ ...member, type: "agent" as const, system: member.system ?? "", mcp_servers: member.mcp_servers ?? [], skills: member.skills ?? [] });
     }
     return { ...base, multiagent: { ...multiagent, subagents: { ...multiagent.subagents, predefined_agents: members } } };
   }

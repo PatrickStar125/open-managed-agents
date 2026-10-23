@@ -20,3 +20,15 @@ it("resolves fixed versions in the tenant and refuses archived or missing refere
   await service.archive({ tenantId: "w", agentId: "child" });
   await expect(service.getRuntimeSnapshot({ tenantId: "w", agentId: "parent" })).rejects.toThrow(/unavailable/);
 });
+
+it("materializes the API's nullable system prompt as the runtime empty prompt", async () => {
+  const repo = new InMemoryAgentRepo();
+  // The public agent API stores an omitted system prompt as null.
+  const member = { id: "child", name: "c", model: "m", system: null, tools: [], version: 1, created_at: "2026-01-01T00:00:00Z" };
+  await repo.insert({ id: "child", tenantId: "w", config: member as never, createdAt: 1 });
+  const service = new AgentService({ repo });
+  expect(await service.getRuntimeSnapshot({ tenantId: "w", agentId: "child" })).toMatchObject({ system: "" });
+  const parent = { ...member, id: "parent", multiagent: { type: "multiagent_20261001" as const, advisor: { type: "disabled" as const }, workflows: { type: "disabled" as const }, subagents: { type: "enabled" as const, inline_agents: { type: "enabled" as const }, predefined_agents: [{ type: "agent" as const, id: "child", version: 1 }] } } };
+  await repo.insert({ id: "parent", tenantId: "w", config: parent as never, createdAt: 1 });
+  expect(await service.getRuntimeSnapshot({ tenantId: "w", agentId: "parent" })).toMatchObject({ system: "", multiagent: { subagents: { predefined_agents: [{ id: "child", system: "" }] } } });
+});
