@@ -1,32 +1,10 @@
 // @ts-nocheck
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessInterface, HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 import { toAnthropicMessages } from "@open-managed-agents/shared";
 
-// Test harness that emits a tool_use → tool_result → message sequence so we can
-// validate trajectory builder + anthropic projection on a non-trivial event stream.
-class TrajectoryHarness implements HarnessInterface {
-  async run(ctx: HarnessContext): Promise<void> {
-    ctx.runtime.broadcast({
-      type: "agent.tool_use",
-      id: "tu-test-1",
-      name: "bash",
-      input: { command: "echo hi" },
-    });
-    ctx.runtime.broadcast({
-      type: "agent.tool_result",
-      tool_use_id: "tu-test-1",
-      content: "hi\nexit=0",
-    });
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: "hello from trajectory test" }],
-    });
-  }
-}
-registerHarness("trajectory-test", () => new TrajectoryHarness());
+registerTestHarnesses();
 
 const HEADERS = {
   "x-api-key": "test-key",

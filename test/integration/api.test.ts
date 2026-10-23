@@ -1,23 +1,12 @@
 // @ts-nocheck
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect, beforeAll } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessInterface, HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 import { SPEC_EVENT_TYPES } from "../../packages/api-types/src/types";
 
 const SPEC_TYPES_FOR_TEST = SPEC_EVENT_TYPES;
 
-// Register a test harness that completes immediately (no real LLM call).
-// This runs in the same isolate as the Worker, so the registry is shared.
-class TestHarness implements HarnessInterface {
-  async run(ctx: HarnessContext): Promise<void> {
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: "test response" }],
-    });
-  }
-}
-registerHarness("test", () => new TestHarness());
+registerTestHarnesses();
 
 const HEADERS = {
   "x-api-key": "test-key",

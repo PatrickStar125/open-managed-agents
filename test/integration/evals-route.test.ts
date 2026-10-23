@@ -1,21 +1,11 @@
 // @ts-nocheck
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
+import { registerTestHarnesses } from "../harnesses";
 import { tickEvalRuns } from "../../apps/main/src/eval-runner";
 import { buildCfServices } from "@open-managed-agents/services";
 
-// Lightweight test harness: emits a single agent.message per turn, then idle.
-class EvalTestHarness {
-  async run(ctx: any) {
-    const text = ctx.userMessage?.content?.[0]?.text || "";
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: `eval-ack: ${text}` }],
-    });
-  }
-}
-registerHarness("eval-test", () => new EvalTestHarness());
+registerTestHarnesses();
 
 const HEADERS = { "x-api-key": "test-key", "Content-Type": "application/json" };
 

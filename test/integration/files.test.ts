@@ -1,8 +1,7 @@
 // @ts-nocheck
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect, beforeAll } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessInterface, HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 
 const H = { "x-api-key": "test-key", "Content-Type": "application/json" };
 function api(path: string, init?: RequestInit) {
@@ -18,8 +17,7 @@ function del(path: string) {
   return api(path, { method: "DELETE", headers: H });
 }
 
-// Register test harness
-registerHarness("files-test", () => ({ async run() {} }));
+registerTestHarnesses();
 
 // ============================================================
 // File Upload (JSON body)

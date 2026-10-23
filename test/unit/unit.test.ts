@@ -2,6 +2,7 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect } from "vitest";
 import { registerHarness, resolveHarness } from "../../apps/agent/src/harness/registry";
+import { registerTestHarnesses } from "../harnesses";
 
 // ============================================================
 // 1. Harness registry
@@ -119,7 +120,7 @@ describe("Edge cases", () => {
   }
 
   async function createSession() {
-    registerHarness("noop", () => ({ async run() {} }));
+    registerTestHarnesses();
     const agentRes = await api("/v1/oma/agents", {
       method: "POST",
       headers: HEADERS,

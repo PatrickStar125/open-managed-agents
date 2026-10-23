@@ -1,8 +1,7 @@
 // @ts-nocheck
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect, beforeAll } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessInterface, HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 
 const H = { "x-api-key": "test-key", "Content-Type": "application/json" };
 function api(path: string, init?: RequestInit) {
@@ -21,16 +20,7 @@ function get(path: string, extraHeaders?: Record<string, string>) {
   return api(path, { headers: { ...H, ...extraHeaders } });
 }
 
-// Register test harness
-registerHarness("noop-test", () => ({ async run() {} }));
-registerHarness("echo-test", () => ({
-  async run(ctx: HarnessContext) {
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: "echo reply" }],
-    });
-  },
-}));
+registerTestHarnesses();
 
 // ============================================================
 // Agent Update
@@ -394,7 +384,7 @@ describe("New event types", () => {
   let sessionId: string;
 
   beforeAll(async () => {
-    const a = await post("/v1/oma/agents", { name: "Evt", model: "claude-sonnet-4-6", harness: "echo-test" });
+    const a = await post("/v1/oma/agents", { name: "Evt", model: "claude-sonnet-4-6", harness: "features-echo-test" });
     const e = await post("/v1/oma/environments", { name: "evt-env", config: { type: "cloud" } });
     const s = await post("/v1/oma/sessions", {
       agent: ((await a.json()) as any).id,
@@ -544,7 +534,7 @@ describe("Session agent snapshot", () => {
 // ============================================================
 describe("Session harness status flow", () => {
   it("emits running → idle events during processing", async () => {
-    const a = await post("/v1/oma/agents", { name: "Status", model: "claude-sonnet-4-6", harness: "echo-test" });
+    const a = await post("/v1/oma/agents", { name: "Status", model: "claude-sonnet-4-6", harness: "features-echo-test" });
     const e = await post("/v1/oma/environments", { name: "stat-env", config: { type: "cloud" } });
     const s = await post("/v1/oma/sessions", {
       agent: ((await a.json()) as any).id,
@@ -586,7 +576,7 @@ describe("Session harness status flow", () => {
   });
 
   it("idle event has stop_reason", async () => {
-    const a = await post("/v1/oma/agents", { name: "StopR", model: "claude-sonnet-4-6", harness: "echo-test" });
+    const a = await post("/v1/oma/agents", { name: "StopR", model: "claude-sonnet-4-6", harness: "features-echo-test" });
     const e = await post("/v1/oma/environments", { name: "stop-env", config: { type: "cloud" } });
     const s = await post("/v1/oma/sessions", {
       agent: ((await a.json()) as any).id,
@@ -625,10 +615,6 @@ describe("Session harness status flow", () => {
 // ============================================================
 describe("Harness crash recovery", () => {
   it("emits session.error on crash and returns to idle", async () => {
-    registerHarness("crash-v2", () => ({
-      async run() { throw new Error("boom v2"); },
-    }));
-
     const a = await post("/v1/oma/agents", { name: "Crash", model: "claude-sonnet-4-6", harness: "crash-v2" });
     const e = await post("/v1/oma/environments", { name: "crash-env", config: { type: "cloud" } });
     const s = await post("/v1/oma/sessions", {

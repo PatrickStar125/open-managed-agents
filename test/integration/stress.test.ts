@@ -1,8 +1,7 @@
 // @ts-nocheck
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect, beforeAll } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 import { SqliteHistory } from "../../apps/agent/src/runtime/history";
 
 const H = { "x-api-key": "test-key", "Content-Type": "application/json" };
@@ -23,8 +22,7 @@ function get(path: string, extraHeaders?: Record<string, string>) {
   return api(path, { headers: { ...H, ...extraHeaders } });
 }
 
-// Register a noop harness for stress tests
-registerHarness("noop", () => ({ async run() {} }));
+registerTestHarnesses();
 
 // Helper: create agent + env + session quickly
 async function createFullSession(overrides?: Record<string, unknown>) {

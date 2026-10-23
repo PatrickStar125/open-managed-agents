@@ -2,88 +2,9 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect, beforeAll } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessInterface, HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 
-// ---------- Test Harnesses ----------
-registerHarness("multi-msg", () => ({
-  async run(ctx) {
-    ctx.runtime.broadcast({ type: "agent.message", content: [{ type: "text", text: "msg1" }] });
-    ctx.runtime.broadcast({ type: "agent.message", content: [{ type: "text", text: "msg2" }] });
-    ctx.runtime.broadcast({ type: "agent.message", content: [{ type: "text", text: "msg3" }] });
-  },
-}));
-
-registerHarness("thinking-harness", () => ({
-  async run(ctx) {
-    ctx.runtime.broadcast({ type: "agent.thinking" });
-    ctx.runtime.broadcast({ type: "agent.message", content: [{ type: "text", text: "after thinking" }] });
-  },
-}));
-
-registerHarness("tool-harness", () => ({
-  async run(ctx) {
-    ctx.runtime.broadcast({ type: "agent.tool_use", id: "tc_1", name: "bash", input: { command: "ls" } });
-    ctx.runtime.broadcast({ type: "agent.tool_result", tool_use_id: "tc_1", content: "exit=0\nfile1.txt" });
-    ctx.runtime.broadcast({ type: "agent.message", content: [{ type: "text", text: "found files" }] });
-  },
-}));
-
-registerHarness("delayed-harness", () => ({
-  async run(ctx) {
-    await new Promise((r) => setTimeout(r, 200));
-    ctx.runtime.broadcast({ type: "agent.message", content: [{ type: "text", text: "delayed response" }] });
-  },
-}));
-
-registerHarness("partial-crash", () => ({
-  async run(ctx) {
-    ctx.runtime.broadcast({ type: "agent.message", content: [{ type: "text", text: "before crash" }] });
-    throw new Error("partial crash");
-  },
-}));
-
-registerHarness("history-reader", () => ({
-  async run(ctx) {
-    const count = ctx.runtime.history.getMessages().length;
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: `msgs=${count}` }],
-    });
-  },
-}));
-
-registerHarness("config-reader", () => ({
-  async run(ctx) {
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: `system=${ctx.agent.system || "none"}` }],
-    });
-  },
-}));
-
-registerHarness("system-prompt-reader", () => ({
-  async run(ctx) {
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: ctx.systemPrompt }],
-    });
-  },
-}));
-
-registerHarness("usage-reporter", () => ({
-  async run(ctx) {
-    if (ctx.runtime.reportUsage) {
-      await ctx.runtime.reportUsage(100, 50);
-    }
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: "usage reported" }],
-    });
-  },
-}));
-
-registerHarness("sh-noop", () => ({ async run() {} }));
+registerTestHarnesses();
 
 // ---------- Helpers ----------
 const H = { "x-api-key": "test-key", "Content-Type": "application/json" };
@@ -234,11 +155,6 @@ describe("Harness execution flow", () => {
   });
 
   it("crash harness emits error event with message", async () => {
-    registerHarness("crash-sh", () => ({
-      async run() {
-        throw new Error("sh crash");
-      },
-    }));
     const sessionId = await createSessionWith("crash-sh");
     await postAndWait(sessionId, "crash", 600);
     await waitForIdle(sessionId);
@@ -356,15 +272,6 @@ describe("Harness context access", () => {
   });
 
   it("harness receives userMessage content correctly", async () => {
-    registerHarness("echo-user-input", () => ({
-      async run(ctx) {
-        const text = ctx.userMessage.content[0].text;
-        ctx.runtime.broadcast({
-          type: "agent.message",
-          content: [{ type: "text", text: `echo: ${text}` }],
-        });
-      },
-    }));
     const sessionId = await createSessionWith("echo-user-input");
     await postAndWait(sessionId, "hello world", 600);
     await waitForIdle(sessionId);
@@ -563,15 +470,6 @@ describe("Harness integration — additional scenarios", () => {
   });
 
   it("session with echo harness returns expected text", async () => {
-    registerHarness("exact-echo-sh", () => ({
-      async run(ctx) {
-        const text = ctx.userMessage.content[0]?.text || "";
-        ctx.runtime.broadcast({
-          type: "agent.message",
-          content: [{ type: "text", text: `echo: ${text}` }],
-        });
-      },
-    }));
     const sessionId = await createSessionWith("exact-echo-sh");
     await postAndWait(sessionId, "hello world", 600);
     await waitForIdle(sessionId);
@@ -582,15 +480,6 @@ describe("Harness integration — additional scenarios", () => {
   });
 
   it("harness can access userMessage content blocks count", async () => {
-    registerHarness("content-reader-sh", () => ({
-      async run(ctx) {
-        const blocks = ctx.userMessage.content.length;
-        ctx.runtime.broadcast({
-          type: "agent.message",
-          content: [{ type: "text", text: `blocks=${blocks}` }],
-        });
-      },
-    }));
     const sessionId = await createSessionWith("content-reader-sh");
     await post(`/v1/oma/sessions/${sessionId}/events`, {
       events: [{ type: "user.message", content: [

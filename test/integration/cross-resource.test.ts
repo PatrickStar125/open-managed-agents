@@ -1,19 +1,9 @@
 // @ts-nocheck
 import { env, exports } from "cloudflare:workers";
 import { describe, it, expect, beforeAll } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessInterface, HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 
-// ---------- Test Harnesses ----------
-registerHarness("cross-noop", () => ({ async run() {} }));
-registerHarness("cross-echo", () => ({
-  async run(ctx: HarnessContext) {
-    ctx.runtime.broadcast({
-      type: "agent.message",
-      content: [{ type: "text", text: "cross-echo reply" }],
-    });
-  },
-}));
+registerTestHarnesses();
 
 // ---------- Helpers ----------
 const H = { "x-api-key": "test-key", "Content-Type": "application/json" };
