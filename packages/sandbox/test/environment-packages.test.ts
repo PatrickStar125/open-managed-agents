@@ -108,6 +108,33 @@ describe("environment packages", () => {
       }
     });
 
+    it("also drops a catalog image's venv when switching back to the default image", async () => {
+      const { sandbox, files, commands } = fakeSandbox();
+      await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, { sandboxImage: "analytics" });
+      files.delete("warm"); // restored onto the default image
+      const back = await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, {});
+      expect(back.path).toBe("fresh");
+      const script = setups(commands)[1]!;
+      expect(script.indexOf("rm -rf /workspace/.venv")).toBeGreaterThan(-1);
+      expect(script.indexOf("rm -rf /workspace/.venv")).toBeLessThan(script.indexOf("$UV venv"));
+      // Back on the plain default markers, so later restores stay byte-identical.
+      expect(files.get("rest")).toBe("5cb03e2c");
+      files.delete("warm");
+      const again = await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, {});
+      expect(again.path).toBe("restored");
+    });
+
+    it("never drops the venv of a workspace that only ever used the default image", async () => {
+      const { sandbox, files, commands } = fakeSandbox();
+      await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, {});
+      files.delete("warm");
+      // A package change takes the fresh path but keeps the original script.
+      await ensureEnvironmentPackages(sandbox, { pip: ["pyodps", "pandas"] }, undefined, {});
+      expect(setups(commands)).toHaveLength(2);
+      expect(setups(commands)[1]).toBe(buildFullSetupScript({ pip: ["pyodps", "pandas"] }));
+      for (const script of setups(commands)) expect(script).not.toContain("rm -rf /workspace/.venv");
+    });
+
     it("rejects an alias that could not be a catalog alias", async () => {
       const { sandbox } = fakeSandbox();
       await expect(ensureEnvironmentPackages(sandbox, { pip: ["x"] }, undefined, { sandboxImage: "bad alias\"" }))
