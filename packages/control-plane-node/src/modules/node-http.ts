@@ -38,7 +38,8 @@ import {
 import { listAuthProviders } from "@open-managed-agents/shared";
 
 import { buildAgentRoutes as buildLegacyAgentRoutes, buildVaultRoutes as buildLegacyVaultRoutes, buildModelCardRoutes, buildEnvironmentRoutes as buildLegacyEnvironmentRoutes, buildSessionRoutes, buildMemoryRoutes as buildLegacyMemoryRoutes, buildDreamRoutes, buildTenantRoutes, buildMeRoutes, buildApiKeyRoutes, buildEvalRoutes, buildIntegrationsRoutes, buildIntegrationsGatewayRoutes, type InstallProxyForwarder, mintApiKeyOnStorage, sha256Hex } from "@open-managed-agents/http-routes";
-import { buildAgentRoutes as buildManagedAgentRoutes, buildManagedSessionsApi } from "@open-managed-agents/managed-agents-api";
+import { buildAgentRoutes as buildManagedAgentRoutes, buildManagedSessionsApi, buildSandboxImageRoutes } from "@open-managed-agents/managed-agents-api";
+import { EMPTY_SANDBOX_IMAGE_CATALOG } from "@open-managed-agents/sandbox";
 import { SessionRuntimeHistoryApplicationService, SessionRuntimeProjectionApplicationService } from "@open-managed-agents/managed-agents-application";
 
 import { managedAgentsPortTokens } from "@open-managed-agents/app/managed-agents";
@@ -532,6 +533,8 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     },
   }));
   v1.get("/oma/harnesses", (c) => c.json(getHarnessCatalog()));
+  // Operator SANDBOX_IMAGES catalog for `_oma.sandbox_image`; aliases only.
+  v1.route("/oma/sandbox_images", buildSandboxImageRoutes(config.sandbox.images ?? EMPTY_SANDBOX_IMAGE_CATALOG));
   v1.get("/oma/runtimes", (c) => c.json({ data: [] }));
   v1.get("/oma/stats", async (c) => {
     const tenantId = c.get("tenant_id");

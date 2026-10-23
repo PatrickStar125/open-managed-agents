@@ -45,7 +45,20 @@ export { buildCredentialRoutes } from "./routes/credentials";
 export { buildDeploymentRunRoutes } from "./routes/deployment-runs";
 export { buildDeploymentRoutes } from "./routes/deployments";
 export { buildDreamRoutes } from "./routes/dreams";
-export { buildEnvironmentRoutes } from "./routes/environments";
+export {
+  buildEnvironmentRoutes,
+  type EnvironmentRoutesOptions,
+  type EnvironmentSandboxImageCatalog,
+} from "./routes/environments";
+export {
+  buildSandboxImageRoutes,
+  type SandboxImageListingSource,
+  type SandboxImageListingView,
+} from "./routes/sandbox-images";
+export type {
+  OpenMaEnvironmentExtensionBody,
+  OpenMaEnvironmentResponse,
+} from "./contracts/environments";
 export { buildEnvironmentWorkRoutes } from "./routes/environment-work";
 export { buildFileRoutes } from "./routes/files";
 export { buildMemoryStoreRoutes } from "./routes/memory-stores";

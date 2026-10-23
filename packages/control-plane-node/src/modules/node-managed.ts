@@ -20,6 +20,8 @@ import { loadNodeManagedAcpRecoveryHistory } from "../lib/node-managed-acp-recov
 import { resolveProtocolEndpointsFromModelCard } from "@open-managed-agents/inference-proxy";
 import { resolveManagedSubagentSession } from "../lib/node-managed-subagents.js";
 import { installEnvironmentPackages } from "../lib/environment-packages";
+import { createManagedSandboxBuilder } from "../lib/node-managed-sandbox-builder";
+import { EMPTY_SANDBOX_IMAGE_CATALOG } from "@open-managed-agents/sandbox";
 import { injectVaultEnvironment, vaultEnvironmentVariables } from "../lib/vault-environment";
 import { resolveSessionSandboxMode, readManagedSessionMappingMetadata } from "@open-managed-agents/openai-agents-compat";
 import { SqlSessionThreadStore } from "@open-managed-agents/session-thread-store-sql";
@@ -445,10 +447,11 @@ export async function createManagedNodeRuntime(
       },
     }),
     sandboxMode: ({ session }) => resolveSessionSandboxMode(session, openAIAgentsSecrets),
-    buildSandbox: async ({ session }) => buildSandbox(
-        session.id,
-        join(config.paths.sandboxWorkdir, session.id),
-      ),
+    buildSandbox: createManagedSandboxBuilder({
+      images: config.sandbox.images,
+      workdir: (sessionId) => join(config.paths.sandboxWorkdir, sessionId),
+      build: buildSandbox,
+    }),
     ...(sharedSessionOutputs === undefined ? {} : {
       isSandboxCurrent: ({ workspaceId, session, runtimeGeneration }: { workspaceId: string; session: { id: string }; runtimeGeneration: string }) =>
         sharedSessionOutputs.isSandboxCurrent(workspaceId, session.id, runtimeGeneration),
@@ -972,12 +975,14 @@ export async function createManagedNodeRuntime(
       .port(managedAgentsPortTokens.deploymentRuns);
   });
 
-  const managedEnvironmentsRoutes = buildManagedEnvironmentRoutes((context) =>
-    managedPlatform
-      .app({
-        workspaceId: (context.var as { tenant_id: string }).tenant_id,
-      })
-      .port(managedAgentsPortTokens.environments),
+  const managedEnvironmentsRoutes = buildManagedEnvironmentRoutes(
+    (context) =>
+      managedPlatform
+        .app({
+          workspaceId: (context.var as { tenant_id: string }).tenant_id,
+        })
+        .port(managedAgentsPortTokens.environments),
+    { sandboxImages: config.sandbox.images ?? EMPTY_SANDBOX_IMAGE_CATALOG },
   );
 
   const managedEnvironmentWorkRoutes = buildManagedEnvironmentWorkRoutes(

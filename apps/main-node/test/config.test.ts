@@ -153,6 +153,20 @@ describe("loadNodeConfig", () => {
     }
   });
 
+  it("parses the SANDBOX_IMAGES catalog and fails startup on a malformed one", () => {
+    expect(loadNodeConfig(minimal).sandbox.images?.list()).toEqual([]);
+    const config = loadNodeConfig({
+      ...minimal,
+      SANDBOX_IMAGES: JSON.stringify({ analytics: { reference: "registry.example/analytics:1", label: "Analytics" } }),
+    });
+    expect(config.sandbox.images?.get("analytics")?.reference).toBe("registry.example/analytics:1");
+    expect(config.sandbox.images?.list()).toEqual([{ alias: "analytics", label: "Analytics", description: null }]);
+    expect(() => loadNodeConfig({ ...minimal, SANDBOX_IMAGES: "{not json" }))
+      .toThrow(/SANDBOX_IMAGES must be valid JSON/);
+    expect(() => loadNodeConfig({ ...minimal, SANDBOX_IMAGES: '{"analytics":{}}' }))
+      .toThrow(/SANDBOX_IMAGES\["analytics"\]\.reference must be a non-empty string/);
+  });
+
   it("keeps the serverless-mode requirements", () => {
     expect(() => loadNodeConfig({ ...minimal, OPENMA_PROCESS_MODE: "serverless", DATABASE_URL: "mysql://u:p@h/db" }))
       .toThrow(/DATABASE_URL must be PostgreSQL in serverless mode/);

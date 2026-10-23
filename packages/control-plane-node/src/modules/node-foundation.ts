@@ -267,9 +267,14 @@ export async function createNodeFoundation(
   async function buildSandbox(
     sessionId: string,
     workdir: string,
+    scope: Pick<
+      import("@open-managed-agents/sandbox").SandboxFactoryContext,
+      "environmentId" | "workspaceId" | "image"
+    > = {},
   ): Promise<import("@open-managed-agents/sandbox").SandboxExecutor> {
     return components.sandbox(
       {
+        ...scope,
         sessionId,
         workdir,
         memoryRoot: memoryBlobLocalDir ?? "",
