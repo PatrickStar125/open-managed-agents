@@ -333,7 +333,7 @@ export class DefaultNodeManagedSessionRuntimeDriver
             await this.finishCancelledStart(input, signal, announcedRetry);
             throw signal.aborted ? abortedError(signal) : error;
           }
-          if (attempt >= Math.max(1, retry.attempts)) {
+          if (attempt >= Math.max(1, retry.attempts) || isNonRetryableStartError(error)) {
             await this.projectStartFailure(input, error, "exhausted");
             throw error;
           }
@@ -739,4 +739,11 @@ export function untilAborted<T>(
       },
     );
   });
+}
+
+/** Startup failures a retry cannot fix, detected by error.name like the
+ * harness's ConfigError: an Environment selecting a sandbox image the
+ * operator removed from SANDBOX_IMAGES stays broken until it is edited. */
+function isNonRetryableStartError(error: unknown): boolean {
+  return error instanceof Error && error.name === "SandboxImageUnavailableError";
 }
