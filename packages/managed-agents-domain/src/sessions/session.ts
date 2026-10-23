@@ -29,8 +29,16 @@ export interface SessionAgent {
 }
 
 export interface SessionAgentMultiagent {
-  agents: SessionThreadAgent[];
-  type: "coordinator";
+  type: "multiagent_20261001";
+  advisor: { type: "disabled" };
+  subagents:
+    | { type: "disabled" }
+    | {
+        type: "enabled";
+        inlineAgents: { type: "enabled" } | { type: "disabled" };
+        predefinedAgents: SessionThreadAgent[];
+      };
+  workflows: { type: "disabled" };
 }
 
 export interface SessionStats {

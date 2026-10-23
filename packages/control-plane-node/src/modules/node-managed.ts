@@ -15,6 +15,7 @@
  * index.ts is the executable entrypoint (process.env, listen, signals).
  */
 
+import { resolveManagedSubagentSession } from "../lib/node-managed-subagents.js";
 import { installEnvironmentPackages } from "../lib/environment-packages";
 import { injectVaultEnvironment, vaultEnvironmentVariables } from "../lib/vault-environment";
 import { resolveSessionSandboxMode, readManagedSessionMappingMetadata } from "@open-managed-agents/openai-agents-compat";
@@ -130,13 +131,22 @@ export async function createManagedNodeRuntime(
     tenantId: string;
     sessionId: string;
     serverName: string;
+    agentId?: string;
+    agentVersion?: number;
   }): Promise<NodeMcpProxyTarget | null> {
     const managedContext = await managedRuntimeReaders.executionContext.find({
       workspaceId: input.tenantId,
       sessionId: input.sessionId,
     });
     if (managedContext !== null) {
-      const server = managedContext.session.agent.mcpServers.find(
+      const root = managedContext.session.agent;
+      const selected = input.agentId === undefined || (input.agentId === root.id && input.agentVersion === root.version)
+        ? root
+        : root.multiagent?.subagents.type === "enabled"
+          ? root.multiagent.subagents.predefinedAgents.find(member => member.type === "agent" && member.id === input.agentId && member.version === input.agentVersion)
+          : undefined;
+      if (!selected || !("mcpServers" in selected)) return null;
+      const server = selected.mcpServers.find(
         (candidate) => candidate.name === input.serverName,
       );
       if (server === undefined || server.type !== "url") return null;
@@ -204,17 +214,14 @@ export async function createManagedNodeRuntime(
       sessionId: input.sessionId,
     }).catch(() => null);
     if (session === null || session.archived_at) return null;
-    const snapshot = session.agent_snapshot as {
-      mcp_servers?: Array<{
-        name: string;
-        url: string;
-        authorization_token?: string;
-      }>;
-    } | undefined;
-    const server = snapshot?.mcp_servers?.find((candidate) =>
-      candidate.name === input.serverName
-    );
-    if (server === undefined || !server.url) return null;
+    const snapshot = session.agent_snapshot as import("@open-managed-agents/api-types").RuntimeAgentConfig | undefined;
+    const selected = input.agentId === undefined || (snapshot?.id === input.agentId && snapshot.version === input.agentVersion)
+      ? snapshot
+      : snapshot?.multiagent?.subagents.type === "enabled"
+        ? snapshot.multiagent.subagents.predefined_agents.find(member => member.id === input.agentId && member.version === input.agentVersion)
+        : undefined;
+    const server = selected?.mcp_servers?.find(candidate => candidate.name === input.serverName);
+    if (server === undefined || !("url" in server) || !server.url) return null;
     if (server.authorization_token) {
       return {
         upstreamUrl: server.url,
@@ -376,14 +383,10 @@ export async function createManagedNodeRuntime(
       : { sandboxLease: { ttlMs: config.workspace.sandboxLeaseTtlMs } }),
     subagentThreads: new SqlSessionThreadStore(sql),
     subagentPolicy: ({ session }) => nodeOpenAISubagentPolicy(session, openAIAgentsSecrets),
-    resolveSubagentSession: async ({ workspaceId, session, request }) => {
+    resolveSubagentSession: async ({ session, request }) => {
       const saved = await readManagedSessionMappingMetadata(session, openAIAgentsSecrets);
       if (saved) return openAISubagentSession(session, request);
-      const member = session.agent.multiagent?.agents.find(item => item.type === "agent" && item.id === request.agentId);
-      if (!member || member.type !== "agent") throw new Error("Subagent is not in the configured callable agent roster");
-      const selected = await managedPlatform.app({ workspaceId }).port(managedAgentsPortTokens.agents).retrieveAgent({ agentId: member.id, version: member.version });
-      if (selected.type !== "found" || selected.agent.archivedAt !== null) throw new Error("Configured subagent is unavailable");
-      return { ...session, agent: { ...selected.agent, multiagent: null } };
+      return resolveManagedSubagentSession(session, request);
     },
     confirmedTools: new NodeManagedConfirmedToolExecutor({
       buildExecutableTools: async ({ workspaceId, session, environment, sandbox }) => {

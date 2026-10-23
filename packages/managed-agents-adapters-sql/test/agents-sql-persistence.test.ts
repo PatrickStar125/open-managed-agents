@@ -144,7 +144,7 @@ describe("SqlAgentPersistence", () => {
     ).resolves.toBeNull();
   });
 
-  it("stores official Managed Agents independently from the legacy agents table", async () => {
+  it("stores new agents in the existing agents table without touching other tenants", async () => {
     await client
       .prepare(
         `INSERT INTO agents
@@ -152,7 +152,7 @@ describe("SqlAgentPersistence", () => {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
-        agent.id,
+        "legacy_other",
         "workspace_legacy",
         JSON.stringify({ legacy: true }),
         99,
@@ -168,13 +168,13 @@ describe("SqlAgentPersistence", () => {
     await expect(
       client
         .prepare("SELECT config FROM agents WHERE id = ?")
-        .bind(agent.id)
+        .bind("legacy_other")
         .first<{ config: string }>(),
     ).resolves.toEqual({ config: JSON.stringify({ legacy: true }) });
     await expect(
       client
         .prepare(
-          "SELECT COUNT(*) AS count FROM managed_agents WHERE workspace_id = ? AND id = ?",
+          "SELECT COUNT(*) AS count FROM agents WHERE tenant_id = ? AND id = ?",
         )
         .bind("workspace_01", agent.id)
         .first<{ count: number }>(),

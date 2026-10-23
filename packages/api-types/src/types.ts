@@ -43,6 +43,25 @@ export interface CustomToolConfig {
 
 export type ToolConfig = ToolsetConfig | CustomToolConfig;
 
+export type MultiagentConfig<T> = {
+  type: "multiagent_20261001";
+  advisor: { type: "disabled" };
+  subagents: { type: "disabled" } | {
+    type: "enabled";
+    inline_agents: { type: "enabled" } | { type: "disabled" };
+    predefined_agents: T[];
+  };
+  workflows: { type: "disabled" };
+};
+
+export type RuntimeAgentConfig = Omit<AgentConfig, "multiagent"> & {
+  multiagent?: MultiagentConfig<Omit<AgentConfig, "multiagent"> & {
+    type: "agent";
+    mcp_servers: NonNullable<AgentConfig["mcp_servers"]>;
+    skills: NonNullable<AgentConfig["skills"]>;
+  }>;
+};
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -74,7 +93,9 @@ export interface AgentConfig {
       }
   >;
   skills?: Array<{ skill_id: string; type: string; version?: string }>;
+  /** @deprecated Not consumed by the managed runtime. */
   callable_agents?: Array<{ type: "agent"; id: string; version?: number }>;
+  multiagent?: MultiagentConfig<{ type: "agent"; id: string; version: number }>;
   /**
    * Optional auxiliary model used by tools for in-process LLM work
    * (e.g. web_fetch summarization). Same shape as `model`.

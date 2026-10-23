@@ -53,7 +53,7 @@ import {
   bindAccessLossHooks,
   type AccessLossRuntime,
 } from "@open-managed-agents/mcp-access-loss";
-import type { Env, AgentConfig, CredentialConfig } from "@open-managed-agents/shared";
+import type { Env, CredentialConfig, RuntimeAgentConfig as AgentConfig } from "@open-managed-agents/shared";
 import { log, logWarn } from "@open-managed-agents/shared";
 import type { Services } from "@open-managed-agents/services";
 import type { KvStore } from "@open-managed-agents/kv-store";
@@ -88,13 +88,18 @@ type McpProxyServer =
       env?: Record<string, string>;
     };
 
+interface McpProxyAgent {
+  id?: string;
+  version?: number;
+  mcpServers: McpProxyServer[];
+  multiagent?: { subagents: { type: "disabled" } | { type: "enabled"; predefinedAgents: Array<{ type: string; id?: string; version?: number; mcpServers?: McpProxyServer[] }> } } | null;
+}
+
 export interface McpProxySessionSource {
   find(input: { workspaceId: string; sessionId: string }): Promise<{
     archivedAt: string | null;
     vaultIds: string[];
-    agent: {
-      mcpServers: McpProxyServer[];
-    };
+    agent: McpProxyAgent;
   } | null>;
 }
 
@@ -268,6 +273,7 @@ export async function resolveProxyTargetByTenant(
   serverName: string,
   sessionSource?: McpProxySessionSource,
   credentialSource?: McpProxyCredentialSource,
+  agentIdentity?: { id: string; version: number },
 ): Promise<ProxyTarget | null> {
   // 1. Session must exist, belong to the same tenant, not archived.
   const managedSessionRecord = sessionSource
@@ -290,13 +296,22 @@ export async function resolveProxyTargetByTenant(
   };
   if (legacySession.archived_at || managedSession.archivedAt) return null;
 
-  // 2. agent_snapshot must declare the requested mcp server.
-  const legacyAgent = legacySession.agent_snapshot;
+  // Select exclusively from the immutable Session roster, never a latest Agent row.
+  const rootLegacy = legacySession.agent_snapshot;
+  const rootManaged = managedSessionRecord?.agent;
+  const legacyAgent = !agentIdentity || (rootLegacy?.id === agentIdentity.id && rootLegacy.version === agentIdentity.version)
+    ? rootLegacy
+    : rootLegacy?.multiagent?.subagents.type === "enabled"
+      ? rootLegacy.multiagent.subagents.predefined_agents.find(member => member.id === agentIdentity.id && member.version === agentIdentity.version)
+      : undefined;
+  const managedAgent = !agentIdentity || (rootManaged?.id === agentIdentity.id && rootManaged.version === agentIdentity.version)
+    ? rootManaged
+    : rootManaged?.multiagent?.subagents.type === "enabled"
+      ? rootManaged.multiagent.subagents.predefinedAgents.find(member => member.type === "agent" && member.id === agentIdentity.id && member.version === agentIdentity.version)
+      : undefined;
   const server = legacyAgent
-    ? (legacyAgent.mcp_servers ?? []).find((candidate) => candidate.name === serverName)
-    : (managedSession.agent?.mcpServers ?? []).find(
-        (candidate) => candidate.name === serverName,
-      );
+    ? (legacyAgent.mcp_servers ?? []).find(candidate => candidate.name === serverName)
+    : (managedAgent?.mcpServers ?? []).find(candidate => candidate.name === serverName);
   if (!server || !("url" in server) || !server.url) return null;
 
   // 3. Resolve credential. agent.mcp_servers[].authorization_token, if set,

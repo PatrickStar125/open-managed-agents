@@ -22,6 +22,8 @@ export interface NodeHttpMcpProxyDependencies {
     tenantId: string;
     sessionId: string;
     serverName: string;
+    agentId?: string;
+    agentVersion?: number;
   }): Promise<NodeMcpProxyTarget | null>;
   fetcher?: typeof fetch;
   accessLoss?: AccessLossRuntime;
@@ -45,10 +47,16 @@ export function createNodeMcpProxyBinding(
       if (!tenantId || !sessionId || !serverName) {
         return Response.json({ error: "forbidden" }, { status: 403 });
       }
+      const agentId = request.headers.get("x-oma-agent-id");
+      const version = request.headers.get("x-oma-agent-version");
+      if ((agentId === null) !== (version === null) || (version !== null && (!/^\d+$/.test(version) || Number(version) < 1))) {
+        return Response.json({ error: "forbidden" }, { status: 403 });
+      }
       const target = await dependencies.resolveTarget({
         tenantId,
         sessionId,
         serverName,
+        ...(agentId !== null && version !== null && { agentId, agentVersion: Number(version) }),
       });
       if (target === null) {
         return Response.json({ error: "forbidden" }, { status: 403 });

@@ -327,6 +327,7 @@ const legacyAgentsRoutes = new Hono<{
   const ctx = c as unknown as AppCtx;
   const services = ctx.var.services;
   const app = buildLegacyAgentRoutes({
+    application: managedCoreApplicationFor(ctx).port(managedAgentsPortTokens.agents),
     services: () => cfRouteServicesFromCtx(ctx),
     validateModel: async (tenantId, model) => {
       const cards = await services.modelCards.list({ tenantId });
@@ -344,8 +345,9 @@ const legacyAgentsRoutes = new Hono<{
     },
     validateAgentLimits: (body) =>
       validateAgentLimits(body as Parameters<typeof validateAgentLimits>[0]),
-    hasActiveSessionsByAgent: (tenantId, agentId) =>
-      services.sessions.hasActiveByAgent({ tenantId, agentId }),
+    hasActiveSessionsByAgent: async (tenantId, agentId) =>
+      await services.sessions.hasActiveByAgent({ tenantId, agentId }) ||
+      (await new CfD1SqlClient(ctx.var.tenantDb).prepare("SELECT id FROM managed_sessions WHERE workspace_id = ? AND agent_id = ? AND archived_at IS NULL LIMIT 1").bind(tenantId, agentId).first()) !== null,
     hasActiveEvalsByAgent: (tenantId, agentId) =>
       services.evals.hasActiveByAgent({ tenantId, agentId }),
   });
@@ -1968,6 +1970,11 @@ export class McpProxyRpc extends WorkerEntrypoint<Env> {
       this.env,
       tenantId,
     );
+    const agentId = request.headers.get("x-oma-agent-id");
+    const agentVersion = request.headers.get("x-oma-agent-version");
+    if ((agentId === null) !== (agentVersion === null) || (agentVersion !== null && (!/^\d+$/.test(agentVersion) || Number(agentVersion) < 1))) {
+      return Response.json({ error: "forbidden" }, { status: 403 });
+    }
     const target = await resolveProxyTargetByTenant(
       this.env,
       services,
@@ -1976,6 +1983,7 @@ export class McpProxyRpc extends WorkerEntrypoint<Env> {
       serverName,
       sessionSource,
       credentialSource,
+      agentId !== null && agentVersion !== null ? { id: agentId, version: Number(agentVersion) } : undefined,
     );
     if (!target) {
       return new Response('{"error":"forbidden"}', {

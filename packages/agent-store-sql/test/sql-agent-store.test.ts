@@ -8,20 +8,20 @@ import {
 import { SqlAgentStore } from "../src";
 
 const SCHEMA = `
-CREATE TABLE managed_agents (
+CREATE TABLE agents (
   id text PRIMARY KEY NOT NULL,
-  workspace_id text NOT NULL,
-  document text NOT NULL,
+  tenant_id text NOT NULL,
+  config text NOT NULL,
   version integer NOT NULL,
   created_at integer NOT NULL,
   updated_at integer NOT NULL,
   archived_at integer
 );
-CREATE TABLE managed_agent_versions (
+CREATE TABLE agent_versions (
   agent_id text NOT NULL,
-  workspace_id text NOT NULL,
+  tenant_id text NOT NULL,
   version integer NOT NULL,
-  document text NOT NULL,
+  snapshot text NOT NULL,
   created_at integer NOT NULL,
   PRIMARY KEY (agent_id, version)
 );`;

@@ -52,7 +52,7 @@ function harness(options: { replaceFails?: boolean; maxReplacements?: number } =
     if (options.replaceFails) throw new Error("provider unavailable");
     current = new FakeRuntime(`sb${created.length + 1}`);
     created.push(current);
-    return "/workspace was restored.";
+    return "/workspace is back to its state as of 2026-10-21 12:50:23 UTC; files created after that are gone.";
   });
   const onGiveUp = vi.fn();
   const recovery = withSandboxRecovery({
@@ -99,7 +99,12 @@ describe("withSandboxRecovery", () => {
       expect(result.status).toBe("rejected");
       const error = (result as PromiseRejectedResult).reason;
       expect(error).toBeInstanceOf(SandboxReplacedError);
-      expect(error.message).toMatch(/not running anymore.*replaced.*restored.*not retried/s);
+      expect(error.message).toBe(
+        "This tool call was interrupted because the environment restarted. /workspace is back to its state as of 2026-10-21 12:50:23 UTC; files created after that are gone. Background processes were stopped. Re-run the tool call if it is still needed.",
+      );
+      // The agent never learns about sandboxes or the provider's error.
+      expect(error.message).not.toMatch(/sandbox|not running anymore/i);
+      expect(error.cause).toBeUndefined();
     }
     await expect(recovery.sandbox.exec("c")).resolves.toBe("sb2:c");
     expect(recovery.replacements).toBe(1);
@@ -113,14 +118,14 @@ describe("withSandboxRecovery", () => {
     }
     current().dead = true;
     await expect(recovery.sandbox.exec("x")).rejects.toBeInstanceOf(SandboxRecoveryFailedError);
-    await expect(recovery.sandbox.exec("y")).rejects.toThrow(/lost 3 times/);
+    await expect(recovery.sandbox.exec("y")).rejects.toThrow(/restarted 3 times/);
     expect(onGiveUp).toHaveBeenCalledTimes(1);
   });
 
   it("fails every later call when the replacement cannot be acquired", async () => {
     const { recovery, onGiveUp, created } = harness({ replaceFails: true });
     created[0]!.dead = true;
-    await expect(recovery.sandbox.exec("x")).rejects.toThrow(/could not be replaced: provider unavailable/);
+    await expect(recovery.sandbox.exec("x")).rejects.toThrow(/^The environment stopped and could not be restarted\.$/);
     await expect(recovery.sandbox.readFile("/x")).rejects.toBeInstanceOf(SandboxRecoveryFailedError);
     expect(onGiveUp).toHaveBeenCalledTimes(1);
   });
@@ -133,7 +138,7 @@ describe("withSandboxRecovery", () => {
     await recovery.check(port(created[0]!), new Error("renew failed"));
     expect(replace).toHaveBeenCalledTimes(1);
     // The caller must learn its files are gone before it uses the new sandbox.
-    await expect(recovery.sandbox.exec("ls")).rejects.toThrow(/renew failed.*has been replaced/);
+    await expect(recovery.sandbox.exec("ls")).rejects.toThrow(/^This tool call was interrupted because the environment restarted\./);
     await expect(recovery.sandbox.exec("ok")).resolves.toBe("sb2:ok");
   });
 
@@ -142,11 +147,11 @@ describe("withSandboxRecovery", () => {
     created[0]!.dead = true;
     const check = recovery.check(port(created[0]!), new Error("renew failed"));
     await vi.waitFor(() => expect(replace).toHaveBeenCalled());
-    expect(await recovery.close()).toMatch(/has been replaced/);
+    expect(await recovery.close()).toMatch(/environment restarted/);
     await check;
     expect(replace).toHaveBeenCalledTimes(1);
     created[1]!.dead = true;
-    await expect(recovery.sandbox.exec("x")).rejects.toThrow(/after the turn ended/);
+    await expect(recovery.sandbox.exec("x")).rejects.toThrow(/stopped after the turn ended/);
     expect(replace).toHaveBeenCalledTimes(1);
   });
 });

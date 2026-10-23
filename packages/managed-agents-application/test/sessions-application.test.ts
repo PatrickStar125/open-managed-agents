@@ -644,8 +644,14 @@ describe("SessionsApplicationService", () => {
       id: "agent_coordinator",
       name: "Coordinator",
       multiagent: {
-        type: "coordinator",
-        agents: [{ type: "agent", agentId: member.id, version: member.version }],
+        type: "multiagent_20261001",
+        advisor: { type: "disabled" },
+        subagents: {
+          type: "enabled",
+          inlineAgents: { type: "disabled" },
+          predefinedAgents: [{ type: "agent", agentId: member.id, version: member.version }],
+        },
+        workflows: { type: "disabled" },
       },
       version: 4,
     };
@@ -685,20 +691,38 @@ describe("SessionsApplicationService", () => {
         agent: {
           id: coordinator.id,
           multiagent: {
-            type: "coordinator",
-            agents: [
-              {
-                type: "agent",
-                id: member.id,
-                name: member.name,
-                version: member.version,
-              },
-            ],
+            type: "multiagent_20261001",
+            advisor: { type: "disabled" },
+            subagents: {
+              type: "enabled",
+              inlineAgents: { type: "disabled" },
+              predefinedAgents: [
+                {
+                  type: "agent",
+                  id: member.id,
+                  name: member.name,
+                  version: member.version,
+                },
+              ],
+            },
+            workflows: { type: "disabled" },
           },
         },
       },
     });
     expect(versionLookups).toEqual([]);
+  });
+
+  it("rejects unsupported coordinator data rather than silently dropping an advisor", async () => {
+    const service = new SessionsApplicationService({
+      workspaceId: "workspace_01", store: new MemorySessionStore(),
+      agents: { findCurrent: async () => ({ ...structuredClone(agent), multiagent: { type: "coordinator", agents: [{ type: "advisor", model: "m" }] } as never }), findVersion: async () => null },
+      environments: availableSessionEnvironment, resources: emptySessionResources,
+      lifecycle: silentSessionLifecycle, clock: { now: () => new Date("2026-08-26T02:00:00.000Z") },
+      ids: { nextSessionId: () => "invalid" },
+    });
+    const result = await service.createSession({ agent: { type: "latest", agentId: agent.id }, environmentId: environment.id });
+    expect(result.type).not.toBe("created");
   });
 
   describe("agent update idle boundary", () => {

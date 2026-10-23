@@ -417,16 +417,16 @@ export class DefaultNodeManagedSessionRunner
       await acquired.sandbox.destroy?.().catch(() => undefined);
       throw abortedError(signal);
     }
-    // Until this turn reaches its barrier the replacement is as dirty as any
+    // Until this turn reaches its barrier the replacement is as dirty as every
     // sandbox a turn has written to.
     if (acquired.workspace !== undefined) acquired.workspace.trusted = false;
     this.installSandbox(input, acquired, fingerprint);
     if (acquired.workspace === undefined) {
-      return "The new sandbox starts from a clean /workspace (Session resources, skills and packages were prepared again); files written in the old sandbox are gone.";
+      return "Files created in /workspace before the restart are gone.";
     }
     return acquired.restoredFromMs === null
-      ? "/workspace was restored to its initial state because no checkpoint had been published yet; all earlier changes are gone."
-      : `/workspace was restored to the checkpoint published at ${new Date(acquired.restoredFromMs).toISOString()}; changes made after it are gone.`;
+      ? "/workspace is back to its initial state; files created before the restart are gone."
+      : `/workspace is back to its state as of ${new Date(acquired.restoredFromMs).toISOString().slice(0, 19).replace("T", " ")} UTC; files created after that are gone.`;
   }
 
   async stop(input: StopNodeManagedSessionRuntime): Promise<void> {
@@ -518,9 +518,13 @@ export class DefaultNodeManagedSessionRunner
     const recovery = withSandboxRecovery({
       current: currentSandbox,
       probe: (candidate) => this.probe(candidate),
-      replace: (lost) => this.replaceLostSandbox(input, lost, abortController.signal),
+      replace: (lost, cause) => {
+        console.warn(`[managed-runner] session ${input.sessionId}: sandbox lost, replacing:`, cause);
+        return this.replaceLostSandbox(input, lost, abortController.signal);
+      },
       maxReplacements: this.dependencies.maxSandboxReplacements,
       onGiveUp: (error) => {
+        console.warn(`[managed-runner] session ${input.sessionId}: ${error.message}`, error.cause);
         sandboxLost = true;
         abortController.abort(error);
       },
@@ -772,7 +776,7 @@ export class DefaultNodeManagedSessionRunner
       // agent was never told: the turn must not end as if they existed.
       const unreported = await recovery.close();
       if (unreported !== null) {
-        throw new Error(`${unreported.split(" Running processes")[0]} The agent had already finished, so its changes in this turn were lost.`);
+        throw new Error(`The environment restarted after the agent's last step. ${unreported.split(" Background processes")[0].replace(/^This tool call was interrupted because the environment restarted\. /, "")} The changes made in this turn were lost.`);
       }
     } catch (error) {
       await recovery.close();

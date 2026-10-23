@@ -139,9 +139,8 @@ async function createTaskSession(
 ): Promise<string> {
   const t = run.tenant_id;
   const services = await ctx.getServicesForTenant(t);
-  const agentRow = await services.agents.get({ tenantId: t, agentId: run.agent_id });
-  if (!agentRow) throw new Error(`agent ${run.agent_id} not found`);
-  const { tenant_id: _atid, ...agentSnapshot } = agentRow;
+  const agentSnapshot = await services.agents.getRuntimeSnapshot({ tenantId: t, agentId: run.agent_id });
+  if (!agentSnapshot) throw new Error(`agent ${run.agent_id} not found`);
   const envRow = await services.environments.get({ tenantId: t, environmentId: run.environment_id });
   const environmentSnapshot = envRow ? toEnvironmentConfig(envRow) : undefined;
 

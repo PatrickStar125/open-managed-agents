@@ -22,6 +22,7 @@
     "./harness/assembly/skill-config": "./src/harness/assembly/skill-config.ts",
     "./harness/assembly/reassembly-config": "./src/harness/assembly/reassembly-config.ts",
     "./harness/skills": "./src/harness/skills.ts",
+    "./runtime/multiagent": "./src/runtime/multiagent.ts",
     "./runtime/history": "./src/runtime/history.ts",
     "./runtime/appendable-prompts": "./src/runtime/appendable-prompts.ts",
     "./runtime/managed-runtime": "./src/runtime/managed-runtime.ts"
