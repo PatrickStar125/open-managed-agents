@@ -30,6 +30,31 @@ export interface EnvironmentPackagesOptions {
    * whose network reaches a mirror faster than pypi.org.
    */
   pipIndexUrl?: string;
+  /**
+   * Alias of the operator catalog image the sandbox runs (`SANDBOX_IMAGES`).
+   * Unset means the deployment default image, and the setup markers are
+   * exactly as before. When set, the alias is part of both markers, so a
+   * workspace restored onto a different image is not trusted: the fresh path
+   * removes its `/workspace/.venv` (bound to the old image's Python) and
+   * reinstalls.
+   */
+  sandboxImage?: string;
+}
+
+const SANDBOX_IMAGE_ALIAS = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
+/** The markers for a package list on a given image. */
+function setupMarkers(
+  packages: EnvironmentPackages | undefined,
+  sandboxImage: string | undefined,
+): { full: string; lang: string } {
+  const full = fullHash(packages);
+  const lang = langHash(packages);
+  if (sandboxImage === undefined) return { full, lang };
+  if (!SANDBOX_IMAGE_ALIAS.test(sandboxImage)) {
+    throw new TypeError(`Invalid sandbox image alias for environment packages: ${JSON.stringify(sandboxImage)}`);
+  }
+  return { full: `${full}:${sandboxImage}`, lang: `${lang}:${sandboxImage}` };
 }
 
 /** Directories the installed tools live in, in PATH order. */
@@ -121,6 +146,9 @@ export function buildFullSetupScript(
     }
     sections.push(
       `mkdir -p /workspace`,
+      // On a catalog image the fresh path never trusts a venv it did not
+      // create for this image: a restored one may target another Python.
+      ...(options.sandboxImage !== undefined ? [`rm -rf /workspace/.venv`] : []),
       // Images without uv get it from pip; PEP 668 images need the override.
       `if command -v uv >/dev/null 2>&1; then UV=uv; else python3 -m pip install -q --user --break-system-packages uv 2>/dev/null || python3 -m pip install -q --user uv; UV="python3 -m uv"; fi`,
       // --system-site-packages: packages baked into the image's system Python
@@ -223,8 +251,7 @@ export async function ensureEnvironmentPackages(
   options: EnvironmentPackagesOptions = {},
 ): Promise<{ path: EnvironmentPackagesPath; durationMs: number; error?: string }> {
   const startMs = Date.now();
-  const full = fullHash(packages);
-  const lang = langHash(packages);
+  const { full, lang } = setupMarkers(packages, options.sandboxImage);
   const markers = `echo "${full}" > ${WARM_MARKER}; mkdir -p /workspace; echo "${lang}" > ${RESTORED_MARKER}`;
 
   const state = await probeSetupState(sandbox, full, lang);

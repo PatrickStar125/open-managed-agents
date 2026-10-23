@@ -19,8 +19,8 @@ function fakeSandbox(failSetup = false) {
         return `WARM=${files.get("warm") ?? "MISSING"}\nREST=${files.get("rest") ?? "MISSING"}`;
       }
       if (command.startsWith("(\nset -e")) return failSetup ? "No module named uv\n[exit 1]" : "";
-      const warm = command.match(/echo "(\w+)" > \/tmp\/\.oma-setup-warm/);
-      const rest = command.match(/echo "(\w+)" > \/workspace\/\.oma-setup-restored/);
+      const warm = command.match(/echo "([^"]+)" > \/tmp\/\.oma-setup-warm/);
+      const rest = command.match(/echo "([^"]+)" > \/workspace\/\.oma-setup-restored/);
       if (warm) files.set("warm", warm[1]!);
       if (rest) files.set("rest", rest[1]!);
       return "";
@@ -68,6 +68,51 @@ describe("environment packages", () => {
     await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] });
     expect(files.get("warm")).toBe("a0bbafd0");
     expect(files.get("rest")).toBe("5cb03e2c");
+  });
+
+  describe("on an operator catalog image", () => {
+    const setups = (commands: string[]) => commands.filter((c) => c.startsWith("(\nset -e"));
+
+    it("leaves markers and the script unchanged when no image is selected", async () => {
+      const { sandbox, files, commands } = fakeSandbox();
+      await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, {});
+      expect(files.get("warm")).toBe("a0bbafd0");
+      expect(files.get("rest")).toBe("5cb03e2c");
+      expect(setups(commands)[0]).not.toContain("rm -rf /workspace/.venv");
+    });
+
+    it("scopes markers to the alias and stays restored on the same image", async () => {
+      const { sandbox, files, commands } = fakeSandbox();
+      const first = await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, { sandboxImage: "analytics" });
+      expect(first.path).toBe("fresh");
+      expect(files.get("warm")).toBe("a0bbafd0:analytics");
+      expect(files.get("rest")).toBe("5cb03e2c:analytics");
+
+      files.delete("warm"); // cold restart, /workspace restored
+      const restored = await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, { sandboxImage: "analytics" });
+      expect(restored.path).toBe("restored");
+      expect(setups(commands)).toHaveLength(1);
+    });
+
+    it("removes and rebuilds the venv when the workspace was set up on another image", async () => {
+      for (const previous of [undefined, "analytics"]) {
+        const { sandbox, files, commands } = fakeSandbox();
+        await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, previous ? { sandboxImage: previous } : {});
+        files.delete("warm"); // restored onto the new image
+        const switched = await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] }, undefined, { sandboxImage: "web" });
+        expect(switched.path).toBe("fresh");
+        const script = setups(commands)[1]!;
+        expect(script.indexOf("rm -rf /workspace/.venv")).toBeGreaterThan(-1);
+        expect(script.indexOf("rm -rf /workspace/.venv")).toBeLessThan(script.indexOf("$UV venv"));
+        expect(files.get("rest")).toBe("5cb03e2c:web");
+      }
+    });
+
+    it("rejects an alias that could not be a catalog alias", async () => {
+      const { sandbox } = fakeSandbox();
+      await expect(ensureEnvironmentPackages(sandbox, { pip: ["x"] }, undefined, { sandboxImage: "bad alias\"" }))
+        .rejects.toThrow("Invalid sandbox image alias");
+    });
   });
 
   it("writes scripts a shell can parse", () => {
