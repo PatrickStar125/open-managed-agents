@@ -44,6 +44,7 @@ import {
   buildVaultRoutes as buildManagedVaultRoutes,
   buildUserProfileRoutes as buildManagedUserProfileRoutes,
   buildManagedSessionsApi,
+  buildSandboxImageRoutes,
 } from "@open-managed-agents/managed-agents-api";
 import {
   SessionRuntimeProjectionApplicationService,
@@ -1451,6 +1452,9 @@ app.route("/v1/oma/integrations", integrationsRoutes);
 app.route("/v1/oma/runtimes", runtimesRoutes);
 app.route("/v1/oma/oauth", oauthRoutes);
 app.route("/v1/oma/model_cards", modelCardsRoutes);
+// Cloudflare sandboxes run one container image; there is no operator image
+// catalog, so the list is empty and `_oma.sandbox_image` is rejected.
+app.route("/v1/oma/sandbox_images", buildSandboxImageRoutes({ list: () => [] }));
 // /v1/oma/mcp-proxy is intentionally NOT aliased: auth.ts path-prefix skip is
 // scoped to that exact prefix, and the proxy does its own session-ownership
 // check downstream. Re-mounting under /v1/oma/mcp-proxy would route through

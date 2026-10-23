@@ -215,6 +215,16 @@ export interface ManagedApiTransport {
 }
 
 type WithoutBetas<T> = Omit<T, "betas">;
+
+/** OpenMA Environment extension: an alias from GET /v1/oma/sandbox_images.
+ * `null` on update returns the Environment to the deployment default. */
+export interface OpenMaEnvironmentExtension {
+  sandbox_image?: string | null;
+}
+export type OpenMaEnvironment = BetaEnvironment & {
+  _oma?: { sandbox_image?: string };
+};
+type EnvironmentWriteExtension = { _oma?: OpenMaEnvironmentExtension };
 type QueryValue = string | number | boolean | readonly string[] | null | undefined;
 
 function appendQueryValue(
@@ -449,14 +459,16 @@ export function createManagedApiClient(
           ),
         ),
       retrieve: (environmentId: string) =>
-        request<BetaEnvironment>(`/v1/environments/${id(environmentId)}`),
-      create: (params: WithoutBetas<EnvironmentCreateParams>) =>
-        request<BetaEnvironment>("/v1/environments", json(params)),
+        request<OpenMaEnvironment>(`/v1/environments/${id(environmentId)}`),
+      create: (
+        params: WithoutBetas<EnvironmentCreateParams> & EnvironmentWriteExtension,
+      ) =>
+        request<OpenMaEnvironment>("/v1/environments", json(params)),
       update: (
         environmentId: string,
-        params: WithoutBetas<EnvironmentUpdateParams>,
+        params: WithoutBetas<EnvironmentUpdateParams> & EnvironmentWriteExtension,
       ) =>
-        request<BetaEnvironment>(
+        request<OpenMaEnvironment>(
           `/v1/environments/${id(environmentId)}`,
           json(params),
         ),
