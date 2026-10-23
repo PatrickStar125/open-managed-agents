@@ -13,6 +13,9 @@ import type {
 } from "@openma/sdk";
 
 import { useManagedApi } from "../../lib/useManagedApi";
+import { useApi } from "../../lib/api";
+import { HarnessPicker } from "./HarnessPicker";
+import { harnessCatalogSchema, harnessValidationError, openMaFields, type HarnessCatalog } from "./harnessCatalog";
 import { Button } from "@/components/ui/button";
 import { Select, SelectOption } from "../../components/Select";
 import { Combobox } from "../../components/Combobox";
@@ -149,6 +152,7 @@ export function AgentFormDialog({
   modelCards,
 }: AgentFormDialogProps) {
   const managedApi = useManagedApi();
+  const { api } = useApi();
   const nav = useNavigate();
   const { t } = useI18n();
   const isEdit = !!editingAgent;
@@ -169,6 +173,28 @@ export function AgentFormDialog({
   const [codeValue, setCodeValue] = useState("");
   const [showMcpPicker, setShowMcpPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Keep the wire value separately: omitted, null and explicit "default" must not collapse.
+  const [harness, setHarness] = useState<unknown>();
+  const [harnessCatalog, setHarnessCatalog] = useState<HarnessCatalog | null>(null);
+  const [harnessLoading, setHarnessLoading] = useState(true);
+  const [harnessError, setHarnessError] = useState("");
+  const [harnessRefresh, setHarnessRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!open || createStep !== "form") return;
+    const controller = new AbortController();
+    setHarnessLoading(true);
+    setHarnessCatalog(null);
+    setHarnessError("");
+    void api<unknown>("/v1/oma/harnesses", { signal: controller.signal }).then((response) => {
+      if (!controller.signal.aborted) setHarnessCatalog(harnessCatalogSchema.parse(response));
+    }).catch(() => {
+      if (!controller.signal.aborted) setHarnessError("Unable to load harness catalog. Retry to verify the deployment's registered implementations.");
+    }).finally(() => {
+      if (!controller.signal.aborted) setHarnessLoading(false);
+    });
+    return () => controller.abort();
+  }, [open, createStep, harnessRefresh, api]);
 
   const createDialogRef = useRef<HTMLDivElement>(null);
   const createPreviousFocus = useRef<HTMLElement | null>(null);
@@ -179,6 +205,7 @@ export function AgentFormDialog({
     if (!open) return;
     if (editingAgent) {
       setForm(agentToForm(editingAgent));
+      setHarness(openMaFields(editingAgent as unknown as Record<string, unknown>).harness);
       setMultiagent(editingAgent.multiagent as MultiagentDraft | null | undefined);
       setPreservedConfig(agentToPreservedConfig(editingAgent));
       setCreateStep("form");
@@ -208,6 +235,7 @@ export function AgentFormDialog({
   }, [createStep, modelCards.length]);
 
   const closeCreate = () => {
+    setHarness(undefined);
     setMultiagent(undefined);
     setCreateStep("template");
     setTemplateSearch("");
@@ -270,7 +298,15 @@ export function AgentFormDialog({
     };
   }, [open]);
 
+  const effectiveHarnessFields = (payload: Record<string, unknown>) => openMaFields(
+    editingAgent ? materializeAgentUpdate(agentToPreservedConfig(editingAgent), payload) : payload,
+  );
+
   const persistAgent = async (payload: Record<string, unknown>): Promise<Agent> => {
+    if (harnessLoading || !harnessCatalog) throw new Error(harnessError || "Harness catalog is not ready. Retry before saving.");
+    const fields = effectiveHarnessFields(payload);
+    const harnessProblem = harnessValidationError(harnessCatalog, fields.harness, fields);
+    if (harnessProblem) throw new Error(harnessProblem);
     if (isEdit && editingAgent) {
       const updated = await managedApi.agents.update(editingAgent.id, {
         ...payload,
@@ -359,6 +395,7 @@ export function AgentFormDialog({
   };
 
   const selectTemplate = (tmpl: AgentTemplate) => {
+    setHarness(undefined);
     setMultiagent(undefined);
     if (tmpl.id === "blank") {
       setForm({ ...INITIAL_FORM });
@@ -392,6 +429,11 @@ export function AgentFormDialog({
     // Unsupported configurations remain reachable in code mode for explicit migration.
     if (!forCode || !unsupported) validateMultiagent(multiagent);
     const payload = mergeFormIntoConfig(form, preservedConfig, { forUpdate: isEdit });
+    const fields = openMaFields(payload);
+    if (harness === undefined) delete fields.harness;
+    else fields.harness = harness;
+    if (Object.keys(fields).length) payload._oma = fields;
+    else delete payload._oma;
     if (multiagent === undefined) delete payload.multiagent;
     else payload.multiagent = multiagent;
     return payload;
@@ -416,8 +458,22 @@ export function AgentFormDialog({
         const config = isEdit
           ? materializeAgentUpdate(preservedConfig ?? {}, parsed)
           : parsed;
+        if (isEdit && editingAgent) {
+          // An update editor contains a patch against the saved agent, not the last preview.
+          // Retain explicit extension clears in the form baseline so code round-trips stay lossless.
+          const saved = agentToPreservedConfig(editingAgent);
+          const extensionPatch = Object.hasOwn(parsed, "_oma") ? { _oma: parsed._oma } : {};
+          const fields = openMaFields(materializeAgentUpdate(saved, extensionPatch));
+          for (const [key, value] of Object.entries(openMaFields(parsed))) {
+            if (value === null) fields[key] = null;
+          }
+          if (Object.keys(fields).length) config._oma = fields;
+          else delete config._oma;
+        }
         setPreservedConfig(config);
         setForm(configToForm(config));
+        // Preserve explicit null/omission in an update patch, not only the materialized value.
+        setHarness(openMaFields(parsed).harness);
         // Preserve the user's update patch rather than materializing omitted/null fields.
         setMultiagent(parsed.multiagent as MultiagentDraft | null | undefined);
       } catch (error) {
@@ -493,6 +549,20 @@ export function AgentFormDialog({
   // Empty string when nothing matches (e.g. paste mode with an unknown model).
   const selectedCardId =
     form.modelCardId || modelCards.find((mc) => mc.model_id === form.model)?.id || "";
+
+  let harnessFields: Record<string, unknown> = {};
+  let formConfigError = "";
+  if (createMode === "form") {
+    try {
+      // Preview the same effective payload that persistAgent validates, not the saved baseline.
+      harnessFields = effectiveHarnessFields(formToConfig(true));
+    } catch (error) {
+      // Partially edited metadata/MCP JSON must not throw during rendering.
+      formConfigError = error instanceof Error ? error.message : "Invalid config";
+    }
+  }
+  const effectiveHarness = harness === undefined && isEdit ? harnessFields.harness : harness;
+  const harnessProblem = formConfigError || (harnessCatalog ? harnessValidationError(harnessCatalog, effectiveHarness, harnessFields) : "");
 
   if (!open) {
     // Render the MCP picker anyway? No — it only makes sense while the
@@ -723,6 +793,9 @@ export function AgentFormDialog({
                     inputCls={inputCls}
                     modelCards={modelCards}
                     selectedCardId={selectedCardId}
+                    harnessPicker={<HarnessPicker value={effectiveHarness} fields={harnessFields} configError={formConfigError} onChange={setHarness}
+                      catalog={harnessCatalog} loading={harnessLoading} error={harnessError}
+                      retry={() => setHarnessRefresh((value) => value + 1)} />}
                   />
                 )}
 
@@ -782,7 +855,7 @@ export function AgentFormDialog({
                     {t.common.cancel}
                   </Button>
                   {createMode === "form" ? (
-                    <Button onClick={create} disabled={!form.name || saving}>
+                    <Button onClick={create} disabled={!form.name || saving || harnessLoading || !harnessCatalog || !!harnessProblem}>
                       {saving
                         ? isEdit
                           ? t.common.saving
@@ -831,6 +904,7 @@ interface BasicTabProps {
   inputCls: string;
   modelCards: ModelCard[];
   selectedCardId: string;
+  harnessPicker: React.ReactNode;
 }
 
 function BasicTab({
@@ -840,6 +914,7 @@ function BasicTab({
   inputCls,
   modelCards,
   selectedCardId,
+  harnessPicker,
 }: BasicTabProps) {
   return (
     <div className="space-y-3">
@@ -860,6 +935,7 @@ function BasicTab({
           placeholder="Coding Assistant"
         />
       </div>
+      {harnessPicker}
       {/* Model picker — see comments at the original call site. */}
       {modelCards.length === 0 ? (
           <p className="text-xs text-fg-subtle bg-bg-surface px-3 py-2 rounded-lg">

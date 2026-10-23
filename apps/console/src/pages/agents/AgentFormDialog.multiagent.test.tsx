@@ -12,6 +12,7 @@ beforeEach(() => update.mockClear());
 it("saves enabled inline-only configuration through the API", async () => {
   open();
   fireEvent.click(screen.getByRole("checkbox", { name: "启用子 Agent" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(update).toHaveBeenCalledWith("a", expect.objectContaining({
     multiagent: { type: "multiagent_20261001", subagents: { type: "enabled", inline_agents: { type: "enabled" }, predefined_agents: [] } }, version: 1,
