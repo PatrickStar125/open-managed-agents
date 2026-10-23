@@ -117,6 +117,7 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     sessionRegistry,
     resolveNodeMcpProxyTarget,
     resolveNodeInferenceUpstream,
+    managedAcpCapabilities,
     managedRuntimeRunner,
     managedRuntimeReaders,
     managedSessionRuntimeStream,
@@ -241,7 +242,8 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     },
     resolveBearerToken: async ({ token, method, path }) => {
       if (managedEnvironmentWorkSessionTokenCrypto === null) return null;
-      const scoped = await authenticateEnvironmentWorkSessionBearer({
+      const scoped = await managedAcpCapabilities.authenticate({ token, method, path })
+        ?? await authenticateEnvironmentWorkSessionBearer({
         token,
         method,
         path,

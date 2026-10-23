@@ -207,7 +207,7 @@ export function copyInboundHeadersForUpstream(inboundHeaders: Headers): Headers 
   const outbound = new Headers();
   for (const [name, value] of inboundHeaders.entries()) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP.has(lower) || INBOUND_CREDENTIAL_HEADERS.has(lower)) continue;
+    if (HOP_BY_HOP.has(lower) || INBOUND_CREDENTIAL_HEADERS.has(lower) || lower.startsWith("x-oma-")) continue;
     outbound.set(name, value);
   }
   return outbound;
@@ -275,28 +275,52 @@ export async function forwardHostedInferenceRequest(input: {
   fetcher?: typeof fetch;
 }): Promise<Response> {
   const parsed = parseHostedInferenceSubPath(input.subPath);
+  const queryIndex = parsed.relativeSubPath.indexOf("?");
+  const path = queryIndex < 0 ? parsed.relativeSubPath : parsed.relativeSubPath.slice(0, queryIndex);
+  const query = queryIndex < 0 ? "" : parsed.relativeSubPath.slice(queryIndex);
+  // This gateway is a pinned-model inference capability, not a provider API
+  // tunnel. Batch/files/fine-tuning and other nested-model endpoints are not
+  // supported until their complete model semantics can be enforced.
+  const gemini = /^(v1(?:beta)?\/models\/)[^/:?#]+:(generateContent|streamGenerateContent|countTokens)$/.exec(path);
+  const jsonModelEndpoint = /^(?:v1\/)?(?:messages(?:\/count_tokens)?|chat\/completions|responses)$/.test(path);
+  const modelList = /^(?:v1\/)?models$/.test(path) && input.method.toUpperCase() === "GET";
+  if (!(input.method.toUpperCase() === "POST" && (gemini || jsonModelEndpoint)) && !modelList) {
+    return Response.json({ error: "inference_endpoint_unsupported" }, { status: 400 });
+  }
+  const protocol: InferenceWireProtocol | null = gemini ? "gemini"
+    : /^(?:v1\/)?messages(?:\/count_tokens)?$/.test(path) ? "anthropic-messages"
+    : /^(?:v1\/)?chat\/completions$/.test(path) ? "openai-chat"
+    : /^(?:v1\/)?responses$/.test(path) ? "openai-responses" : parsed.protocol;
+  // OpenAI chat and responses share a prefix; other prefixes must match the
+  // endpoint semantics. A legacy unprefixed route is checked the same way.
+  if (parsed.protocol && protocol && parsed.protocol !== protocol
+    && !(parsed.protocol.startsWith("openai-") && protocol.startsWith("openai-"))) {
+    return Response.json({ error: "inference_protocol_unsupported", protocol }, { status: 409 });
+  }
+  let subPath = input.subPath;
+  if (gemini) {
+    const wireModel = input.upstream.wireModel.replace(/^models\//, "");
+    if (!/^[A-Za-z0-9._-]+$/.test(wireModel)) {
+      return Response.json({ error: "inference_model_unsupported" }, { status: 409 });
+    }
+    parsed.relativeSubPath = `${gemini[1]}${wireModel}:${gemini[2]}${query}`;
+    subPath = parsed.protocol === "gemini" ? `gemini/${parsed.relativeSubPath}` : parsed.relativeSubPath;
+  }
   let upstreamUrl: string | null = null;
   const outbound = copyInboundHeadersForUpstream(input.inboundHeaders);
-  if (
-    parsed.protocol
-    && input.upstream.protocolEndpoints
-    && input.upstream.protocolEndpoints.length > 0
-  ) {
-    const endpoint = selectProtocolEndpoint(
-      input.upstream.protocolEndpoints,
-      parsed.protocol,
-    );
+  if (protocol && input.upstream.protocolEndpoints !== undefined) {
+    const endpoint = selectProtocolEndpoint(input.upstream.protocolEndpoints, protocol);
     if (!endpoint) {
       return Response.json(
-        { error: "inference_protocol_unsupported", protocol: parsed.protocol },
+        { error: "inference_protocol_unsupported", protocol },
         { status: 409 },
       );
     }
     upstreamUrl = resolveProtocolUpstreamUrl(endpoint, parsed.relativeSubPath);
-    applyUpstreamCredentialsForProtocol(outbound, parsed.protocol, input.upstream.apiKey);
+    applyUpstreamCredentialsForProtocol(outbound, protocol, input.upstream.apiKey);
   } else {
     upstreamUrl = resolveUpstreamInferenceUrl({
-      subPath: input.subPath,
+      subPath,
       baseURL: input.upstream.baseURL,
       provider: input.upstream.provider,
     });
@@ -316,8 +340,33 @@ export async function forwardHostedInferenceRequest(input: {
     headers: outbound,
     redirect: "manual",
   };
-  if (input.body !== null && !["GET", "HEAD"].includes(input.method.toUpperCase())) {
-    init.body = input.body;
+  if (input.method.toUpperCase() === "POST") {
+    // All supported inference endpoints use JSON. Do not let a caller bypass
+    // model pinning by omitting or forging Content-Type.
+    try {
+      if (input.body === null) throw new Error("missing body");
+      const body: unknown = JSON.parse(new TextDecoder().decode(input.body));
+      if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error("invalid body");
+      if (gemini?.[2] === "countTokens") {
+        // CountTokensRequest embeds a GenerateContentRequest. Proto JSON
+        // accepts both field spellings; pin both rather than only the URL.
+        const record = body as Record<string, unknown>;
+        for (const field of ["generateContentRequest", "generate_content_request"]) {
+          const nested = record[field];
+          if (nested === undefined || nested === null) continue;
+          if (typeof nested !== "object" || Array.isArray(nested)) throw new Error("invalid nested request");
+          record[field] = { ...nested, model: `models/${input.upstream.wireModel.replace(/^models\//, "")}` };
+        }
+        init.body = JSON.stringify(record);
+      } else {
+        init.body = jsonModelEndpoint
+          ? JSON.stringify({ ...body, model: input.upstream.wireModel })
+          : input.body;
+      }
+      outbound.set("content-type", "application/json");
+    } catch {
+      return Response.json({ error: "invalid_inference_body" }, { status: 400 });
+    }
   }
   return fetcher(upstreamUrl, init);
 }

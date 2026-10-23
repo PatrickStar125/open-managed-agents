@@ -225,7 +225,7 @@ export class AcpSandboxHarness implements HarnessInterface {
       const recoveryReason = this.#semanticRecoveryReason;
       const promptText = recoveryReason
         ? buildAcpSemanticRecoveryPrompt(
-            runtime.history.getEvents(),
+            ctx.acpRecoveryHistory ?? runtime.history.getEvents(),
             ctx.userMessage,
             { reason: recoveryReason },
           )
@@ -279,8 +279,14 @@ export class AcpSandboxHarness implements HarnessInterface {
       if (leaseLost && this.#session) {
         const fencedSession = this.#session;
         this.#resumeAcpSessionId = fencedSession.acpSessionId || null;
-        this.#session = null;
-        await fencedSession.dispose().catch(() => undefined);
+        try {
+          await fencedSession.dispose();
+          this.#session = null;
+        } catch (disposeError) {
+          // Retain the failed disposal barrier so the host's finally/dispose
+          // also rejects instead of capturing/deleting state under a live child.
+          this.#emitError(runtime, disposeError instanceof Error ? disposeError.message : String(disposeError));
+        }
       }
       await translator.flush(aborted ? "aborted" : "completed");
       if (!runtime.abortSignal?.aborted) {
@@ -303,12 +309,10 @@ export class AcpSandboxHarness implements HarnessInterface {
     this.#runtime = null;
     this.#preparation = null;
     this.#semanticRecoveryReason = null;
+    // A failed dispose means exit was not confirmed. Do not race the live
+    // process by copying or deleting any of its native state.
+    await session?.dispose();
     let failure: unknown;
-    try {
-      await session?.dispose();
-    } catch (error) {
-      failure = error;
-    }
     // A host shutdown is a placement change, not logical session deletion.
     // Keep the native ACP id and session artifacts in /workspace so a
     // replacement host can resume after restoring the provider filesystem

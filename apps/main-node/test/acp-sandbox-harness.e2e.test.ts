@@ -197,6 +197,45 @@ describe("ACP sandbox harness", () => {
     }
   });
 
+  it.each(["shutdown", "destroy", "lease-loss", "wait-transport-error"] as const)("does not capture or delete native state when exit is unconfirmed: %s", async reason => {
+    const workdir = await mkdtemp(join(tmpdir(), "oma-acp-unconfirmed-exit-"));
+    const sandbox = new LocalSubprocessSandbox({ workdir });
+    const spawn = sandbox.spawnDuplexProcess.bind(sandbox);
+    let child: Awaited<ReturnType<typeof spawn>> | undefined;
+    let rejectExit!: (error: Error) => void;
+    sandbox.spawnDuplexProcess = async spec => {
+      child = await spawn(spec);
+      const exited = new Promise<never>((_resolve, reject) => { rejectExit = reject; });
+      return { ...child, exited, kill: async () => {} };
+    };
+    const events: SessionEvent[] = [];
+    const runtime = createRuntime(sandbox, events);
+    registerCoreHarnesses();
+    const harness = resolveHarness("acp-sandbox");
+    const agent = { id: "unconfirmed", name: "Unconfirmed", model: "unused", system: "", tools: [], harness: "acp-sandbox", acp: { agent: { id: "claude-acp", command: process.execPath, args: ["-e", fakeAcpAgentSource], cwd: "/workspace" } }, version: 1 } as unknown as AgentConfig;
+    try {
+      await harness.run(createContext(agent, runtime, "prepare native state"));
+      const exec = vi.spyOn(sandbox, "exec");
+      const write = vi.spyOn(sandbox, "writeFile");
+      if (reason === "lease-loss") {
+        Object.assign(sandbox, {
+          runtimeHandle: () => ({ provider: "test", runtimeId: "lease-loss" }),
+          runtimeCapabilities: () => ({ lease: true, suspend: [], checkpoint: [] }),
+          status: async () => "running", renewLease: async () => { throw new Error("lost"); },
+          suspend: async () => {}, resume: async () => {}, checkpoint: async () => {},
+        });
+        await harness.run(createContext(agent, runtime, "lose the lease"));
+        exec.mockClear(); write.mockClear();
+      }
+      if (reason === "wait-transport-error") rejectExit(new Error("connection reset"));
+      await expect(harness.dispose?.(reason === "lease-loss" || reason === "wait-transport-error" ? "shutdown" : reason)).rejects.toThrow(/exit.*not confirmed/i);
+      expect(exec).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      await child?.kill("SIGKILL"); await child?.exited; await sandbox.destroy();
+    }
+  }, 12_000);
+
   it("deletes the isolated native session on logical harness destruction", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "oma-acp-session-destroy-"));
     const sandbox = new LocalSubprocessSandbox({ workdir });

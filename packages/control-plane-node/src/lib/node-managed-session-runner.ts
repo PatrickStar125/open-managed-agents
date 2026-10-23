@@ -189,6 +189,7 @@ export interface DefaultNodeManagedSessionRunnerDependencies {
   buildHarness(): HarnessInterface;
   buildHarnessContext(input: ManagedRunnerContext & ManagedRunnerSubagentContext & {
     acceptedEvents: NodeManagedSessionRunnerAcceptInput["events"];
+    executionFence?: SessionExecutionFence;
     sandbox: SandboxExecutor;
     runtime: ManagedNodeHarnessRuntime;
     model: HarnessContext["model"];
@@ -661,6 +662,7 @@ export class DefaultNodeManagedSessionRunner
           ...context,
           ...subagentContext,
           acceptedEvents: input.events,
+          executionFence: input.executionFence,
           sandbox,
           runtime,
           model,

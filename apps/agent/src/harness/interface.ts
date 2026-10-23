@@ -200,6 +200,9 @@ export interface HarnessRuntime {
 export interface HarnessContext {
   agent: AgentConfig;
   userMessage: UserMessageEvent;
+  /** Host-scoped canonical history for ACP recovery, excluding this execution's
+   * accepted inputs and future queued inputs. Undefined retains legacy hosts. */
+  acpRecoveryHistory?: readonly SessionEvent[];
   /**
    * The OMA session id this turn belongs to. Optional during the transition
    * for legacy harnesses; AcpProxyHarness needs it to address the

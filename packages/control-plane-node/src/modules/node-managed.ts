@@ -15,6 +15,9 @@
  * index.ts is the executable entrypoint (process.env, listen, signals).
  */
 
+import { createNodeManagedAcpCapabilities } from "../lib/node-managed-acp-capability.js";
+import { loadNodeManagedAcpRecoveryHistory } from "../lib/node-managed-acp-recovery.js";
+import { resolveProtocolEndpointsFromModelCard } from "@open-managed-agents/inference-proxy";
 import { resolveManagedSubagentSession } from "../lib/node-managed-subagents.js";
 import { installEnvironmentPackages } from "../lib/environment-packages";
 import { injectVaultEnvironment, vaultEnvironmentVariables } from "../lib/vault-environment";
@@ -59,7 +62,7 @@ import { SqlEnvironmentWorkStore, type EnvironmentWorkSecretCipher } from "@open
 import { SqlDeploymentAgentSource, SqlDeploymentVaultSource, SqlEnvironmentPersistence, SqlFileMetadataPersistence, SqlMemoryStoreSource, SqlManagedSessionsComposition, SqlPersistedSessionEventStream, SqlReplicatedSessionEventStream, SqlSessionEnvironmentSource, SqlSessionSource, SqlSessionRuntimeProjectionPersistence } from "@open-managed-agents/managed-agents-adapters-sql";
 import { createSqlSessionRuntimeReaders, ensureSessionExecutionClaimLockSchema, SqlSessionExecutionCoordinator } from "@open-managed-agents/session-runtime-sql";
 import { MemorySessionRealtimeHub } from "@open-managed-agents/session-realtime-memory";
-import { AnthropicMessagesDreamCurator, ApplicationDreamMemoryWorkspace, ModelCardCatalogSource, CronDeploymentSchedulePlanner, EnvironmentAwareSessionEventDispatchRouter, EnvironmentAwareSessionEventStreamRouter, EnvironmentAwareSessionLifecycleRouter, TimerEnvironmentWorkAvailabilityWaiter, McpOAuthCredentialValidationProbe, inProcessDreamExecutionSchedulerModule, LocalTunnelProvisioner, SealedEnvironmentWorkSessionCredentialIssuer, StandardWebhookEnvironmentWorkWakeup, DeduplicatingDreamCurator, WebCryptoTunnelCertificateAuthority, WebCryptoTunnelTokenManager, WebCryptoMemoryContentDescriptor, ZipSkillPackageCompiler, synchronizeManagedSessionMemoryWorkspaces } from "@open-managed-agents/managed-agents-adapters-runtime";
+import { encodeRuntimeSessionEvent, AnthropicMessagesDreamCurator, ApplicationDreamMemoryWorkspace, ModelCardCatalogSource, CronDeploymentSchedulePlanner, EnvironmentAwareSessionEventDispatchRouter, EnvironmentAwareSessionEventStreamRouter, EnvironmentAwareSessionLifecycleRouter, TimerEnvironmentWorkAvailabilityWaiter, McpOAuthCredentialValidationProbe, inProcessDreamExecutionSchedulerModule, LocalTunnelProvisioner, SealedEnvironmentWorkSessionCredentialIssuer, StandardWebhookEnvironmentWorkWakeup, DeduplicatingDreamCurator, WebCryptoTunnelCertificateAuthority, WebCryptoTunnelTokenManager, WebCryptoMemoryContentDescriptor, ZipSkillPackageCompiler, synchronizeManagedSessionMemoryWorkspaces } from "@open-managed-agents/managed-agents-adapters-runtime";
 
 import { BlobFileContentStore } from "@open-managed-agents/managed-agents-adapters-blob";
 
@@ -283,13 +286,7 @@ export async function createManagedNodeRuntime(
   async function resolveNodeInferenceUpstream(input: {
     tenantId: string;
     sessionId: string;
-  }): Promise<{
-    wireModel: string;
-    apiKey: string;
-    baseURL?: string;
-    provider?: string;
-    customHeaders?: Record<string, string>;
-  } | null> {
+  }): Promise<import("../lib/http-inference-proxy.js").NodeInferenceUpstream | null> {
     const managedContext = await managedRuntimeReaders.executionContext.find({
       workspaceId: input.tenantId,
       sessionId: input.sessionId,
@@ -299,19 +296,27 @@ export async function createManagedNodeRuntime(
         tenantId: input.tenantId,
         sessionId: input.sessionId,
       }).catch(() => null))?.agent_snapshot?.model;
-    if (!agentModel) return null;
+    if (!agentModel || managedContext?.session.archivedAt) return null;
     try {
-      const creds = await resolveNodeModelCreds(input.tenantId, agentModel);
-      return {
-        wireModel: creds.wireModel,
-        apiKey: creds.apiKey,
-        baseURL: creds.baseURL,
-        provider: creds.provider,
-        customHeaders: creds.customHeaders,
-      };
+      // Hosted sandboxes must never fall back to a platform environment key.
+      return await resolveHostedModel(input.tenantId, agentModel);
     } catch {
       return null;
     }
+  }
+
+  async function resolveHostedModel(tenantId: string, model: string | { id: string }) {
+    const handle = typeof model === "string" ? model : model.id;
+    const card = await modelCardsService.findByModelId({ tenantId, modelId: handle });
+    if (!card || card.archived_at) throw new Error(`Node ACP sandbox requires an active workspace model card for "${handle}"`);
+    const apiKey = await modelCardsService.getApiKey({ tenantId, cardId: card.id });
+    if (!apiKey) throw new Error(`Node ACP sandbox model card "${handle}" has no credential`);
+    return {
+      wireModel: card.model, apiKey, provider: card.provider,
+      baseURL: card.base_url ?? undefined,
+      customHeaders: card.custom_headers ?? undefined,
+      protocolEndpoints: resolveProtocolEndpointsFromModelCard({ providerId: card.provider, baseUrl: card.base_url }),
+    };
   }
 
   const nodeMcpProxyBinding = createNodeMcpProxyBinding({
@@ -363,6 +368,14 @@ export async function createManagedNodeRuntime(
       && execution.attempt.generation === fence.generation
       && Date.parse(execution.attempt.leaseExpiresAt) > Date.now();
   }
+
+  const managedAcpCapabilities = createNodeManagedAcpCapabilities({
+    crypto: secrets?.cipherFor("managed.node-acp.execution-token") ?? null,
+    gatewayBaseUrl: config.http.publicBaseUrl,
+    now: () => new Date(),
+    findExecution: input => managedSessionExecutionCoordinator.find(input),
+    findSession: async input => (await managedRuntimeReaders.executionContext.find(input))?.session ?? null,
+  });
 
   const managedSessionOutputCollector = new NodeManagedSessionOutputCollector({
     outputsRoot,
@@ -482,7 +495,9 @@ export async function createManagedNodeRuntime(
         }, "Environment packages ready"),
       });
       // Vault `environment_variable` credentials, for the commands the Agent runs.
-      const injected = await injectVaultEnvironment(
+      // Whole-brain ACP receives only scoped service capabilities. Raw Vault
+      // environment credentials belong to the host path, never this sandbox.
+      const injected = session.agent.openma?.harness === "acp-sandbox" ? [] : await injectVaultEnvironment(
         sandbox,
         await vaultEnvironmentVariables(managedCredentialStore, workspaceId, session.vaultIds),
       );
@@ -572,10 +587,17 @@ export async function createManagedNodeRuntime(
         executionId: input.executionFence.executionId,
       }, "Completed Session output could not be published as an Agents API artifact");
     }),
-    buildModel: ({ workspaceId, session }) =>
-      buildNodeLanguageModel(workspaceId, session.agent.model),
+    buildModel: async ({ workspaceId, session }) => {
+      if (session.agent.openma?.harness === "acp-sandbox") {
+        await resolveHostedModel(workspaceId, session.agent.model);
+      }
+      return buildNodeLanguageModel(workspaceId, session.agent.model);
+    },
     buildTools: async ({ workspaceId, session, environment, sandbox, subagents, delegateToAgent }) => {
       const agent = toLegacyHarnessAgentConfig(session);
+      // ACP owns its tool clients inside the sandbox; do not eagerly open
+      // a second host-side MCP connection or resolve unrelated tool models.
+      if (agent.harness === "acp-sandbox") return {};
       const creds = await resolveNodeModelCreds(workspaceId, agent.model);
       const auxiliary = await resolveNodeManagedAuxiliaryToolModel(
         session,
@@ -606,11 +628,34 @@ export async function createManagedNodeRuntime(
     disposeTools,
     buildHarness: () => ({
       run: async (ctx) => {
-        await resolveHarness(ctx.agent.harness).run(ctx);
+        const harness = resolveHarness(ctx.agent.harness);
+        try {
+          if (ctx.agent.harness === "acp-sandbox") await harness.onSessionInit?.(ctx, ctx.runtime);
+          await harness.run(ctx);
+        } finally {
+          // A Node execution owns this process; retain native state for the
+          // next attempt but never retain a process with an expired bearer.
+          if (ctx.agent.harness === "acp-sandbox") await harness.dispose?.("shutdown");
+        }
       },
     }),
     buildHarnessContext: async (input) => {
       const agent = toLegacyHarnessAgentConfig(input.session);
+      let sandboxEnv: HarnessContext["env"] | undefined;
+      let acpRecoveryHistory: HarnessContext["acpRecoveryHistory"];
+      if (agent.harness === "acp-sandbox") {
+        const model = await resolveHostedModel(input.workspaceId, agent.model);
+        const capability = await managedAcpCapabilities.issue(input);
+        acpRecoveryHistory = await loadNodeManagedAcpRecoveryHistory({
+          sql, history: managedRuntimeReaders.history,
+          fence: input.executionFence!, acceptedEvents: input.acceptedEvents,
+        });
+        sandboxEnv = {
+          ANTHROPIC_API_KEY: "",
+          mcpProxy: capability,
+          hostedInference: { ...capability, model: { providerId: model.provider, baseUrl: model.baseURL ?? null, protocolEndpoints: model.protocolEndpoints } },
+        };
+      }
       const creds = await resolveNodeModelCreds(input.workspaceId, agent.model);
       const modelSettings = readHarnessAgentModelSettings(agent.model);
       const pi = createPiModelRuntime({
@@ -648,7 +693,14 @@ export async function createManagedNodeRuntime(
       const feishuTools = await resolveFeishuAgentTools(input.session.id);
       return {
         agent,
-        userMessage: { type: "user.message", content: [] },
+        acpRecoveryHistory,
+        // History may already include later queued executions. Consume only
+        // this execution's accepted messages, in order, without dropping any.
+        userMessage: {
+          type: "user.message",
+          content: input.acceptedEvents.filter(event => event.type === "user.message").flatMap(event =>
+            (encodeRuntimeSessionEvent(event) as import("@open-managed-agents/shared").UserMessageEvent).content),
+        },
         session_id: input.session.id,
         tenant_id: input.workspaceId,
         tools: { ...input.tools, ...feishuTools },
@@ -658,7 +710,7 @@ export async function createManagedNodeRuntime(
         rawSystemPrompt,
         platformReminders,
         ...(skillMounts?.length ? { skillMounts } : {}),
-        env: {
+        env: sandboxEnv ?? {
           ANTHROPIC_API_KEY: creds.apiKey,
           ANTHROPIC_BASE_URL: creds.baseURL,
         },
@@ -1246,6 +1298,7 @@ export async function createManagedNodeRuntime(
   return {
     resolveNodeMcpProxyTarget,
     resolveNodeInferenceUpstream,
+    managedAcpCapabilities,
     managedRuntimeRunner,
     managedRuntimeReaders,
     managedSessionExecutionWorker,
