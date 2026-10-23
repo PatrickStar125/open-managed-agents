@@ -50,11 +50,6 @@ export {
   type EnvironmentRoutesOptions,
   type EnvironmentSandboxImageCatalog,
 } from "./routes/environments";
-export {
-  buildSandboxImageRoutes,
-  type SandboxImageListingSource,
-  type SandboxImageListingView,
-} from "./routes/sandbox-images";
 export type {
   OpenMaEnvironmentExtensionBody,
   OpenMaEnvironmentResponse,

@@ -1,3 +1,10 @@
+// Sandbox images — the operator's SANDBOX_IMAGES catalog, read-only.
+//
+// OMA-only (no CMA counterpart), mounted at /v1/oma/sandbox_images by both
+// the Node control plane and the Cloudflare app so the Console can always
+// probe it. Selections are written through `_oma.sandbox_image` on the
+// managed /v1/environments routes.
+
 import { Hono } from "hono";
 
 /** One selectable image as exposed to API clients and the Console. The

@@ -23,6 +23,7 @@ import {
   buildMeRoutes,
   buildTenantRoutes,
   mintApiKeyOnStorage,
+  buildSandboxImageRoutes,
 } from "@open-managed-agents/http-routes";
 import {
   buildAgentRoutes as buildManagedAgentRoutes,
@@ -44,7 +45,6 @@ import {
   buildVaultRoutes as buildManagedVaultRoutes,
   buildUserProfileRoutes as buildManagedUserProfileRoutes,
   buildManagedSessionsApi,
-  buildSandboxImageRoutes,
 } from "@open-managed-agents/managed-agents-api";
 import {
   SessionRuntimeProjectionApplicationService,
