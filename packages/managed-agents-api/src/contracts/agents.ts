@@ -67,7 +67,10 @@ export type OpenMaMcpServerBody =
 export interface OpenMaAgentAcpBody {
   agent: {
     id?: string;
-    command: string;
+    /** Explicit process; exactly one of `command` or `registry` is set. */
+    command?: string;
+    /** Pinned ACP registry reference such as `claude-acp@0.94.0`. */
+    registry?: string;
     args?: string[];
     env?: Record<string, string | null>;
     cwd?: string;
@@ -186,12 +189,16 @@ const agentAcpSchema: z.ZodType<OpenMaAgentAcpBody> = z
     agent: z
       .object({
         id: z.string().min(1).optional(),
-        command: z.string().min(1),
+        command: z.string().min(1).optional(),
+        registry: z.string().min(1).optional(),
         args: z.array(z.string()).optional(),
         env: z.record(z.string(), z.string().nullable()).optional(),
         cwd: z.string().min(1).optional(),
       })
-      .strict(),
+      .strict()
+      .refine((agent) => (agent.command === undefined) !== (agent.registry === undefined), {
+        message: "ACP agent requires exactly one of command or registry",
+      }),
     restart: z
       .object({
         mode: z.enum(["never", "on-crash", "always"]),

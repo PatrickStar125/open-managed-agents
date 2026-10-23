@@ -47,6 +47,32 @@ describe("OMA agents use the shared application", () => {
     }
     expect(createAgent).not.toHaveBeenCalled();
   });
+  it("accepts an acp-sandbox agent pinned by registry reference and round-trips it", async () => {
+    let stored: any;
+    const application = new AgentsApplicationService({ workspaceId: "w", store: {
+      insert: async ({ agent }: any) => (stored = agent),
+      findCurrent: async () => stored ?? null,
+    } as never, clock: { now: () => new Date("2026-10-23T00:00:00Z") }, ids: { nextAgentId: () => "a" } });
+    const app = buildAgentRoutes({ application });
+    const acp = { agent: { registry: "claude-acp@0.94.0", args: ["--verbose"] } };
+    const res = await app.request("/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "n", model: "m", _oma: { harness: "acp-sandbox", acp } }) });
+    expect(res.status).toBe(201);
+    expect((await res.json())._oma).toMatchObject({ harness: "acp-sandbox", acp });
+    expect(stored.openma.acp.agent).toEqual({ registry: "claude-acp@0.94.0", args: ["--verbose"] });
+  });
+  it.each([
+    [{ harness: "acp-sandbox" }, 422, "_oma.acp.agent.command or _oma.acp.agent.registry is required for acp-sandbox"],
+    [{ harness: "acp-sandbox", acp: { agent: { args: ["x"] } } }, 422, "_oma.acp.agent.command or _oma.acp.agent.registry is required for acp-sandbox"],
+    [{ harness: "acp-sandbox", acp: { agent: { command: "c", registry: "claude-acp@0.94.0" } } }, 400, "exactly one of command or registry"],
+  ])("rejects acp-sandbox without exactly one process source: %j", async (oma, status, message) => {
+    const createAgent = vi.fn();
+    const application = new AgentsApplicationService({ workspaceId: "w", store: { insert: createAgent } as never, clock: { now: () => new Date() }, ids: { nextAgentId: () => "a" } });
+    const app = buildAgentRoutes({ application });
+    const res = await app.request("/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "n", model: "m", _oma: oma }) });
+    expect(res.status).toBe(status);
+    expect(JSON.stringify(await res.json())).toContain(message);
+    expect(createAgent).not.toHaveBeenCalled();
+  });
   it("blocks deletion for active sessions and evals", async () => {
     const remove = vi.fn();
     const services = { agents: { get: async () => ({ id: "a" }), delete: remove } } as never;

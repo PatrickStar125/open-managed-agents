@@ -164,7 +164,8 @@ const openMaAgentAcpResponseSchema = z
     agent: z
       .object({
         id: z.string().min(1).optional(),
-        command: z.string().min(1),
+        command: z.string().min(1).optional(),
+        registry: z.string().min(1).optional(),
         args: z.array(z.string()).optional(),
         env: z.record(z.string(), z.string()).optional(),
         cwd: z.string().min(1).optional(),

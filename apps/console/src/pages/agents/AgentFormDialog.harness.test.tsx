@@ -89,6 +89,24 @@ it("blocks a missing required advanced field even in JSON, then accepts the real
   await waitFor(() => expect(writes.create).toHaveBeenCalled());
 });
 
+it("accepts either alternative of a one-of requirement and names both when neither is set", async () => {
+  server.use(http.get("/v1/oma/harnesses", () => HttpResponse.json({ ...catalog, data: [
+    ...catalog.data,
+    { ...catalog.data[1], id: "acp-sandbox", requirements: ["acp.agent.command|acp.agent.registry"] },
+  ] })));
+  open();
+  await screen.findByText(/Control-plane process/);
+  json();
+  const config = { name: "Sandbox", model: "m", _oma: { harness: "acp-sandbox" } };
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: JSON.stringify(config) } });
+  fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+  expect(await screen.findByText(/Missing required configuration: _oma.acp.agent.command or _oma.acp.agent.registry\./)).toBeInTheDocument();
+  expect(writes.create).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: JSON.stringify({ ...config, _oma: { ...config._oma, acp: { agent: { registry: "claude-acp@0.94.0" } } } }) } });
+  fireEvent.click(screen.getByRole("button", { name: "Create Agent" }));
+  await waitFor(() => expect(writes.create).toHaveBeenCalled());
+});
+
 it("validates required appendable prompts against the current form and saves without switching modes", async () => {
   server.use(http.get("/v1/oma/harnesses", () => HttpResponse.json({ ...catalog, data: [
     ...catalog.data,

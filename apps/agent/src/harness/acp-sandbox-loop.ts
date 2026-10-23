@@ -18,6 +18,7 @@ import type {
 import {
   captureAcpSandboxAgentState,
   hasRequiredAcpSandboxAgentState,
+  installAcpSandboxAgent,
   managedMcpProxyFromWorkEnvironment,
   materializeAcpSandboxAgentState,
   materializeHostedInferenceConfigFiles,
@@ -76,8 +77,8 @@ export class AcpSandboxHarness implements HarnessInterface {
     const runtime = ctx.runtime;
     this.#runtime = runtime;
     const config = ctx.agent.acp;
-    if (!config?.agent?.command) {
-      this.#emitError(runtime, "AcpSandboxHarness requires agent.acp.agent.command");
+    if (!config?.agent?.command && !config?.agent?.registry) {
+      this.#emitError(runtime, "AcpSandboxHarness requires agent.acp.agent.command or agent.acp.agent.registry");
       return;
     }
     if (!supportsDuplexProcess(runtime.sandbox)) {
@@ -95,10 +96,16 @@ export class AcpSandboxHarness implements HarnessInterface {
       return;
     }
 
-    const preparation = prepareAcpSandboxAgent({
-      sessionId: ctx.session_id,
-      agent: config.agent,
-    });
+    let preparation: AcpSandboxAgentPreparation;
+    try {
+      preparation = prepareAcpSandboxAgent({
+        sessionId: ctx.session_id,
+        agent: config.agent,
+      });
+    } catch (error) {
+      this.#emitError(runtime, error instanceof Error ? error.message : String(error));
+      return;
+    }
     const stateBinding = preparation.binding;
     const configKey = JSON.stringify({ config, stateAdapter: stateBinding.adapterId });
     await materializeAcpSandboxAgentState(runtime.sandbox, preparation);
@@ -140,6 +147,10 @@ export class AcpSandboxHarness implements HarnessInterface {
     });
     try {
       if (!this.#session) {
+        // Harbor-style install: pinned registry agents get their launcher
+        // before spawn. A failure rejects into the turn error below; it never
+        // falls back to a bare command or an unpinned package.
+        preparation = await installAcpSandboxAgent(runtime.sandbox, preparation);
         const acpRuntime = createAcpRuntime({
           type: "sandbox",
           sandbox: runtime.sandbox,

@@ -214,7 +214,7 @@ describe("Agent CRUD", () => {
       type: "error",
       error: {
         type: "invalid_request_error",
-        message: "_oma.acp.agent.command is required for acp-sandbox",
+        message: "_oma.acp.agent.command or _oma.acp.agent.registry is required for acp-sandbox",
       },
     });
   });

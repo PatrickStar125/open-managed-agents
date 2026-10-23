@@ -1,4 +1,4 @@
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -276,6 +276,68 @@ describe("ACP sandbox harness", () => {
     } finally {
       await harness.dispose?.("destroy");
       await sandbox.destroy();
+    }
+  });
+
+  it("installs a pinned registry agent in the sandbox and spawns it through the launcher", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "oma-acp-registry-"));
+    const host = await registryHost(workdir, { nodeMajor: 22 });
+    const sandbox = new LocalSubprocessSandbox({ workdir });
+    await sandbox.setEnvVars({ HOME: host.home, PATH: host.path, NVM_DIR: join(host.home, ".nvm") });
+    const events: SessionEvent[] = [];
+    const runtime = createRuntime(sandbox, events);
+    registerCoreHarnesses();
+    const harness = resolveHarness("acp-sandbox");
+    const agent = registryAgent("agent_acp_registry");
+
+    try {
+      await harness.run(createContext(agent, runtime, "first"));
+      await harness.run(createContext(agent, runtime, "second"));
+
+      expect(events.filter((event) => event.type === "session.error")).toEqual([]);
+      expect(events.filter((event) => event.type === "agent.message")).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "sandbox-acp:1:first" }] }),
+        expect.objectContaining({ content: [{ type: "text", text: "sandbox-acp:2:second" }] }),
+      ]);
+      // One long-lived child launched through the pinned package, not latest.
+      expect((await readFile(host.npxLog, "utf8")).trim().split("\n")).toEqual([
+        "-y @agentclientprotocol/claude-agent-acp@0.94.0",
+      ]);
+      // The claude-code native adapter still owns CLAUDE_CONFIG_DIR.
+      await expect(sandbox.readFile("/workspace/state-path.txt")).resolves.toMatch(
+        /\/session_acp_sandbox\/claude-code\/v1\/native$/,
+      );
+    } finally {
+      await harness.dispose?.("destroy");
+      await sandbox.destroy();
+      await rm(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails the turn without spawning when the registry install fails", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "oma-acp-registry-fail-"));
+    const host = await registryHost(workdir, { nodeMajor: 18 });
+    const sandbox = new LocalSubprocessSandbox({ workdir });
+    await sandbox.setEnvVars({ HOME: host.home, PATH: host.path, NVM_DIR: join(host.home, ".nvm") });
+    const events: SessionEvent[] = [];
+    const runtime = createRuntime(sandbox, events);
+    registerCoreHarnesses();
+    const harness = resolveHarness("acp-sandbox");
+
+    try {
+      await harness.run(createContext(registryAgent("agent_acp_registry_fail"), runtime, "first"));
+
+      expect(events.filter((event) => event.type === "agent.message")).toEqual([]);
+      expect(events.filter((event) => event.type === "session.error")).toEqual([
+        expect.objectContaining({
+          error: expect.stringMatching(/ACP agent install failed for claude-acp@0\.94\.0[\s\S]*nvm failed/),
+        }),
+      ]);
+      await expect(readFile(host.npxLog, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await harness.dispose?.("destroy");
+      await sandbox.destroy();
+      await rm(workdir, { recursive: true, force: true });
     }
   });
 
@@ -671,6 +733,42 @@ const ACP_PROFILE_CASES = [
   ["kimi-code", "kimi-code"],
   ["mimo", "mimo"],
 ] as const;
+
+function registryAgent(id: string): AgentConfig {
+  return {
+    id,
+    name: "Registry ACP agent",
+    model: "unused-by-acp",
+    system: "",
+    tools: [],
+    harness: "acp-sandbox",
+    acp: { agent: { registry: "claude-acp@0.94.0", cwd: "/workspace" } },
+    version: 1,
+    created_at: "2026-10-23T00:00:00.000Z",
+  } as unknown as AgentConfig;
+}
+
+/** A sandbox HOME and PATH whose `npx` runs the fake ACP agent and records its argv. */
+async function registryHost(
+  workdir: string,
+  options: { nodeMajor: number },
+): Promise<{ home: string; path: string; npxLog: string }> {
+  const home = join(workdir, ".test-home");
+  const bin = join(workdir, ".test-bin");
+  const npxLog = join(workdir, ".test-npx.log");
+  const agentSource = join(workdir, ".test-fake-acp-agent.cjs");
+  await mkdir(home, { recursive: true });
+  await mkdir(bin, { recursive: true });
+  await writeFile(agentSource, fakeAcpAgentSource);
+  const script = async (name: string, body: string) => {
+    await writeFile(join(bin, name), `#!/bin/sh\n${body}\n`);
+    await chmod(join(bin, name), 0o755);
+  };
+  await script("node", `echo v${options.nodeMajor}.0.0`);
+  await script("npx", `echo "$*" >> '${npxLog}'\nexec '${process.execPath}' '${agentSource}'`);
+  await script("curl", "echo 'curl: (7) Failed to connect' >&2; exit 7");
+  return { home, path: `${bin}:/usr/bin:/bin`, npxLog };
+}
 
 function createContext(
   agent: AgentConfig,

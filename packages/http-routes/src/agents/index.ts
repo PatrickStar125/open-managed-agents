@@ -33,7 +33,7 @@ export function buildAgentRoutes(deps: AgentRoutesDeps) {
       const extension = raw._oma ?? {};
       const harness = extension.harness ?? current?.openma?.harness;
       const acp = extension.acp === null ? undefined : extension.acp ?? current?.openma?.acp;
-      if (harness === "acp-sandbox" && !acp?.agent?.command) return c.json({ error: "_oma.acp.agent.command is required for acp-sandbox" }, 422);
+      if (harness === "acp-sandbox" && !acp?.agent?.command && !acp?.agent?.registry) return c.json({ error: "_oma.acp.agent.command or _oma.acp.agent.registry is required for acp-sandbox" }, 422);
       const binding = extension.runtime_binding === null ? null : extension.runtime_binding ?? current?.openma?.runtimeBinding;
       if (!binding && deps.validateModel) {
         for (const model of [raw.model, extension.aux_model]) {

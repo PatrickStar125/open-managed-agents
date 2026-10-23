@@ -118,7 +118,12 @@ export interface AgentConfig {
       /** Canonical ACP registry id. Enables the matching native-state adapter;
        * legacy records without it fall back to matching the command basename. */
       id?: string;
-      command: string;
+      /** Explicit process (Harbor's `local` distribution). Exactly one of
+       * `command` or `registry` is set. */
+      command?: string;
+      /** Pinned ACP registry reference such as `claude-acp@0.94.0`; the
+       * sandbox installs it and spawns a generated launcher. */
+      registry?: string;
       args?: string[];
       env?: Record<string, string | undefined>;
       cwd?: string;

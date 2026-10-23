@@ -28,7 +28,7 @@ export function registerHarness(input: string | HarnessDescriptor, factory: Harn
     !["host", "sandbox", "runtime", "unknown"].includes(descriptor.execution?.placement) ||
     (descriptor.capabilities?.runtime_binding !== null && typeof descriptor.capabilities?.runtime_binding !== "boolean") ||
     !Array.isArray(descriptor.requirements) ||
-    !descriptor.requirements.every((path) => typeof path === "string" && /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*$/.test(path))) {
+    !descriptor.requirements.every((path) => typeof path === "string" && /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*(\|[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*)*$/.test(path))) {
     throw new Error(`Invalid harness descriptor or factory: "${descriptor.id}"`);
   }
   registry.set(descriptor.id, { descriptor: publicDescriptor(descriptor), factory });

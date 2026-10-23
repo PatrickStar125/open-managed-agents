@@ -132,7 +132,10 @@ export type OpenMaBeta = Omit<Anthropic["beta"], "agents" | "sessions"> & {
 export interface OpenMaAgentAcpParams {
   agent: {
     id?: string;
-    command: string;
+    /** Explicit process; exactly one of `command` or `registry` is set. */
+    command?: string;
+    /** Pinned ACP registry reference such as `claude-acp@0.94.0`. */
+    registry?: string;
     args?: string[];
     env?: Record<string, string | null>;
     cwd?: string;
@@ -189,7 +192,10 @@ export interface OpenMaAgentExtensionParams {
 export interface OpenMaAgentAcp {
   agent: {
     id?: string;
-    command: string;
+    /** Explicit process; exactly one of `command` or `registry` is set. */
+    command?: string;
+    /** Pinned ACP registry reference such as `claude-acp@0.94.0`. */
+    registry?: string;
     args?: string[];
     env?: Record<string, string>;
     cwd?: string;

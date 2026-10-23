@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectOption } from "../../components/Select";
-import { harnessValidationError, missingHarnessRequirements, resolvedHarness, type HarnessCatalog } from "./harnessCatalog";
+import { formatHarnessRequirement, harnessValidationError, missingHarnessRequirements, resolvedHarness, type HarnessCatalog } from "./harnessCatalog";
 
 interface Props {
   value: unknown;
@@ -54,7 +54,7 @@ export function HarnessPicker({ value, fields, configError, onChange, catalog, l
           <p>{descriptor.description}</p>
           <p>Execution strategy: {placementLabels[descriptor.execution.placement]}</p>
           <p>Consumes legacy ACP execution binding: {descriptor.capabilities.runtime_binding === null ? "Unspecified" : descriptor.capabilities.runtime_binding ? "Yes" : "No"}. This does not describe general local-runtime tool access.</p>
-          <p>Required advanced fields: {descriptor.requirements.length ? descriptor.requirements.map((path) => `_oma.${path}`).join(", ") : "None"}.</p>
+          <p>Required advanced fields: {descriptor.requirements.length ? descriptor.requirements.map(formatHarnessRequirement).join(", ") : "None"}.</p>
         </>}
         {catalog && catalog.data.some((entry) => missingFor(entry).length > 0) &&
           <p>Unavailable choices need JSON / YAML configuration: {catalog.data.filter((entry) => missingFor(entry).length > 0).map((entry) => `${entry.label}: ${missingFor(entry).map((path) => `_oma.${path}`).join(", ")}`).join("; ")}. Selecting a harness does not install packages.</p>}

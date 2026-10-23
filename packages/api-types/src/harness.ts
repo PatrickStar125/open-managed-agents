@@ -16,7 +16,8 @@ export interface HarnessDescriptor {
      * or a prohibition on runtime calls through other tools/MCP servers. */
     runtime_binding: boolean | null;
   };
-  /** Public Agent configuration paths required by this implementation, not values. */
+  /** Public Agent configuration paths required by this implementation, not values.
+   * `a.b|c.d` means one of the alternatives must be set. */
   requirements: string[];
 }
 

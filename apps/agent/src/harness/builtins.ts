@@ -23,7 +23,9 @@ export function registerCoreHarnesses(): void {
   }, () => new DefaultHarness());
   add({
     id: "acp-sandbox", label: "ACP Sandbox", description: "ACP agent loop in the session sandbox; requires duplex process support.",
-    execution: { placement: "sandbox" }, capabilities: { runtime_binding: false }, requirements: ["acp.agent.command"],
+    execution: { placement: "sandbox" }, capabilities: { runtime_binding: false },
+    // `a|b`: either path satisfies the requirement (explicit command or pinned registry agent).
+    requirements: ["acp.agent.command|acp.agent.registry"],
   }, () => new AcpSandboxHarness());
   if (existing.default_harness_id === null) setDefaultHarness("pi");
 }

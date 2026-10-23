@@ -27,15 +27,23 @@ export function resolvedHarness(catalog: HarnessCatalog, value: unknown): Harnes
   return catalog.data.find((entry) => entry.id === id);
 }
 
+function hasConfiguredPath(fields: Record<string, unknown>, path: string): boolean {
+  let value: unknown = fields;
+  for (const part of path.split(".")) {
+    if (!value || typeof value !== "object" || !Object.hasOwn(value, part)) return false;
+    value = (value as Record<string, unknown>)[part];
+  }
+  return !(value == null || (typeof value === "string" && !value.trim()));
+}
+
+/** Requirement `a|b` is satisfied when any alternative path is configured. */
 export function missingHarnessRequirements(descriptor: HarnessDescriptor, fields: Record<string, unknown>): string[] {
-  return descriptor.requirements.filter((path) => {
-    let value: unknown = fields;
-    for (const part of path.split(".")) {
-      if (!value || typeof value !== "object" || !Object.hasOwn(value, part)) return true;
-      value = (value as Record<string, unknown>)[part];
-    }
-    return value == null || (typeof value === "string" && !value.trim());
-  });
+  return descriptor.requirements.filter((requirement) =>
+    !requirement.split("|").some((path) => hasConfiguredPath(fields, path)));
+}
+
+export function formatHarnessRequirement(requirement: string): string {
+  return requirement.split("|").map((path) => `_oma.${path}`).join(" or ");
 }
 
 export function harnessValidationError(catalog: HarnessCatalog, value: unknown, fields: Record<string, unknown>): string {
@@ -46,5 +54,5 @@ export function harnessValidationError(catalog: HarnessCatalog, value: unknown, 
       : `Harness \"${String(value)}\" is not registered in this deployment. Its configuration is preserved; choose a registered implementation or edit JSON / YAML.`;
   }
   const missing = missingHarnessRequirements(descriptor, fields);
-  return missing.length ? `Missing required configuration: ${missing.map((path) => `_oma.${path}`).join(", ")}. Set it in JSON / YAML; selecting a harness does not install packages.` : "";
+  return missing.length ? `Missing required configuration: ${missing.map(formatHarnessRequirement).join(", ")}. Set it in JSON / YAML; selecting a harness does not install packages.` : "";
 }
