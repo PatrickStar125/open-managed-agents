@@ -57,7 +57,7 @@ export function HarnessPicker({ value, fields, configError, onChange, catalog, l
           <p>Required advanced fields: {descriptor.requirements.length ? descriptor.requirements.map(formatHarnessRequirement).join(", ") : "None"}.</p>
         </>}
         {catalog && catalog.data.some((entry) => missingFor(entry).length > 0) &&
-          <p>Unavailable choices need JSON / YAML configuration: {catalog.data.filter((entry) => missingFor(entry).length > 0).map((entry) => `${entry.label}: ${missingFor(entry).map((path) => `_oma.${path}`).join(", ")}`).join("; ")}. Selecting a harness does not install packages.</p>}
+          <p>Unavailable choices need JSON / YAML configuration: {catalog.data.filter((entry) => missingFor(entry).length > 0).map((entry) => `${entry.label}: ${missingFor(entry).map(formatHarnessRequirement).join(", ")}`).join("; ")}. Selecting a harness does not install packages.</p>}
         <p>Environment is selected when starting a session. Existing ACP and runtime binding configuration is preserved.</p>
       </div>
       {(error || catalog?.data.length === 0) && <Button type="button" variant="outline" size="sm" onClick={retry} disabled={loading}>Retry harness catalog</Button>}

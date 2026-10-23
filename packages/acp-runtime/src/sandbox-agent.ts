@@ -12,6 +12,7 @@ import {
 } from "./native-state.js";
 import type { InferenceConfigFile } from "./inference/types.js";
 import {
+  ACP_PROVIDER_SECRET_ENV_KEYS,
   resolvePinnedAcpRegistryAgent,
   type PinnedAcpRegistryAgent,
 } from "./acp-registry-pins.js";
@@ -360,7 +361,10 @@ const INSTALL_OK_MARKER = "OMA_ACP_INSTALL_OK";
 const LAUNCHER_MARKER = "OMA_ACP_LAUNCHER=";
 const LAUNCHER_EOF = "OMA_ACP_LAUNCHER_EOF";
 const NVM_VERSION = "v0.40.2";
-const INSTALL_TIMEOUT_MS = 600_000;
+// Cold path: nvm Node install (~1-2 min) plus the pinned package prefetch
+// (~190 MB for claude-acp, measured ~3 min on a slow link). 20 minutes keeps
+// headroom for slow mirrors while still bounding a hung install.
+const INSTALL_TIMEOUT_MS = 1_200_000;
 
 /**
  * Harbor-style install step for a pinned registry agent.
@@ -390,12 +394,8 @@ export async function installAcpSandboxAgent(
       `ACP agent install failed for ${label}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const launcher = output
-    .split("\n")
-    .find((line) => line.startsWith(LAUNCHER_MARKER))
-    ?.slice(LAUNCHER_MARKER.length)
-    .trim();
-  if (!output.split("\n").some((line) => line.trim() === INSTALL_OK_MARKER) || !launcher?.startsWith("/")) {
+  const launcher = parseAcpSandboxInstallOutput(output);
+  if (!launcher) {
     throw new Error(`ACP agent install failed for ${label}:\n${output.trim().slice(-2_000)}`);
   }
   return {
@@ -408,6 +408,34 @@ export async function installAcpSandboxAgent(
   };
 }
 
+/**
+ * Return the launcher path only for a provably successful install.
+ *
+ * Exec ports report exit status in two shapes: Cloudflare prefixes
+ * `exit=N\n` and appends `\nstderr: ...`; local/e2b append `\n[exit N]`
+ * (or `[exit signal=...]`) only on failure. Any non-zero or signal exit
+ * fails, the success marker must be the last non-empty line (so an early
+ * sentinel followed by a later failure is rejected), and the last launcher
+ * line wins.
+ */
+function parseAcpSandboxInstallOutput(raw: string): string | undefined {
+  let body = raw;
+  const prefixed = /^exit=(-?\d+)\n?/.exec(body);
+  if (prefixed) {
+    if (prefixed[1] !== "0") return undefined;
+    body = body.slice(prefixed[0].length);
+  }
+  const lines = body.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.some((line) => /^\[exit\b/.test(line))) return undefined;
+  if (lines.at(-1) !== INSTALL_OK_MARKER) return undefined;
+  const launcher = lines
+    .filter((line) => line.startsWith(LAUNCHER_MARKER))
+    .at(-1)
+    ?.slice(LAUNCHER_MARKER.length)
+    .trim();
+  return launcher?.startsWith("/") ? launcher : undefined;
+}
+
 function buildAcpSandboxLauncherScript(install: PinnedAcpRegistryAgent): string {
   const exports = Object.entries(install.env)
     .sort(([left], [right]) => left.localeCompare(right))
@@ -417,6 +445,9 @@ function buildAcpSandboxLauncherScript(install: PinnedAcpRegistryAgent): string 
     .join(" ");
   return "#!/usr/bin/env sh\n"
     + "set -eu\n"
+    // dash does not abort on `set -u` inside $(...); check HOME explicitly so a
+    // missing HOME never silently falls through to whatever npx is on PATH.
+    + 'if [ -z "${HOME:-}" ]; then echo "acp-launch.sh: HOME is not set" >&2; exit 1; fi\n'
     // Prefer an nvm-installed Node (present only when the image Node was unsuitable).
     + 'nvm_node_bin="$(ls -d "${NVM_DIR:-$HOME/.nvm}"/versions/node/*/bin 2>/dev/null | sort -V | tail -n 1)"\n'
     + 'if [ -n "$nvm_node_bin" ]; then PATH="$nvm_node_bin:$PATH"; export PATH; fi\n'
@@ -438,20 +469,29 @@ function buildAcpSandboxInstallScript(install: PinnedAcpRegistryAgent): string {
     `nvm install ${major}`,
     `nvm alias default ${major}`,
   ].join("; ");
+  const unsetSecrets = ACP_PROVIDER_SECRET_ENV_KEYS.map((key) => `-u ${key}`).join(" ");
   return [
+    // One ordered stream, so the success marker is reliably the last line.
+    "exec 2>&1",
     "set -eu",
     'if [ -z "${HOME:-}" ]; then echo "HOME is not set in the sandbox" >&2; exit 1; fi',
     'NVM_DIR="${NVM_DIR:-$HOME/.nvm}"; export NVM_DIR',
     'oma_nvm_path() { nvm_bin="$(ls -d "$NVM_DIR"/versions/node/*/bin 2>/dev/null | sort -V | tail -n 1)"; if [ -n "$nvm_bin" ]; then PATH="$nvm_bin:$PATH"; export PATH; fi; }',
     "oma_node_ok() { major=\"$(node --version 2>/dev/null | sed -n 's/^v\\([0-9][0-9]*\\).*/\\1/p')\"; "
-      + `[ -n "$major" ] && [ "$major" -ge ${major} ] && command -v npx >/dev/null 2>&1; }`,
+      + `[ -n "$major" ] && [ "$major" -ge ${major} ] && command -v npx >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; }`,
     "oma_nvm_path",
     "if ! oma_node_ok; then",
-    `  command -v curl >/dev/null 2>&1 || { echo "Node >= ${major} with npx is required and curl is unavailable to install it" >&2; exit 1; }`,
+    `  command -v curl >/dev/null 2>&1 || { echo "Node >= ${major} with npx and npm is required and curl is unavailable to install it" >&2; exit 1; }`,
     `  bash -c ${shellQuote(nvm)} || { echo "nvm failed to install Node ${major}" >&2; exit 1; }`,
     "  oma_nvm_path",
-    `  oma_node_ok || { echo "Node >= ${major} with npx is unavailable after nvm install" >&2; exit 1; }`,
+    `  oma_node_ok || { echo "Node >= ${major} with npx and npm is unavailable after nvm install" >&2; exit 1; }`,
     "fi",
+    // Prefetch the exact pinned package into the npx cache with the same
+    // node/npm the launcher resolves, so the first spawn does not download it.
+    // `node -e 0` exits at once; the agent binary itself would wait on stdin.
+    // Provider secrets are stripped; npm config (cache, registry) is kept.
+    `env ${unsetSecrets} npm exec --yes --package=${shellQuote(install.package)} -- node -e 0 </dev/null`
+      + ` || { echo "npm failed to prefetch ${install.package}" >&2; exit 1; }`,
     `oma_dir="${dir}"`,
     'mkdir -p "$oma_dir"',
     'oma_tmp="$oma_dir/.acp-launch.sh.$$"',

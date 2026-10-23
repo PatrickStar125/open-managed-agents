@@ -2511,6 +2511,9 @@ importers:
 
   packages/managed-agents-api:
     dependencies:
+      '@open-managed-agents/acp-runtime':
+        specifier: workspace:*
+        version: link:../acp-runtime
       '@open-managed-agents/managed-agents-application':
         specifier: workspace:*
         version: link:../managed-agents-application

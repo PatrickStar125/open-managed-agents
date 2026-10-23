@@ -107,6 +107,17 @@ it("accepts either alternative of a one-of requirement and names both when neith
   await waitFor(() => expect(writes.create).toHaveBeenCalled());
 });
 
+it("lists one-of requirements of unavailable choices as alternatives, not raw paths", async () => {
+  server.use(http.get("/v1/oma/harnesses", () => HttpResponse.json({ ...catalog, data: [
+    ...catalog.data,
+    { ...catalog.data[1], id: "acp-sandbox", label: "ACP sandbox", requirements: ["acp.agent.command|acp.agent.registry"] },
+  ] })));
+  open();
+  const hint = await screen.findByText(/Unavailable choices need JSON \/ YAML configuration/);
+  expect(hint).toHaveTextContent("ACP sandbox: _oma.acp.agent.command or _oma.acp.agent.registry");
+  expect(hint.textContent).not.toContain("|");
+});
+
 it("validates required appendable prompts against the current form and saves without switching modes", async () => {
   server.use(http.get("/v1/oma/harnesses", () => HttpResponse.json({ ...catalog, data: [
     ...catalog.data,

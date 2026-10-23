@@ -20,6 +20,8 @@ const PROVIDER_SECRET_ENV_KEYS = new Set<string>([
   ...MODEL_PROVIDER_SECRET_ENV_KEYS,
   "ANTHROPIC_AUTH_TOKEN",
 ]);
+/** Sorted provider secret env names, stripped from install-time npm calls. */
+export const ACP_PROVIDER_SECRET_ENV_KEYS: readonly string[] = [...PROVIDER_SECRET_ENV_KEYS].sort();
 const SHELL_ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]*$/;
 
@@ -49,6 +51,31 @@ export interface PinnedAcpRegistryAgent {
   readonly env: Readonly<Record<string, string>>;
   /** Minimum Node major; matches Harbor's nvm default and the package engine. */
   readonly nodeMajor: number;
+}
+
+/** `id@version` for every pinned entry, in catalog order. */
+export function pinnedAcpRegistryRefs(
+  catalog: readonly OfficialRegistryAgent[] = PINNED_ACP_REGISTRY_AGENTS,
+): string[] {
+  return catalog.map((entry) => `${entry.id}@${entry.version}`);
+}
+
+/**
+ * Save-time check for `_oma.acp.agent.registry`: the same resolution the
+ * sandbox install uses, returning a readable error (with the pinned
+ * references) instead of throwing. `undefined` means the reference is valid.
+ */
+export function acpRegistryRefError(
+  ref: string,
+  catalog: readonly OfficialRegistryAgent[] = PINNED_ACP_REGISTRY_AGENTS,
+): string | undefined {
+  try {
+    resolvePinnedAcpRegistryAgent(ref, catalog);
+    return undefined;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `${reason}; pinned ACP registry agents: ${pinnedAcpRegistryRefs(catalog).join(", ")}`;
+  }
 }
 
 /** Parse `id@version` (optionally `acp:`-prefixed, as in Harbor). */

@@ -70,6 +70,7 @@ describe("Harbor-style pinned ACP registry install", () => {
   it("reuses a satisfying Node and writes a launcher that execs the pinned npx package", async () => {
     const host = await fakeHost();
     await tool(host.bin, "node", 'echo v22.11.0');
+    await tool(host.bin, "npm", "true");
     await tool(host.bin, "npx", `echo "npx $*" >> ${JSON.stringify(host.log)}`);
     await tool(host.bin, "curl", `echo "curl $*" >> ${JSON.stringify(host.log)}; exit 1`);
     const sandbox = shellSandbox({ HOME: host.home, PATH: host.path });
@@ -105,7 +106,8 @@ describe("Harbor-style pinned ACP registry install", () => {
       '    d="$NVM_DIR/versions/node/v22.12.0/bin"; mkdir -p "$d"',
       `    printf '#!/bin/sh\\necho v22.12.0\\n' > "$d/node"`,
       `    printf '#!/bin/sh\\necho "nvm-npx $*" >> ${host.log}\\n' > "$d/npx"`,
-      '    chmod +x "$d/node" "$d/npx"',
+      `    printf '#!/bin/sh\\necho "nvm-npm $*" >> ${host.log}\\n' > "$d/npm"`,
+      '    chmod +x "$d/node" "$d/npx" "$d/npm"',
       "  fi",
       "}",
       "NVMSH",
@@ -118,12 +120,15 @@ describe("Harbor-style pinned ACP registry install", () => {
 
     const calls = (await readFile(host.log, "utf8")).trim().split("\n");
     expect(calls[0]).toContain("https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh");
+    // The prefetch uses the same nvm toolchain the launcher will use.
+    expect(calls).toContain("nvm-npm exec --yes --package=@agentclientprotocol/claude-agent-acp@0.94.0 -- node -e 0");
     expect(calls.at(-1)).toBe("nvm-npx -y @agentclientprotocol/claude-agent-acp@0.94.0");
   });
 
   it("is idempotent: a second install leaves one launcher and does not reinstall Node", async () => {
     const host = await fakeHost();
     await tool(host.bin, "node", "echo v24.1.0");
+    await tool(host.bin, "npm", "true");
     await tool(host.bin, "npx", "true");
     await tool(host.bin, "curl", `echo "curl $*" >> ${JSON.stringify(host.log)}; exit 1`);
     const sandbox = shellSandbox({ HOME: host.home, PATH: host.path });
@@ -165,6 +170,7 @@ describe("Harbor-style pinned ACP registry install", () => {
   it("keeps launch env values out of the launcher file", async () => {
     const host = await fakeHost();
     await tool(host.bin, "node", "echo v22.11.0");
+    await tool(host.bin, "npm", "true");
     await tool(host.bin, "npx", "true");
     const sandbox = shellSandbox({ HOME: host.home, PATH: host.path });
     const preparation = registryPreparation({
@@ -258,10 +264,143 @@ describe("Harbor-style pinned ACP registry install", () => {
   });
 });
 
+describe("pinned package prefetch", () => {
+  const PREFETCH = "npm exec --yes --package=@agentclientprotocol/claude-agent-acp@0.94.0 -- node -e 0";
+  const LAUNCHER = ".oma/installed-agent/claude-acp/0.94.0/acp-launch.sh";
+
+  it("warms the npx cache with the pinned package before writing the launcher", async () => {
+    const host = await fakeHost();
+    const launcher = join(host.home, LAUNCHER);
+    await tool(host.bin, "node", "echo v22.11.0");
+    await tool(host.bin, "npm", [
+      `echo "npm $*" >> ${JSON.stringify(host.log)}`,
+      `if [ -e ${JSON.stringify(launcher)} ]; then echo "launcher-already-written" >> ${JSON.stringify(host.log)}; fi`,
+    ].join("\n"));
+    await tool(host.bin, "npx", `echo "npx $*" >> ${JSON.stringify(host.log)}`);
+    const sandbox = shellSandbox({ HOME: host.home, PATH: host.path });
+
+    const installed = await installAcpSandboxAgent(sandbox, registryPreparation());
+
+    expect(installed.launch.command).toBe(launcher);
+    // Never runs the agent binary itself (it would wait for ACP on stdin).
+    expect((await readFile(host.log, "utf8")).trim().split("\n")).toEqual([PREFETCH]);
+  });
+
+  it("fails hard without writing a launcher when the prefetch fails", async () => {
+    const host = await fakeHost();
+    await tool(host.bin, "node", "echo v22.11.0");
+    await tool(host.bin, "npm", "echo 'npm error code E404' >&2; exit 1");
+    await tool(host.bin, "npx", `echo "npx $*" >> ${JSON.stringify(host.log)}`);
+    const sandbox = shellSandbox({ HOME: host.home, PATH: host.path });
+
+    await expect(installAcpSandboxAgent(sandbox, registryPreparation())).rejects.toThrow(
+      /ACP agent install failed for claude-acp@0\.94\.0[\s\S]*npm error code E404[\s\S]*prefetch/,
+    );
+    await expect(stat(join(host.home, LAUNCHER))).rejects.toThrow();
+    await expect(readFile(host.log, "utf8")).rejects.toThrow();
+  });
+
+  it("requires npm next to node and npx before reusing an image Node", async () => {
+    const host = await fakeHost();
+    await tool(host.bin, "node", "echo v22.11.0");
+    await tool(host.bin, "npx", "true");
+    await tool(host.bin, "curl", "echo 'curl: (6) Could not resolve host' >&2; exit 6");
+    const sandbox = shellSandbox({ HOME: host.home, PATH: host.path });
+
+    // Without npm the image Node is rejected and the nvm path is attempted.
+    await expect(installAcpSandboxAgent(sandbox, registryPreparation())).rejects.toThrow(
+      /Could not resolve host/,
+    );
+  });
+
+  it("does not pass provider secrets from the sandbox env to npm", async () => {
+    const host = await fakeHost();
+    await tool(host.bin, "node", "echo v22.11.0");
+    await tool(host.bin, "npm", [
+      `echo "anthropic=\${ANTHROPIC_API_KEY:-unset} openai=\${OPENAI_API_KEY:-unset} token=\${ANTHROPIC_AUTH_TOKEN:-unset}" >> ${JSON.stringify(host.log)}`,
+      `echo "cache=\${npm_config_cache:-unset}" >> ${JSON.stringify(host.log)}`,
+    ].join("\n"));
+    await tool(host.bin, "npx", "true");
+    const sandbox = shellSandbox({
+      HOME: host.home,
+      PATH: host.path,
+      ANTHROPIC_API_KEY: "sk-ant-secret",
+      OPENAI_API_KEY: "sk-openai-secret",
+      ANTHROPIC_AUTH_TOKEN: "auth-secret",
+      npm_config_cache: "/tmp/shared-npm-cache",
+    });
+
+    await installAcpSandboxAgent(sandbox, registryPreparation());
+
+    // Non-secret npm configuration still reaches npm so npx later reads the same cache.
+    expect(await readFile(host.log, "utf8")).toBe(
+      "anthropic=unset openai=unset token=unset\ncache=/tmp/shared-npm-cache\n",
+    );
+  });
+
+  it("allows enough exec time for a cold Node install plus package download", async () => {
+    const timeouts: Array<number | undefined> = [];
+    const sandbox: AcpSandboxAgentStatePort = {
+      writeFile: async () => undefined,
+      exec: async (_command: string, timeout?: number) => {
+        timeouts.push(timeout);
+        return "OMA_ACP_LAUNCHER=/h/acp-launch.sh\nOMA_ACP_INSTALL_OK";
+      },
+    };
+    await installAcpSandboxAgent(sandbox, registryPreparation());
+    expect(timeouts).toEqual([1_200_000]);
+  });
+});
+
+describe("launcher guards", () => {
+  it("exits with a readable error under dash when HOME is missing instead of using PATH npx", async () => {
+    const host = await fakeHost();
+    await tool(host.bin, "node", "echo v22.11.0");
+    await tool(host.bin, "npm", "true");
+    await tool(host.bin, "npx", `echo "npx $*" >> ${JSON.stringify(host.log)}`);
+    const installed = await installAcpSandboxAgent(
+      shellSandbox({ HOME: host.home, PATH: host.path }),
+      registryPreparation(),
+    );
+
+    const run = execFileAsync("/bin/dash", [installed.launch.command], { env: { PATH: host.path } });
+    await expect(run).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("HOME") });
+    await expect(readFile(host.log, "utf8")).rejects.toThrow();
+  });
+});
+
+describe("install result parsing", () => {
+  function fixedSandbox(output: string): AcpSandboxAgentStatePort {
+    return { writeFile: async () => undefined, exec: async () => output };
+  }
+
+  it.each([
+    ["an early sentinel followed by a later local failure", "OMA_ACP_LAUNCHER=/h/early.sh\nOMA_ACP_INSTALL_OK\nmv: cannot move\n[exit exit=1]"],
+    ["an early sentinel followed by an e2b failure", "OMA_ACP_LAUNCHER=/h/early.sh\nOMA_ACP_INSTALL_OK\nboom\n[exit 2]"],
+    ["a Cloudflare non-zero exit even with a trailing sentinel", "exit=1\nOMA_ACP_LAUNCHER=/h/a.sh\nOMA_ACP_INSTALL_OK"],
+    ["a local signal exit", "OMA_ACP_LAUNCHER=/h/a.sh\nOMA_ACP_INSTALL_OK\n[exit signal=SIGTERM]"],
+    ["a sentinel that is not the last non-empty line", "OMA_ACP_LAUNCHER=/h/a.sh\nOMA_ACP_INSTALL_OK\nnpm warn late output"],
+    ["Cloudflare stderr after the sentinel", "exit=0\nOMA_ACP_LAUNCHER=/h/a.sh\nOMA_ACP_INSTALL_OK\nstderr: late failure"],
+  ])("rejects %s", async (_name, output) => {
+    await expect(installAcpSandboxAgent(fixedSandbox(output), registryPreparation())).rejects.toThrow(
+      /ACP agent install failed for claude-acp@0\.94\.0/,
+    );
+  });
+
+  it("uses the last launcher line and accepts Cloudflare exit=0 output", async () => {
+    const installed = await installAcpSandboxAgent(
+      fixedSandbox("exit=0\nOMA_ACP_LAUNCHER=/h/early.sh\nOMA_ACP_LAUNCHER=/h/final.sh\nOMA_ACP_NODE=v22.11.0\nOMA_ACP_INSTALL_OK\n\n"),
+      registryPreparation(),
+    );
+    expect(installed.launch.command).toBe("/h/final.sh");
+  });
+});
+
 describe("pinned claude-acp launcher smoke", () => {
   it("the generated launcher speaks ACP initialize through a fake npx", async () => {
     const host = await fakeHost();
     await tool(host.bin, "node", "echo v22.11.0");
+    await tool(host.bin, "npm", "true");
     // Fake npx answers one ACP initialize request on stdio with the package it was asked for.
     await tool(host.bin, "npx", [
       "read line",

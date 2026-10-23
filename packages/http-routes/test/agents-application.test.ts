@@ -73,6 +73,22 @@ describe("OMA agents use the shared application", () => {
     expect(JSON.stringify(await res.json())).toContain(message);
     expect(createAgent).not.toHaveBeenCalled();
   });
+  it.each(["claude-acp", "claude-acp@latest", "nope@1.0.0", "claude-acp@0.93.0"])("rejects an unpinned registry %s on create and update before saving", async (registry) => {
+    const insert = vi.fn();
+    const replaceCurrent = vi.fn();
+    const current = { id: "a", version: 1, name: "n", model: "m", openma: { harness: "acp-sandbox", acp: { agent: { registry: "claude-acp@0.94.0" } } } };
+    const application = new AgentsApplicationService({ workspaceId: "w", store: { insert, replaceCurrent, findCurrent: async () => current } as never, clock: { now: () => new Date() }, ids: { nextAgentId: () => "a" } });
+    const app = buildAgentRoutes({ application });
+    const acp = { agent: { registry } };
+    const created = await app.request("/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "n", model: "m", _oma: { harness: "acp-sandbox", acp } }) });
+    const updated = await app.request("/a", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _oma: { acp } }) });
+    for (const res of [created, updated]) {
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(await res.json())).toContain("pinned ACP registry agents: claude-acp@0.94.0");
+    }
+    expect(insert).not.toHaveBeenCalled();
+    expect(replaceCurrent).not.toHaveBeenCalled();
+  });
   it("blocks deletion for active sessions and evals", async () => {
     const remove = vi.fn();
     const services = { agents: { get: async () => ({ id: "a" }), delete: remove } } as never;

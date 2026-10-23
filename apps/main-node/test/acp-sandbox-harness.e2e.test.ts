@@ -303,6 +303,10 @@ describe("ACP sandbox harness", () => {
       expect((await readFile(host.npxLog, "utf8")).trim().split("\n")).toEqual([
         "-y @agentclientprotocol/claude-agent-acp@0.94.0",
       ]);
+      // The pinned package is prefetched once at install, before the first spawn.
+      expect((await readFile(host.npmLog, "utf8")).trim().split("\n")).toEqual([
+        "exec --yes --package=@agentclientprotocol/claude-agent-acp@0.94.0 -- node -e 0",
+      ]);
       // The claude-code native adapter still owns CLAUDE_CONFIG_DIR.
       await expect(sandbox.readFile("/workspace/state-path.txt")).resolves.toMatch(
         /\/session_acp_sandbox\/claude-code\/v1\/native$/,
@@ -752,10 +756,11 @@ function registryAgent(id: string): AgentConfig {
 async function registryHost(
   workdir: string,
   options: { nodeMajor: number },
-): Promise<{ home: string; path: string; npxLog: string }> {
+): Promise<{ home: string; path: string; npxLog: string; npmLog: string }> {
   const home = join(workdir, ".test-home");
   const bin = join(workdir, ".test-bin");
   const npxLog = join(workdir, ".test-npx.log");
+  const npmLog = join(workdir, ".test-npm.log");
   const agentSource = join(workdir, ".test-fake-acp-agent.cjs");
   await mkdir(home, { recursive: true });
   await mkdir(bin, { recursive: true });
@@ -765,9 +770,10 @@ async function registryHost(
     await chmod(join(bin, name), 0o755);
   };
   await script("node", `echo v${options.nodeMajor}.0.0`);
+  await script("npm", `echo "$*" >> '${npmLog}'`);
   await script("npx", `echo "$*" >> '${npxLog}'\nexec '${process.execPath}' '${agentSource}'`);
   await script("curl", "echo 'curl: (7) Failed to connect' >&2; exit 7");
-  return { home, path: `${bin}:/usr/bin:/bin`, npxLog };
+  return { home, path: `${bin}:/usr/bin:/bin`, npxLog, npmLog };
 }
 
 function createContext(

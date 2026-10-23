@@ -5,6 +5,7 @@ import type {
   AgentUpdateParams,
 } from "@anthropic-ai/sdk/resources/beta/agents/agents";
 import type { VersionListParams } from "@anthropic-ai/sdk/resources/beta/agents/versions";
+import { acpRegistryRefError } from "@open-managed-agents/acp-runtime/registry-pins";
 import { z } from "zod";
 import {
   agentMcpServerInputSchema,
@@ -198,6 +199,11 @@ const agentAcpSchema: z.ZodType<OpenMaAgentAcpBody> = z
       .strict()
       .refine((agent) => (agent.command === undefined) !== (agent.registry === undefined), {
         message: "ACP agent requires exactly one of command or registry",
+      })
+      .superRefine((agent, context) => {
+        // Same pinned catalog the sandbox install resolves; reject at save time.
+        const error = agent.registry === undefined ? undefined : acpRegistryRefError(agent.registry);
+        if (error) context.addIssue({ code: "custom", path: ["registry"], message: error });
       }),
     restart: z
       .object({
