@@ -1,10 +1,12 @@
 import type {
-  AgentCreateParams,
   AgentListParams,
   AgentRetrieveParams,
-  AgentUpdateParams,
-  BetaManagedAgentsAgent,
 } from "@anthropic-ai/sdk/resources/beta/agents/agents";
+import type {
+  OpenMaAgentCreateParams as AgentCreateParams,
+  OpenMaAgentUpdateParams as AgentUpdateParams,
+  OpenMaAgent as BetaManagedAgentsAgent,
+} from "@openma/sdk";
 import type { VersionListParams as AgentVersionListParams } from "@anthropic-ai/sdk/resources/beta/agents/versions";
 import type {
   BetaManagedAgentsDeployment,
