@@ -47,6 +47,7 @@ import type {
   SandboxExecutor,
   SandboxFactory,
 } from "../ports";
+import { rejectSandboxImageSelection } from "../sandbox-images";
 import { getLogger } from "@open-managed-agents/observability";
 
 const moduleLogger = getLogger("local-sandbox");
@@ -727,6 +728,7 @@ class BackgroundProcess implements ProcessHandle {
 // ── Factory (DIP entry point) ───────────────────────────────────────
 
 export const sandboxFactory: SandboxFactory = async (ctx) => {
+  rejectSandboxImageSelection("local-subprocess", ctx.image);
   return new LocalSubprocessSandbox({
     workdir: ctx.workdir,
     memoryRoot: ctx.memoryRoot,

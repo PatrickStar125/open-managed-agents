@@ -95,7 +95,8 @@ export function buildAptScript(apt: readonly string[] | undefined): string {
  * It stops at the first failing step, so a failed install is reported
  * rather than masked by the steps after it.
  *
- *   pip   → /workspace/.venv (uv; installed with pip when the image lacks it)
+ *   pip   → /workspace/.venv (uv; installed with pip when the image lacks it;
+ *           created with --system-site-packages so image-baked packages resolve)
  *   npm   → /workspace/.npm-global
  *   cargo → /workspace/.cargo
  *   go    → /workspace/.go
@@ -122,7 +123,10 @@ export function buildFullSetupScript(
       `mkdir -p /workspace`,
       // Images without uv get it from pip; PEP 668 images need the override.
       `if command -v uv >/dev/null 2>&1; then UV=uv; else python3 -m pip install -q --user --break-system-packages uv 2>/dev/null || python3 -m pip install -q --user uv; UV="python3 -m uv"; fi`,
-      `[ -d /workspace/.venv ] || $UV venv -q /workspace/.venv`,
+      // --system-site-packages: packages baked into the image's system Python
+      // (e.g. an operator SANDBOX_IMAGES entry) stay importable from the venv,
+      // so an Environment only lists what the image lacks.
+      `[ -d /workspace/.venv ] || $UV venv -q --system-site-packages /workspace/.venv`,
       `$UV pip install --python /workspace/.venv/bin/python -q ${pip.map(shellQuote).join(" ")}`,
     );
   }

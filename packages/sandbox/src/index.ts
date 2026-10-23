@@ -67,6 +67,21 @@ export {
 
 export { createNoEnvironmentSandbox, isNoEnvironmentSandbox } from "./no-environment";
 export {
+  createSandboxImageCatalog,
+  EMPTY_SANDBOX_IMAGE_CATALOG,
+  parseSandboxImageCatalog,
+  rejectSandboxImageSelection,
+  resolveSandboxImage,
+  SandboxImageCatalogError,
+  SandboxImageUnavailableError,
+} from "./sandbox-images";
+export type {
+  ResolvedSandboxImage,
+  SandboxImageCatalog,
+  SandboxImageCatalogEntry,
+  SandboxImageCatalogListing,
+} from "./sandbox-images";
+export {
   buildAptScript,
   buildFullSetupScript,
   ENVIRONMENT_PACKAGE_PATHS,

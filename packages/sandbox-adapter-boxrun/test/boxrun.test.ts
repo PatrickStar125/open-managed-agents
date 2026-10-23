@@ -57,6 +57,17 @@ describe("BoxRunSandbox", () => {
     await expect(sandboxFactory({ sessionId: "short" } as never, { BOXRUN_URL: "http://boxrun" })).resolves.toBeInstanceOf(BoxRunSandbox);
   });
 
+  it("factory prefers an Environment-selected catalog image over SANDBOX_IMAGE", async () => {
+    const env = { BOXRUN_URL: "http://boxrun", SANDBOX_IMAGE: "custom:1" };
+    const selected = await sandboxFactory(
+      { sessionId: "session", workdir: "/w", image: { alias: "analytics", reference: "registry.example/analytics:1" } },
+      env,
+    );
+    expect((selected as unknown as { opts: { image?: string } }).opts.image).toBe("registry.example/analytics:1");
+    const fallback = await sandboxFactory({ sessionId: "session", workdir: "/w" }, env);
+    expect((fallback as unknown as { opts: { image?: string } }).opts.image).toBe("custom:1");
+  });
+
   it("creates once, forwards auth/env/resources, and decodes streamed output", async () => {
     const calls = installFetch((url, init) => {
       if (url.endsWith("/boxes")) return json({ box_id: "box-1" });

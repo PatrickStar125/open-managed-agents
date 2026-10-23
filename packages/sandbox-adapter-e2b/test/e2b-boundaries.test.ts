@@ -434,6 +434,15 @@ describe("E2BSandboxExecutor boundaries", () => {
     expect(sdk.create).toHaveBeenLastCalledWith("template", expect.objectContaining({ apiUrl: "api", sandboxUrl: "sandbox", domain: "domain" }));
   });
 
+  it("uses an Environment-selected catalog image as the template instead of SANDBOX_IMAGE", async () => {
+    sdk.create.mockResolvedValue(remote({ sandboxId: "selected" }));
+    await sandboxFactory(
+      { sessionId: "s", workdir: "/w", image: { alias: "analytics", reference: "tmpl-analytics" } },
+      { E2B_API_KEY: "key", SANDBOX_IMAGE: "template" },
+    );
+    expect(sdk.create).toHaveBeenLastCalledWith("tmpl-analytics", expect.objectContaining({ apiKey: "key" }));
+  });
+
   it("explains a missing optional SDK", async () => {
     vi.resetModules();
     vi.doMock("e2b", () => { throw new Error("not installed"); });

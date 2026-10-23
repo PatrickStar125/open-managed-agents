@@ -54,6 +54,22 @@ describe("environment packages", () => {
     expect(script).toContain("export PATH=/workspace/.venv/bin:");
   });
 
+  it("creates the venv with system site packages so image-baked packages stay importable", () => {
+    const script = buildFullSetupScript({ pip: ["pyodps"] });
+    expect(script).toContain("[ -d /workspace/.venv ] || $UV venv -q --system-site-packages /workspace/.venv");
+    // An existing (e.g. restored) venv is reused as-is, never recreated.
+    expect(script).not.toMatch(/\$UV venv(?! -q --system-site-packages)/);
+  });
+
+  it("keeps the warm/restored markers stable across the venv flag change", async () => {
+    // Values pinned from before the flag change: hashes cover only package
+    // lists, so earlier containers/workspaces stay warm/restored (no reinstall).
+    const { sandbox, files } = fakeSandbox();
+    await ensureEnvironmentPackages(sandbox, { pip: ["pyodps"] });
+    expect(files.get("warm")).toBe("a0bbafd0");
+    expect(files.get("rest")).toBe("5cb03e2c");
+  });
+
   it("writes scripts a shell can parse", () => {
     const script = buildFullSetupScript({
       apt: ["jq"],

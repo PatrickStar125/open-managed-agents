@@ -460,7 +460,8 @@ export const sandboxFactory: SandboxFactory = async (ctx, env) => {
   }
   return new BoxRunSandbox({
     baseUrl,
-    image: env.SANDBOX_IMAGE,
+    // An Environment-selected catalog image overrides the process default.
+    image: ctx.image?.reference ?? env.SANDBOX_IMAGE,
     cpus: env.BOXRUN_CPUS ? Number(env.BOXRUN_CPUS) : undefined,
     memoryMib: env.BOXRUN_MEMORY_MIB ? Number(env.BOXRUN_MEMORY_MIB) : undefined,
     bearerToken: env.BOXRUN_TOKEN,

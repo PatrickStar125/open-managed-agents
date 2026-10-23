@@ -433,7 +433,8 @@ export const sandboxFactory: SandboxFactory = async (ctx, env) => {
     sessionId: ctx.sessionId,
     apiKey: env.DAYTONA_API_KEY,
     apiUrl: env.DAYTONA_API_URL,
-    image: env.SANDBOX_IMAGE,
+    // An Environment-selected catalog image overrides the process default.
+    image: ctx.image?.reference ?? env.SANDBOX_IMAGE,
     memoryBucket: readS3MemoryBucket(env),
   });
 };

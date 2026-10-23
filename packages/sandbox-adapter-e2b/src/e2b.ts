@@ -863,7 +863,10 @@ function parseCreateMetadata(value: string | undefined): Record<string, string> 
   return parsed as Record<string, string>;
 }
 
-function optionsFromFactory(env: SandboxFactoryEnv): E2BSandboxOptions {
+function optionsFromFactory(
+  env: SandboxFactoryEnv,
+  ctx?: Pick<SandboxFactoryContext, "image">,
+): E2BSandboxOptions {
   return {
     apiKey: env.E2B_API_KEY,
     apiUrl: env.E2B_API_URL,
@@ -871,13 +874,14 @@ function optionsFromFactory(env: SandboxFactoryEnv): E2BSandboxOptions {
     domain: env.E2B_DOMAIN,
     createMetadata: parseCreateMetadata(env.E2B_CREATE_METADATA),
     lifetimeMs: parseLifetime(env.E2B_SANDBOX_TIMEOUT_MS),
-    templateId: env.SANDBOX_IMAGE,
+    // An Environment-selected catalog image overrides the process default.
+    templateId: ctx?.image?.reference ?? env.SANDBOX_IMAGE,
     memoryBucket: readS3MemoryBucket(env),
   };
 }
 
 export const sandboxProvider: SandboxProviderPort<E2BSandboxExecutor> = {
-  create: async (_ctx, env) => createE2BSandbox(optionsFromFactory(env)),
+  create: async (ctx, env) => createE2BSandbox(optionsFromFactory(env, ctx)),
   resume: async (handle, _ctx, env) => {
     if (handle.provider !== "e2b" || !handle.runtimeId) {
       throw new Error("E2B provider received an incompatible runtime handle");
