@@ -18,6 +18,7 @@
 import { serveStatic } from "@hono/node-server/serve-static";
 import { buildMatterProxyRoutes, buildMatterWebhookRoutes, matterTrustedAuth } from "../lib/matter-proxy.js";
 import { Hono } from "hono";
+import { getHarnessCatalog } from "@open-managed-agents/agent/harness/registry";
 import { OpenAIAgentsProtocolError } from "@open-managed-agents/openai-agents-api";
 import { createArtifactsHandler, createManagedSessionMapping, createResourcesHandler, createSessionsHandler } from "@open-managed-agents/openai-agents-compat";
 
@@ -528,6 +529,7 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
       };
     },
   }));
+  v1.get("/oma/harnesses", (c) => c.json(getHarnessCatalog()));
   v1.get("/oma/runtimes", (c) => c.json({ data: [] }));
   v1.get("/oma/stats", async (c) => {
     const tenantId = c.get("tenant_id");

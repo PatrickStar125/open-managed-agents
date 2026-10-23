@@ -34,6 +34,10 @@ export type {
 export {
   OmaModelsResource,
   OmaModelCardsResource,
+  OmaHarnessesResource,
+  type OmaHarnessCatalog,
+  type OmaHarnessDescriptor,
+  type OmaHarnessExecutionPlacement,
   OmaResources,
   type OmaModelCard,
   type OmaModelCardCreateParams,
