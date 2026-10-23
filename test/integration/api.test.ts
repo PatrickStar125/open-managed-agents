@@ -27,7 +27,7 @@ async function createFullSession(opts?: { agentOverrides?: Record<string, unknow
       model: "claude-sonnet-4-6",
       system: "You are helpful.",
       tools: [{ type: "agent_toolset_20260401" }],
-      harness: "test", // Use test harness — no real LLM call
+      _oma: { harness: "test" }, // Use test harness — no real LLM call
       ...opts?.agentOverrides,
     }),
   });
@@ -609,7 +609,7 @@ describe("Session isolation", () => {
         // This test exercises event-log isolation, not the provider adapter.
         // Keep it on the in-process harness so posting an event never reaches
         // the real Anthropic API.
-        harness: "test",
+        _oma: { harness: "test" },
       }),
     });
     const agent = (await agentRes.json()) as any;

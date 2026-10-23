@@ -226,7 +226,7 @@ describe("Session resource add/list/delete", () => {
 
   beforeAll(async () => {
     // Create agent + env + session
-    const a = await post("/v1/oma/agents", { name: "ResAgent", model: "claude-sonnet-4-6", harness: "files-test" });
+    const a = await post("/v1/oma/agents", { name: "ResAgent", model: "claude-sonnet-4-6", _oma: { harness: "files-test" } });
     const e = await post("/v1/oma/environments", { name: "res-env", config: { type: "cloud" } });
     const s = await post("/v1/oma/sessions", {
       agent: ((await a.json()) as any).id,
@@ -351,7 +351,7 @@ describe("Session creation with resources", () => {
   let fileId: string;
 
   beforeAll(async () => {
-    const a = await post("/v1/oma/agents", { name: "WithRes", model: "claude-sonnet-4-6", harness: "files-test" });
+    const a = await post("/v1/oma/agents", { name: "WithRes", model: "claude-sonnet-4-6", _oma: { harness: "files-test" } });
     agentId = ((await a.json()) as any).id;
     const e = await post("/v1/oma/environments", { name: "withres-env", config: { type: "cloud" } });
     envId = ((await e.json()) as any).id;

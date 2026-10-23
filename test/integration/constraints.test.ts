@@ -51,7 +51,7 @@ async function createAgent(overrides?: Record<string, unknown>) {
     model: "claude-sonnet-4-6",
     system: "You are helpful.",
     tools: [{ type: "agent_toolset_20260401" }],
-    harness: "constraint-test",
+    _oma: { harness: "constraint-test" },
     ...overrides,
   });
   return (await res.json()) as any;

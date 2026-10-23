@@ -54,7 +54,7 @@ async function createSessionWith(harnessName: string, extra?: Record<string, unk
   const a = await post("/v1/oma/agents", {
     name: `H-${harnessName}-${Date.now()}`,
     model: "claude-sonnet-4-6",
-    harness: harnessName,
+    _oma: { harness: harnessName },
     ...extra,
   });
   const e = await post("/v1/oma/environments", {
@@ -335,7 +335,7 @@ describe("Status transitions", () => {
   });
 
   it("status includes agent_id from init", async () => {
-    const a = await post("/v1/oma/agents", { name: "StatusAgent", model: "claude-sonnet-4-6", harness: "sh-noop" });
+    const a = await post("/v1/oma/agents", { name: "StatusAgent", model: "claude-sonnet-4-6", _oma: { harness: "sh-noop" } });
     const agent = (await a.json()) as any;
     const e = await post("/v1/oma/environments", { name: `status-env-${Date.now()}`, config: { type: "cloud" } });
     const envObj = (await e.json()) as any;
@@ -496,7 +496,7 @@ describe("Harness integration — additional scenarios", () => {
   });
 
   it("session title is preserved through harness execution", async () => {
-    const a = await post("/v1/oma/agents", { name: "TitleKeep", model: "claude-sonnet-4-6", harness: "sh-noop" });
+    const a = await post("/v1/oma/agents", { name: "TitleKeep", model: "claude-sonnet-4-6", _oma: { harness: "sh-noop" } });
     const e = await post("/v1/oma/environments", { name: "titlekeep-env", config: { type: "cloud" } });
     const s = await post("/v1/oma/sessions", {
       agent: ((await a.json()) as any).id,

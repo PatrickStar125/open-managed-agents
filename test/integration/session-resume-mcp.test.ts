@@ -151,7 +151,7 @@ describe("Cloudflare session resume picks up published MCP tools", () => {
       name: `Resume MCP ${userId}`,
       model: "resume-mcp-mock",
       system: "frozen system prompt",
-      harness: HARNESS,
+      _oma: { harness: HARNESS },
       tools: [{ type: "agent_toolset_20260401", configs: [{ name: "bash", enabled: false }] }],
     });
     expect(agentRes.status).toBe(201);
@@ -222,7 +222,7 @@ describe("Cloudflare session resume picks up published MCP tools", () => {
       name: `Resume idle ${userId}`,
       model: "claude-sonnet-4-6",
       system: "stay frozen",
-      harness: "noop-test",
+      _oma: { harness: "noop-test" },
     });
     expect(agentRes.status).toBe(201);
     const agentId = ((await agentRes.json()) as { id: string }).id;

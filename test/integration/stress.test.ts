@@ -30,7 +30,7 @@ async function createFullSession(overrides?: Record<string, unknown>) {
     name: "Stress Agent",
     model: "claude-sonnet-4-6",
     system: "You are helpful.",
-    harness: "noop",
+    _oma: { harness: "noop" },
     ...overrides,
   });
   const agent = (await agentRes.json()) as any;
@@ -128,7 +128,7 @@ describe("Session DO - direct", () => {
     const agentRes = await post("/v1/oma/agents", {
       name: "DO Direct Agent",
       model: "claude-sonnet-4-6",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     const agent = (await agentRes.json()) as any;
     const envRes = await post("/v1/oma/environments", {
@@ -394,7 +394,7 @@ describe("History - complex conversions", () => {
 describe("Stress tests", () => {
   it("handles 20 agents created simultaneously", async () => {
     const promises = Array.from({ length: 20 }, (_, i) =>
-      post("/v1/oma/agents", { name: `Stress-${i}`, model: "claude-sonnet-4-6", harness: "noop" })
+      post("/v1/oma/agents", { name: `Stress-${i}`, model: "claude-sonnet-4-6", _oma: { harness: "noop" } })
     );
     const results = await Promise.all(promises);
     expect(results.every((r) => r.status === 201)).toBe(true);
@@ -406,7 +406,7 @@ describe("Stress tests", () => {
     const agentRes = await post("/v1/oma/agents", {
       name: "Multi-Session",
       model: "claude-sonnet-4-6",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     const agent = (await agentRes.json()) as any;
     const envRes = await post("/v1/oma/environments", {
@@ -460,7 +460,7 @@ describe("Stress tests", () => {
     const res = await post("/v1/oma/agents", {
       name: longName,
       model: "claude-sonnet-4-6",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     expect(res.status).toBe(201);
     const agent = (await res.json()) as any;
@@ -493,7 +493,7 @@ describe("Stress tests", () => {
       name: "EmptyFields",
       model: "claude-sonnet-4-6",
       system: "",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     expect(res.status).toBe(201);
     const agent = (await res.json()) as any;
@@ -520,7 +520,7 @@ describe("Stress tests", () => {
       name: special,
       model: "claude-sonnet-4-6",
       system: special,
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     expect(res.status).toBe(201);
     const agent = (await res.json()) as any;
@@ -553,7 +553,7 @@ describe("Full lifecycle", () => {
       name: "Lifecycle Agent",
       model: "claude-sonnet-4-6",
       system: "lifecycle test",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     expect(agentRes.status).toBe(201);
     const agent = (await agentRes.json()) as any;
@@ -630,7 +630,7 @@ describe("Full lifecycle", () => {
     const agentRes = await post("/v1/oma/agents", {
       name: "Shared Env Agent",
       model: "claude-sonnet-4-6",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     const agent = (await agentRes.json()) as any;
     const envRes = await post("/v1/oma/environments", {
@@ -733,7 +733,7 @@ describe("Error boundaries", () => {
     const res = await api("/v1/oma/agents", {
       method: "POST",
       headers: { "x-api-key": "test-key" },
-      body: JSON.stringify({ name: "NoCT", model: "claude-sonnet-4-6", harness: "noop" }),
+      body: JSON.stringify({ name: "NoCT", model: "claude-sonnet-4-6", _oma: { harness: "noop" } }),
     });
     // Hono should still parse the body
     expect(res.status).toBeLessThan(500);
@@ -745,7 +745,7 @@ describe("Error boundaries", () => {
       name: "BigAgent",
       model: "claude-sonnet-4-6",
       system: "z".repeat(2 * 1024 * 1024),
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     const res = await api("/v1/oma/agents", {
       method: "POST",
@@ -768,7 +768,7 @@ describe("Error boundaries", () => {
     const agentRes = await post("/v1/oma/agents", {
       name: "DoubleArchive",
       model: "claude-sonnet-4-6",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     const agent = (await agentRes.json()) as any;
 
@@ -787,7 +787,7 @@ describe("Error boundaries", () => {
     const agentRes = await post("/v1/oma/agents", {
       name: "DoubleDelete",
       model: "claude-sonnet-4-6",
-      harness: "noop",
+      _oma: { harness: "noop" },
     });
     const agent = (await agentRes.json()) as any;
 

@@ -65,7 +65,7 @@ describe("user.define_outcome event", () => {
     const a = await post("/v1/oma/agents", {
       name: "OutcomeAgent",
       model: "claude-sonnet-4-6",
-      harness: "parity-noop",
+      _oma: { harness: "parity-noop" },
     });
     const e = await post("/v1/oma/environments", {
       name: "outcome-env",

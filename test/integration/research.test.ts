@@ -428,7 +428,7 @@ describe("Outcomes", () => {
     const agentRes = await post("/v1/oma/agents", {
       name: "OutcomeTestAgent",
       model: "claude-sonnet-4-6",
-      harness: "outcome-test",
+      _oma: { harness: "outcome-test" },
     });
     agentId = ((await agentRes.json()) as any).id;
 

@@ -72,7 +72,7 @@ describe("Tool building", () => {
         name: "Tool Test",
         model: "claude-sonnet-4-6",
         tools: toolConfig,
-        harness: harnessName,
+        _oma: { harness: harnessName },
       }),
     });
     return ((await agentRes.json()) as any).tools;
@@ -124,7 +124,7 @@ describe("Edge cases", () => {
     const agentRes = await api("/v1/oma/agents", {
       method: "POST",
       headers: HEADERS,
-      body: JSON.stringify({ name: "Edge", model: "claude-sonnet-4-6", harness: "noop" }),
+      body: JSON.stringify({ name: "Edge", model: "claude-sonnet-4-6", _oma: { harness: "noop" } }),
     });
     const agent = (await agentRes.json()) as any;
     const envRes = await api("/v1/oma/environments", {

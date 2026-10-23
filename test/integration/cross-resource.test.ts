@@ -76,7 +76,7 @@ async function waitForReplayedEvents(
 // ============================================================
 describe("Agent + Session snapshot", () => {
   it("session with vault_ids includes them in GET response", async () => {
-    const a = await post("/v1/oma/agents", { name: "VaultAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "VaultAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     const agent = (await a.json()) as any;
     const e = await post("/v1/oma/environments", { name: "vlt-env", config: { type: "cloud" } });
     const envObj = (await e.json()) as any;
@@ -102,7 +102,7 @@ describe("Agent + Session snapshot", () => {
 
   it("agent update after session creation does not change session snapshot", async () => {
     const a = await post("/v1/oma/agents", {
-      name: "SnapAgent", model: "claude-sonnet-4-6", system: "snap-v1", harness: "cross-noop",
+      name: "SnapAgent", model: "claude-sonnet-4-6", system: "snap-v1", _oma: { harness: "cross-noop" },
     });
     const agent = (await a.json()) as any;
     const e = await post("/v1/oma/environments", { name: "snap-env", config: { type: "cloud" } });
@@ -121,7 +121,7 @@ describe("Agent + Session snapshot", () => {
   });
 
   it("archived agent does not prevent session access", async () => {
-    const a = await post("/v1/oma/agents", { name: "ArchiveSnapAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "ArchiveSnapAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     const agent = (await a.json()) as any;
     const e = await post("/v1/oma/environments", { name: "archsnap-env", config: { type: "cloud" } });
     const envObj = (await e.json()) as any;
@@ -138,7 +138,7 @@ describe("Agent + Session snapshot", () => {
   });
 
   it("cannot delete agent with active session, archive first", async () => {
-    const a = await post("/v1/oma/agents", { name: "DelSnapAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "DelSnapAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     const agent = (await a.json()) as any;
     const e = await post("/v1/oma/environments", { name: "delsnap-env", config: { type: "cloud" } });
     const envObj = (await e.json()) as any;
@@ -164,7 +164,7 @@ describe("Agent + Session snapshot", () => {
 
   it("two sessions from same agent with update between have independent snapshots", async () => {
     const a = await post("/v1/oma/agents", {
-      name: "DualSnap", model: "claude-sonnet-4-6", system: "dual-v1", harness: "cross-noop",
+      name: "DualSnap", model: "claude-sonnet-4-6", system: "dual-v1", _oma: { harness: "cross-noop" },
     });
     const agent = (await a.json()) as any;
     const e = await post("/v1/oma/environments", { name: "dualsnap-env", config: { type: "cloud" } });
@@ -195,7 +195,7 @@ describe("Agent + Session snapshot", () => {
       model: "claude-sonnet-4-6",
       system: "full system",
       tools: [{ type: "agent_toolset_20260401" }],
-      harness: "cross-noop",
+      _oma: { harness: "cross-noop" },
       description: "A fully configured agent",
       metadata: { team: "platform", tier: "premium" },
       skills: [{ skill_id: "web_research" }],
@@ -220,7 +220,7 @@ describe("File + Session resource", () => {
   let envId: string;
 
   beforeAll(async () => {
-    const a = await post("/v1/oma/agents", { name: "FileResAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "FileResAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     agentId = ((await a.json()) as any).id;
     const e = await post("/v1/oma/environments", { name: "fileres-env", config: { type: "cloud" } });
     envId = ((await e.json()) as any).id;
@@ -344,7 +344,7 @@ describe("Memory + Session", () => {
   let envId: string;
 
   beforeAll(async () => {
-    const a = await post("/v1/oma/agents", { name: "MemSessAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "MemSessAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     agentId = ((await a.json()) as any).id;
     const e = await post("/v1/oma/environments", { name: "memsess-env", config: { type: "cloud" } });
     envId = ((await e.json()) as any).id;
@@ -555,7 +555,7 @@ describe("Cross-entity lifecycle", () => {
       name: "FullFlowAgent",
       model: "claude-sonnet-4-6",
       system: "full flow test",
-      harness: "cross-echo",
+      _oma: { harness: "cross-echo" },
     });
     expect(aRes.status).toBe(201);
     const agent = (await aRes.json()) as any;
@@ -596,7 +596,7 @@ describe("Cross-entity lifecycle", () => {
   });
 
   it("delete env blocked by active session -> archive session -> delete succeeds", async () => {
-    const aRes = await post("/v1/oma/agents", { name: "EnvBlockAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const aRes = await post("/v1/oma/agents", { name: "EnvBlockAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     const agent = (await aRes.json()) as any;
     const eRes = await post("/v1/oma/environments", { name: "envblock-env", config: { type: "cloud" } });
     const envObj = (await eRes.json()) as any;
@@ -618,7 +618,7 @@ describe("Cross-entity lifecycle", () => {
 
   it("agent version history across 3 updates saves 2 versions", async () => {
     const aRes = await post("/v1/oma/agents", {
-      name: "VersionChain", model: "claude-sonnet-4-6", system: "ver-1", harness: "cross-noop",
+      name: "VersionChain", model: "claude-sonnet-4-6", system: "ver-1", _oma: { harness: "cross-noop" },
     });
     const agent = (await aRes.json()) as any;
     expect(agent.version).toBe(1);
@@ -641,7 +641,7 @@ describe("Cross-entity lifecycle", () => {
   });
 
   it("create all entities then archive all and verify archived_at", async () => {
-    const aRes = await post("/v1/oma/agents", { name: "ArchAll", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const aRes = await post("/v1/oma/agents", { name: "ArchAll", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     const agent = (await aRes.json()) as any;
     const eRes = await post("/v1/oma/environments", { name: "archall-env", config: { type: "cloud" } });
     const envObj = (await eRes.json()) as any;
@@ -678,7 +678,7 @@ describe("Event type combinations", () => {
   let envId: string;
 
   beforeAll(async () => {
-    const a = await post("/v1/oma/agents", { name: "EvtCombo", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "EvtCombo", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     agentId = ((await a.json()) as any).id;
     const e = await post("/v1/oma/environments", { name: "evtcombo-env", config: { type: "cloud" } });
     envId = ((await e.json()) as any).id;
@@ -836,7 +836,7 @@ describe("Session metadata operations", () => {
   let sessionId: string;
 
   beforeAll(async () => {
-    const a = await post("/v1/oma/agents", { name: "MetaAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "MetaAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     const e = await post("/v1/oma/environments", { name: "meta-env", config: { type: "cloud" } });
     const s = await post("/v1/oma/sessions", {
       agent: ((await a.json()) as any).id,
@@ -908,7 +908,7 @@ describe("GitHub Repository + Env Secret resources", () => {
   let envId: string;
 
   beforeAll(async () => {
-    const a = await post("/v1/oma/agents", { name: "GitResAgent", model: "claude-sonnet-4-6", harness: "cross-noop" });
+    const a = await post("/v1/oma/agents", { name: "GitResAgent", model: "claude-sonnet-4-6", _oma: { harness: "cross-noop" } });
     agentId = ((await a.json()) as any).id;
     const e = await post("/v1/oma/environments", { name: "gitres-env", config: { type: "cloud" } });
     envId = ((await e.json()) as any).id;

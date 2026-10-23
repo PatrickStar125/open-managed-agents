@@ -346,7 +346,7 @@ describe("managed turn MCP E2E", () => {
         model: "managed-turn-model",
         system: "Use the MCP echo tool.",
         tools: [{ type: "agent_toolset_20260401" }],
-        harness: HARNESS_NAME,
+        _oma: { harness: HARNESS_NAME },
         mcp_servers: [
           {
             name: "broken",

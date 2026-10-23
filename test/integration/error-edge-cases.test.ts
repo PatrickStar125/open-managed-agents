@@ -27,7 +27,7 @@ async function createAgent(overrides?: Record<string, unknown>) {
   const res = await post("/v1/oma/agents", {
     name: "EdgeAgent",
     model: "claude-sonnet-4-6",
-    harness: "edge-noop",
+    _oma: { harness: "edge-noop" },
     ...overrides,
   });
   return (await res.json()) as any;
@@ -59,7 +59,7 @@ describe("API validation", () => {
     const res = await post("/v1/oma/agents", {
       name: "ExtraFields",
       model: "claude-sonnet-4-6",
-      harness: "edge-noop",
+      _oma: { harness: "edge-noop" },
       unknown_field: "should be ignored or stored",
       another_random: 42,
     });
@@ -120,7 +120,7 @@ describe("Concurrent operations", () => {
     const createRes = await post("/v1/oma/agents", {
       name: "ImmediateGet",
       model: "claude-sonnet-4-6",
-      harness: "edge-noop",
+      _oma: { harness: "edge-noop" },
     });
     const agent = (await createRes.json()) as any;
 
@@ -135,7 +135,7 @@ describe("Concurrent operations", () => {
     const createRes = await post("/v1/oma/agents", {
       name: "ImmediateDel",
       model: "claude-sonnet-4-6",
-      harness: "edge-noop",
+      _oma: { harness: "edge-noop" },
     });
     const agent = (await createRes.json()) as any;
 
@@ -207,8 +207,8 @@ describe("Boundary conditions", () => {
 
   it("agent list with very large limit returns all available", async () => {
     // Create a few agents to be sure
-    await post("/v1/oma/agents", { name: "Limit-1", model: "claude-sonnet-4-6", harness: "edge-noop" });
-    await post("/v1/oma/agents", { name: "Limit-2", model: "claude-sonnet-4-6", harness: "edge-noop" });
+    await post("/v1/oma/agents", { name: "Limit-1", model: "claude-sonnet-4-6", _oma: { harness: "edge-noop" } });
+    await post("/v1/oma/agents", { name: "Limit-2", model: "claude-sonnet-4-6", _oma: { harness: "edge-noop" } });
 
     const res = await get("/v1/oma/agents?limit=9999");
     expect(res.status).toBe(200);
@@ -312,7 +312,7 @@ describe("Boundary conditions", () => {
       name: "EmptySystem",
       model: "claude-sonnet-4-6",
       system: "",
-      harness: "edge-noop",
+      _oma: { harness: "edge-noop" },
     });
     expect(res.status).toBe(201);
     const agent = (await res.json()) as any;
@@ -324,7 +324,7 @@ describe("Boundary conditions", () => {
       post("/v1/oma/agents", {
         name: `Rapid-${i}`,
         model: "claude-sonnet-4-6",
-        harness: "edge-noop",
+        _oma: { harness: "edge-noop" },
       }),
     );
     const results = await Promise.all(promises);
