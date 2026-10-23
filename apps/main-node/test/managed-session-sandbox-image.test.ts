@@ -58,6 +58,7 @@ function environmentWith(sandboxImage?: string): Environment {
 
 const catalog = parseSandboxImageCatalog(JSON.stringify({
   analytics: { reference: "registry.example/oma/analytics:1", label: "Analytics" },
+  web: { reference: "registry.example/oma/web:1" },
 }));
 
 /** Runner wired like node-managed: the real builder in front of a recording
@@ -118,6 +119,27 @@ describe("managed session sandbox image selection", () => {
     expect(contexts).toHaveLength(1);
     expect(contexts[0]).not.toHaveProperty("image");
     expect(contexts[0]).toMatchObject({ workspaceId: "workspace_img", environmentId: "env_img" });
+    await runner.stop({ workspaceId: "workspace_img", sessionId: session.id });
+  });
+
+  it("rebuilds a warm sandbox whenever the Environment switches image, and reuses it otherwise", async () => {
+    const { runner, contexts } = runnerWithFactory();
+    const start = (sandboxImage?: string) => runner.start({
+      workspaceId: "workspace_img",
+      sessionId: session.id,
+      session,
+      environment: environmentWith(sandboxImage),
+      initialEvents: [],
+    });
+    await start("analytics");
+    await start("analytics");
+    await start("web");
+    await start();
+    expect(contexts.map((ctx) => ctx.image)).toEqual([
+      { alias: "analytics", reference: "registry.example/oma/analytics:1" },
+      { alias: "web", reference: "registry.example/oma/web:1" },
+      undefined,
+    ]);
     await runner.stop({ workspaceId: "workspace_img", sessionId: session.id });
   });
 

@@ -256,6 +256,8 @@ export class DefaultNodeManagedSessionRunner
         resources: input.session.resources,
         skills: input.session.agent.skills,
         environment: input.environment.config,
+        // A different catalog image needs a different sandbox, like packages.
+        sandboxImage: input.environment.openma?.sandboxImage ?? null,
       });
       const existing = this.sandboxes.get(input);
       if (this.dependencies.workspaceCheckpoints !== undefined && input.executionFence === undefined) {
