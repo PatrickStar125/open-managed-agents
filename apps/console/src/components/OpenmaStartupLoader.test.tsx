@@ -11,6 +11,7 @@ it("uses the Backchat SVG for a page loading state, keeping its accessible label
   expect(status).toHaveAttribute("viewBox", "240 244 548 454");
   expect(status.querySelectorAll("path")).toHaveLength(3);
   expect(status.querySelectorAll("circle")).toHaveLength(3);
+  expect(status).toHaveClass("text-brand");
 });
 
 it("keeps button loading compact and distinct from the page loader", () => {
