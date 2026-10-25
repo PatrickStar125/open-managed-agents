@@ -298,3 +298,177 @@ describe("createCfUsageStore + clampUsageValue helpers", () => {
     expect(clampUsageValue(Number.NaN)).toBe(0);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// v2 — the itemized ledger (design: docs/usage-ledger-design.md).
+// Migration 0024 must have applied for these to pass.
+// ═══════════════════════════════════════════════════════════════════════
+
+import type { LedgerEntryInput, LedgerQuery } from "@open-managed-agents/services";
+
+function ledgerStore(): SqlUsageStore {
+  return new SqlUsageStore(new CfD1SqlClient(db()));
+}
+
+function callEntry(overrides: Partial<LedgerEntryInput> = {}): LedgerEntryInput {
+  return {
+    tenantId: TENANT_A,
+    sessionId: "sess_v2",
+    kind: "model_call",
+    value: 1,
+    correlationId: `corr_${Math.random().toString(36).slice(2)}`,
+    input_tokens: 1_000,
+    cached_read_tokens: 4_000,
+    output_tokens: 200,
+    dimensions: { modelId: "claude-sonnet-4-6" },
+    ...overrides,
+  };
+}
+
+describe("SqlUsageStore — v2 recordLedger", () => {
+  it("writes a model_call row with its full token economics", async () => {
+    await ledgerStore().recordLedger([callEntry()]);
+    const r = await db()
+      .prepare(`SELECT kind, value, input_tokens, cached_read_tokens, output_tokens,
+                       cached_write_tokens, model_id, correlation_id, schema_version
+                  FROM usage_events WHERE tenant_id = ?`)
+      .bind(TENANT_A)
+      .first<{ kind: string; value: number; input_tokens: number; cached_read_tokens: number;
+               output_tokens: number; cached_write_tokens: number | null; model_id: string;
+               correlation_id: string; schema_version: number }>();
+    expect(r).toMatchObject({
+      kind: "model_call",
+      value: 1,
+      input_tokens: 1_000,
+      cached_read_tokens: 4_000,
+      output_tokens: 200,
+      cached_write_tokens: null,
+      model_id: "claude-sonnet-4-6",
+      schema_version: 2,
+    });
+    expect(r!.correlation_id).toMatch(/^corr_/);
+  });
+
+  it("is exactly-once: a redelivered correlation_id collapses to one row", async () => {
+    const e = callEntry({ correlationId: "corr_dedupe_1" });
+    const s = ledgerStore();
+    await s.recordLedger([e]);
+    await s.recordLedger([e]); // at-least-once redelivery
+    await s.recordLedger([e]); // and again
+    const r = await db()
+      .prepare(`SELECT COUNT(*) AS n FROM usage_events WHERE correlation_id = ?`)
+      .bind("corr_dedupe_1")
+      .first<{ n: number }>();
+    expect(r!.n).toBe(1);
+  });
+
+  it("clamps seconds but NEVER token measures (per-kind validation)", async () => {
+    const s = ledgerStore();
+    // A 10-day seconds emit clamps at 86,400…
+    await s.recordLedger([callEntry({
+      kind: "sandbox_active_seconds",
+      value: 864_000,
+      input_tokens: undefined, cached_read_tokens: undefined, output_tokens: undefined,
+      dimensions: { runtimeId: "cloudflare-sandbox" },
+      interval: { startMs: 1, endMs: 2 },
+    })]);
+    // …but a 10-million-token call passes through untouched.
+    await s.recordLedger([callEntry({ input_tokens: 10_000_000, correlationId: "corr_big_tokens" })]);
+    const clamped = await db()
+      .prepare(`SELECT value FROM usage_events WHERE kind = 'sandbox_active_seconds' AND tenant_id = ?`)
+      .bind(TENANT_A).first<{ value: number }>();
+    const tokens = await db()
+      .prepare(`SELECT input_tokens FROM usage_events WHERE correlation_id = 'corr_big_tokens'`)
+      .first<{ input_tokens: number }>();
+    expect(clamped!.value).toBe(86_400);
+    expect(tokens!.input_tokens).toBe(10_000_000);
+  });
+
+  it("drops invalid rows instead of reshaping them", async () => {
+    const s = ledgerStore();
+    await s.recordLedger([
+      callEntry({ correlationId: "corr_neg", input_tokens: -5 }),
+      callEntry({ correlationId: "corr_frac", input_tokens: 10.5 }),
+      callEntry({ correlationId: "corr_badval", value: -1 }),
+    ]);
+    const r = await db()
+      .prepare(`SELECT COUNT(*) AS n FROM usage_events WHERE correlation_id LIKE 'corr_%'`)
+      .first<{ n: number }>();
+    expect(r!.n).toBe(0);
+  });
+});
+
+describe("SqlUsageStore — v2 query", () => {
+  beforeEach(async () => {
+    const s = ledgerStore();
+    const entries: LedgerEntryInput[] = [];
+    for (let i = 0; i < 12; i++) {
+      entries.push(callEntry({
+        correlationId: `corr_q_${i}`,
+        sessionId: i % 2 === 0 ? "sess_even" : "sess_odd",
+        agentId: i < 6 ? "agent_r" : "agent_d",
+        dimensions: { modelId: i < 4 ? "gpt-5" : "claude-sonnet-4-6" },
+      }));
+    }
+    await s.recordLedger(entries);
+  });
+
+  function q(overrides: Partial<LedgerQuery> = {}): LedgerQuery {
+    return { tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 1000, limit: 5, ...overrides };
+  }
+
+  it("pages newest-first with a cursor and a filter-scoped total", async () => {
+    const s = ledgerStore();
+    const p1 = await s.query(q());
+    expect(p1.rows).toHaveLength(5);
+    expect(p1.completeness).toBe("complete");
+    expect(p1.projectionLagMs).toBe(0);
+    expect(p1.total).toBe(12);
+    // newest-first: strictly descending ids
+    const ids = p1.rows.map((r) => r.id);
+    expect([...ids].sort((a, b) => b - a)).toEqual(ids);
+    expect(p1.nextCursor).toBe(String(ids[ids.length - 1]));
+
+    const p2 = await s.query(q({ cursor: p1.nextCursor! }));
+    expect(p2.rows).toHaveLength(5);
+    expect(p2.rows[0].id).toBeLessThan(ids[ids.length - 1]);
+    expect(p2.total).toBe(12); // total ignores the cursor
+  });
+
+  it("filters by session, agent, kind, and dimension columns", async () => {
+    const s = ledgerStore();
+    expect((await s.query(q({ sessionId: "sess_even", limit: 50 }))).total).toBe(6);
+    expect((await s.query(q({ agentId: "agent_r", limit: 50 }))).total).toBe(6);
+    expect((await s.query(q({ kind: "model_call", limit: 50 }))).total).toBe(12);
+    expect((await s.query(q({ modelId: "gpt-5", limit: 50 }))).total).toBe(4);
+    expect((await s.query(q({ sessionId: "sess_even", agentId: "agent_d", limit: 50 }))).total).toBe(3);
+  });
+
+  it("returns rowKind detail rows carrying the contract columns", async () => {
+    const s = ledgerStore();
+    const page = await s.query(q({ limit: 1 }));
+    const row = page.rows[0];
+    expect(row.rowKind).toBe("detail");
+    expect(row.correlation_id).toMatch(/^corr_q_/);
+    expect(row.model_id).toBeTruthy();
+    expect(row.billed_at).toBeNull();
+  });
+});
+
+describe("SqlUsageStore — v2 describe/listKinds", () => {
+  it("declares the baseline SQL store honestly: forever detail, no rollup, no lag", async () => {
+    const s = ledgerStore();
+    expect(s.describe()).toEqual({
+      detailRetentionDays: 0,
+      rollupGranularity: "none",
+      maxProjectionLagMs: 0,
+    });
+    expect(s.listKinds()).toEqual([
+      { kind: "session_alive_seconds", unit: "s" },
+      { kind: "sandbox_active_seconds", unit: "s" },
+      { kind: "browser_active_seconds", unit: "s" },
+      { kind: "model_call", unit: "call" },
+      { kind: "tool_use", unit: "call" },
+    ]);
+  });
+});

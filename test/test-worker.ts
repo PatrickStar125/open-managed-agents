@@ -280,6 +280,7 @@ import routerSchema from "../apps/main/migrations-router/0001_consolidated.sql?r
 
 // @ts-expect-error vitest resolves SQL via ?raw
 import tenantInvitationsSchema from "../apps/main/migrations/0023_tenant_invitations.sql?raw";
+import usageLedgerV2Schema from "../apps/main/migrations/0024_usage_ledger_v2.sql?raw";
 
 const MIGRATIONS_RAW: string[] = [
   authSchema as string,
@@ -309,6 +310,7 @@ const MIGRATIONS_RAW: string[] = [
   environmentServiceKeysSchema as string,
   environmentWorkGenerationSchema as string,
   tenantInvitationsSchema as string,
+  usageLedgerV2Schema as string,
 ];
 
 const INTEGRATIONS_MIGRATIONS_RAW: string[] = [integrationsSchema as string];

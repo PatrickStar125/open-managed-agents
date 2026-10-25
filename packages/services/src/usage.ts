@@ -104,7 +104,7 @@ export function clampUsageValue(raw: number): number {
  * (CfD1SqlClient), better-sqlite3 (Node tests), or postgres.js (future
  * Node+pg). Column names match migration 0017_usage_events.sql.
  */
-export class SqlUsageStore implements UsageStore {
+export class SqlUsageStore implements UsageStore, LedgerStore {
   constructor(private readonly client: SqlClient) {}
 
   async recordUsage(e: UsageEventInput): Promise<void> {
@@ -202,9 +202,261 @@ export class SqlUsageStore implements UsageStore {
         .run();
     }
   }
+
+  // ── v2 ledger methods (see the v2 section at the bottom of this file) ─
+
+  async recordLedger(entries: LedgerEntryInput[]): Promise<void> {
+    for (const raw of entries) {
+      const e = normalizeLedgerEntry(raw);
+      if (!e) continue; // dropped, never reshaped
+      // INSERT OR IGNORE implements exactly-once rows: the partial
+      // UNIQUE(correlation_id) collapses at-least-once redeliveries.
+      // All other constraints are validated client-side above.
+      await this.client
+        .prepare(
+          `INSERT OR IGNORE INTO usage_events
+             (tenant_id, session_id, agent_id, kind, value, created_at,
+              correlation_id, interval_start_ms, interval_end_ms,
+              input_tokens, cached_read_tokens, output_tokens, cached_write_tokens,
+              model_id, tool_name, runtime_id, schema_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2)`,
+        )
+        .bind(
+          e.tenantId,
+          e.sessionId,
+          e.agentId ?? null,
+          e.kind,
+          e.value,
+          Date.now(),
+          e.correlationId,
+          e.interval?.startMs ?? null,
+          e.interval?.endMs ?? null,
+          e.input_tokens ?? null,
+          e.cached_read_tokens ?? null,
+          e.output_tokens ?? null,
+          e.cached_write_tokens ?? null,
+          e.dimensions?.modelId ?? null,
+          e.dimensions?.toolName ?? null,
+          e.dimensions?.runtimeId ?? null,
+        )
+        .run();
+    }
+  }
+
+  async query(q: LedgerQuery): Promise<LedgerPage> {
+    const cap = Math.max(1, Math.min(5000, Math.floor(q.limit) || 25));
+    const conds = ["tenant_id = ?", "created_at >= ?", "created_at < ?"];
+    const binds: unknown[] = [q.tenantId, q.fromMs, q.toMs];
+    if (q.sessionId) {
+      conds.push("session_id = ?");
+      binds.push(q.sessionId);
+    }
+    if (q.agentId) {
+      conds.push("agent_id = ?");
+      binds.push(q.agentId);
+    }
+    if (q.modelId) {
+      conds.push("model_id = ?");
+      binds.push(q.modelId);
+    }
+    if (q.runtimeId) {
+      conds.push("runtime_id = ?");
+      binds.push(q.runtimeId);
+    }
+    if (q.kind) {
+      conds.push("kind = ?");
+      binds.push(q.kind);
+    }
+    const where = conds.join(" AND ");
+
+    // Newest-first; cursor is the prior page's last row id. An invalid
+    // cursor degrades to the first page rather than erroring. The
+    // cursor bind is always appended LAST, so the COUNT below can
+    // slice it off — totals are filter-scoped, never page-scoped.
+    let cursorBound = false;
+    if (q.cursor) {
+      const cur = Number(q.cursor);
+      if (Number.isInteger(cur) && cur > 0) {
+        conds.push("id < ?");
+        binds.push(cur);
+        cursorBound = true;
+      }
+    }
+    const rowsSql = `SELECT ${LEDGER_COLUMNS} FROM usage_events
+       WHERE ${conds.join(" AND ")} ORDER BY id DESC LIMIT ?`;
+    const r = await this.client
+      .prepare(rowsSql)
+      .bind(...binds, cap)
+      .all<Omit<LedgerRow, "rowKind">>();
+    const rows = (r.results ?? []).map((row) => ({ ...row, rowKind: "detail" as const }));
+
+    const totalBinds = cursorBound ? binds.slice(0, -1) : binds;
+    const c = await this.client
+      .prepare(`SELECT COUNT(*) AS total FROM usage_events WHERE ${where}`)
+      .bind(...totalBinds)
+      .first<{ total: number }>();
+
+    return {
+      rows,
+      nextCursor: rows.length === cap ? String(rows[rows.length - 1].id) : null,
+      // Single-tier store: everything is detail, writes are direct.
+      completeness: "complete",
+      projectionLagMs: 0,
+      total: c?.total ?? rows.length,
+    };
+  }
+
+  describe(): LedgerCapabilities {
+    // The baseline SQL store keeps detail forever, rolls up nothing,
+    // and is written synchronously — there is no projection to lag.
+    return { detailRetentionDays: 0, rollupGranularity: "none", maxProjectionLagMs: 0 };
+  }
+
+  listKinds(): Array<{ kind: LedgerKind; unit: string }> {
+    return LEDGER_KIND_UNITS;
+  }
 }
 
 /** CF wiring — wraps a D1Database in CfD1SqlClient + SqlUsageStore. */
 export function createCfUsageStore(deps: { db: D1Database }): UsageStore {
   return new SqlUsageStore(new CfD1SqlClient(deps.db));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v2 — the itemized usage ledger (design: docs/usage-ledger-design.md).
+// Same table, extended in place: new kinds, correlation-id idempotency,
+// token measures, dimension columns, and a cursor query. The v1 methods
+// above are untouched — seconds emitters keep calling recordUsage until
+// Phase-2 metering sources migrate them to recordLedger.
+// ═══════════════════════════════════════════════════════════════════════
+
+export type LedgerKind = UsageKind | "model_call" | "tool_use";
+
+export interface LedgerEntryInput {
+  tenantId: string;
+  sessionId: string;
+  agentId?: string | null;
+  kind: LedgerKind;
+  /** Quantity only. Prices never enter the ledger. */
+  value: number;
+  /** Idempotency anchor to the fact source (event seq / op id).
+   *  At-least-once writers + UNIQUE(correlation_id) = exactly-once rows. */
+  correlationId: string;
+  /** Interval window for the *_seconds family. Knowable only at emit
+   *  time — ships in v2 so old rows remain roll-up-able. */
+  interval?: { startMs: number; endMs: number };
+  /** Token economics for model_call rows (one row per invocation). */
+  input_tokens?: number;
+  cached_read_tokens?: number;
+  output_tokens?: number;
+  cached_write_tokens?: number;
+  dimensions?: {
+    modelId?: string;
+    toolName?: string;
+    runtimeId?: string;
+  };
+}
+
+export interface LedgerCapabilities {
+  detailRetentionDays: number; // 0 = forever
+  rollupGranularity: "day" | "none";
+  /** Upper bound on projection lag; queries surface actual lag. */
+  maxProjectionLagMs: number;
+}
+
+export interface LedgerQuery {
+  tenantId: string;
+  fromMs: number;
+  toMs: number;
+  sessionId?: string;
+  agentId?: string;
+  modelId?: string;
+  runtimeId?: string;
+  kind?: LedgerKind;
+  /** Opaque cursor from a prior page (single tier: the last row id). */
+  cursor?: string;
+  limit: number;
+}
+
+/** A persisted row (DB naming, like UsageEventRow). */
+export interface LedgerRow extends UsageEventRow {
+  correlation_id: string | null;
+  interval_start_ms: number | null;
+  interval_end_ms: number | null;
+  input_tokens: number | null;
+  cached_read_tokens: number | null;
+  output_tokens: number | null;
+  cached_write_tokens: number | null;
+  model_id: string | null;
+  tool_name: string | null;
+  runtime_id: string | null;
+  schema_version: number;
+  /** This store is single-tier; every row is detail. */
+  rowKind: "detail";
+}
+
+export interface LedgerPage {
+  rows: LedgerRow[];
+  nextCursor: string | null;
+  /** Honest degradation, in the contract, per page. */
+  completeness: "complete" | "partial" | "rolled_up";
+  projectionLagMs: number;
+  /** Matched-row count for the filter — "loaded X of Y" footers and
+   *  export cap warnings consume it. */
+  total?: number;
+}
+
+export interface LedgerStore extends UsageStore {
+  /** Idempotent batch write. Rows failing per-kind validation are
+   *  dropped, never silently reshaped. */
+  recordLedger(entries: LedgerEntryInput[]): Promise<void>;
+  query(q: LedgerQuery): Promise<LedgerPage>;
+  describe(): LedgerCapabilities;
+  /** Kind enumeration so UIs are data-driven, not hardcoded tab lists. */
+  listKinds(): Array<{ kind: LedgerKind; unit: string }>;
+}
+
+/** Shared column list for v2 reads (DB naming, snake_case). */
+const LEDGER_COLUMNS = `id, tenant_id, session_id, agent_id, kind, value, created_at, billed_at,
+  correlation_id, interval_start_ms, interval_end_ms, input_tokens, cached_read_tokens,
+  output_tokens, cached_write_tokens, model_id, tool_name, runtime_id, schema_version`;
+
+/** Static registry — the listKinds() payload. */
+export const LEDGER_KIND_UNITS: Array<{ kind: LedgerKind; unit: string }> = [
+  { kind: "session_alive_seconds", unit: "s" },
+  { kind: "sandbox_active_seconds", unit: "s" },
+  { kind: "browser_active_seconds", unit: "s" },
+  { kind: "model_call", unit: "call" },
+  { kind: "tool_use", unit: "call" },
+];
+
+/**
+ * Per-kind validation (v3): the 86,400 clamp binds ONLY the *_seconds
+ * family — applied universally it would silently cap token counts.
+ * Token measures must be non-negative integers or absent; a violating
+ * ROW is dropped (returns null), never reshaped.
+ */
+export function normalizeLedgerEntry(
+  e: LedgerEntryInput,
+): LedgerEntryInput | null {
+  if (!Number.isInteger(e.value) || e.value < 0) return null;
+  if (!e.correlationId) return null;
+  const value = e.kind.endsWith("_seconds")
+    ? clampUsageValue(e.value)
+    : e.value;
+  for (const t of [
+    e.input_tokens,
+    e.cached_read_tokens,
+    e.output_tokens,
+    e.cached_write_tokens,
+  ]) {
+    if (t !== undefined && (!Number.isInteger(t) || t < 0)) return null;
+  }
+  if (
+    e.interval &&
+    (!Number.isFinite(e.interval.startMs) || !Number.isFinite(e.interval.endMs))
+  ) {
+    return null;
+  }
+  return { ...e, value };
 }

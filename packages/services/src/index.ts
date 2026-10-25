@@ -111,13 +111,22 @@ export {
   createCfUsageStore,
   clampUsageValue,
   MAX_VALUE_PER_EMIT_SEC,
+  LEDGER_KIND_UNITS,
+  normalizeLedgerEntry,
 } from "./usage";
 export type {
   UsageStore,
+  LedgerStore,
   UsageKind,
+  LedgerKind,
   UsageEventInput,
   UsageEventRow,
   UsageHistoryQuery,
+  LedgerEntryInput,
+  LedgerCapabilities,
+  LedgerQuery,
+  LedgerRow,
+  LedgerPage,
 } from "./usage";
 
 /**
