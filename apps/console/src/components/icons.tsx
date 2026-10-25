@@ -88,6 +88,10 @@ export function SessionsIcon({ className }: IconProps) {
   return <StrokeIcon className={className} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />;
 }
 
+export function UsageIcon({ className }: IconProps) {
+  return <StrokeIcon className={className} d="M6 20V12M12 20V6M18 20v-9M4 20h16" />;
+}
+
 export function EnvIcon({ className }: IconProps) {
   return <StrokeIcon className={className} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />;
 }

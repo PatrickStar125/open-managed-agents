@@ -41,6 +41,8 @@ import { WorkspaceMembers, JoinWorkspace } from "./pages/WorkspaceMembers";
 import { ApiKeysList } from "./pages/ApiKeysList";
 import { CliLogin } from "./pages/CliLogin";
 import { RuntimesList } from "./pages/RuntimesList";
+import { Usage } from "./pages/Usage";
+import { UsageLedger } from "./pages/UsageLedger";
 import { ConnectRuntime } from "./pages/ConnectRuntime";
 import { EvalRunsList } from "./pages/EvalRunsList";
 import { EvalRunDetail } from "./pages/EvalRunDetail";
@@ -119,6 +121,18 @@ const protectedRoutes: RouteObject[] = [
     ],
   },
   { path: "files", element: <FilesList />, handle: { crumb: "Files" } },
+  {
+    path: "usage",
+    handle: { crumb: "Usage" },
+    children: [
+      { index: true, element: <Usage /> },
+      {
+        path: "ledger",
+        element: <UsageLedger />,
+        handle: { crumb: (m: UIMatch) => "Ledger" },
+      },
+    ],
+  },
   {
     path: "evals",
     handle: { crumb: "Eval Runs" },
@@ -266,7 +280,21 @@ const router = createBrowserRouter([
 
 void loadBranding();
 
-createRoot(document.getElementById("root")!).render(
+// Opt-in dev mocking: appending ?mocks=1 boots the MSW service worker
+// BEFORE the first render (better-auth's useSession fires on mount, so
+// the worker has to be intercepting by then) and lets the console run
+// with no live backend — see src/mocks/usage.ts for the demo dataset.
+// Prod builds never import msw at all; other dev sessions are untouched.
+void (async () => {
+  if (
+    import.meta.env.DEV &&
+    new URLSearchParams(window.location.search).get("mocks") === "1"
+  ) {
+    const { worker } = await import("./mocks/browser");
+    await worker.start({ onUnhandledRequest: "bypass" });
+  }
+
+  createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
       <I18nProvider>
@@ -281,4 +309,5 @@ createRoot(document.getElementById("root")!).render(
       </I18nProvider>
     </ErrorBoundary>
   </StrictMode>,
-);
+    );
+})();
