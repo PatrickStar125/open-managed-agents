@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { afterEach, expect, it, vi } from "vitest";
+import type { Sandbox as SdkSandbox } from "@alibaba-group/opensandbox";
 import { OpenSandbox, optionsFromEnvironment } from "../src/index";
 
 let relay: ChildProcess | undefined;
@@ -20,15 +21,15 @@ async function freePort(): Promise<number> {
 
 async function fixture() {
   const port = await freePort();
-  const sandbox = new OpenSandbox("sb-1", optionsFromEnvironment({}));
+  const sandbox = new OpenSandbox({ id: "sb-1" } as SdkSandbox, optionsFromEnvironment({}));
   const run = vi.spyOn(sandbox, "run").mockImplementation(async (command) => {
     // Redirect only the exposed service port so this test needs no OpenSandbox
     // server. Run the exact relay command produced by the adapter.
     command = command.replace(/server\.listen\(\d+,/, `server.listen(${port},`);
     relay = spawn(command, { shell: true, detached: true, stdio: "ignore" });
-    return [{ type: "execution_complete" }];
+    return { logs: { stdout: [], stderr: [] }, result: [], complete: { timestamp: Date.now(), executionTimeMs: 0 } };
   });
-  vi.spyOn(sandbox, "serviceEndpoint").mockResolvedValue({ endpoint: `http://127.0.0.1:${port}` });
+  vi.spyOn(sandbox, "serviceEndpoint").mockResolvedValue({ endpoint: `http://127.0.0.1:${port}`, headers: undefined });
   return { sandbox, port, run };
 }
 

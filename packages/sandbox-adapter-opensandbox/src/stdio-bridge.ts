@@ -70,8 +70,8 @@ export async function spawnBridge(
 ): Promise<SandboxDuplexProcess> {
   const token = Buffer.from(randomBytes(32)).toString("hex");
   const source = bridgeSource({ ...spec, env: sandbox.commandEnv(spec.command, spec.env) }, port, token);
-  const events = await sandbox.run(`node -e ${quote(source)}`, 120_000, true);
-  if (events.some((event) => event.error)) throw new Error("OpenSandbox stdio relay failed to start");
+  const execution = await sandbox.run(`node -e ${quote(source)}`, 120_000, true);
+  if (execution.error) throw new Error("OpenSandbox stdio relay failed to start");
   const endpoint = await sandbox.serviceEndpoint(port);
   const request = async (path: string, init: RequestInit = {}, stream = false) => {
     const response = await fetch(`${endpoint.endpoint}${path}`, {
