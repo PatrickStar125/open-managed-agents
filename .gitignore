@@ -56,6 +56,6 @@ rl/tasks/terminal-bench/findings-*.md
 
 # pnpm content store (created when --store-dir=. is used locally)
 .pnpm-store/
-data/
+/data/
 .env
 .vercel

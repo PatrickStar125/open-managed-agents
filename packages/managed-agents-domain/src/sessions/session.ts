@@ -64,6 +64,18 @@ export interface SessionOutcomeEvaluation {
   result: string;
 }
 
+/**
+ * Who created the session — the attribution dimension the usage ledger
+ * inherits. member = a signed-in human (Console/cookie/personal key);
+ * api_key = a workspace key (machine identity); integration = a
+ * third-party surface. id is null when the identity is not surfaced
+ * (workspace keys today) — never fabricated.
+ */
+export interface SessionActor {
+  type: "member" | "api_key" | "integration";
+  id: string | null;
+}
+
 export interface Session {
   id: string;
   agent: SessionAgent;
@@ -81,4 +93,5 @@ export interface Session {
   usage: SessionUsage;
   vaultIds: string[];
   deploymentId?: string | null;
+  actor?: SessionActor;
 }

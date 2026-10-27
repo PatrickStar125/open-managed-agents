@@ -110,8 +110,12 @@ function fromMonetaryAmount(amount: MonetaryAmount): object {
   return { amount: amount.amountMinor, currency: amount.currency };
 }
 
-export function toCreateSessionCommand(body: SessionCreateBody): CreateSessionCommand {
+export function toCreateSessionCommand(
+  body: SessionCreateBody,
+  actor?: CreateSessionCommand["actor"],
+): CreateSessionCommand {
   return {
+    ...(actor !== undefined && { actor }),
     agent: toAgentSelector(body.agent),
     environmentId: body.environment_id,
     ...(body.budget !== undefined && {

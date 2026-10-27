@@ -215,16 +215,18 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
       await this.client
         .prepare(
           `INSERT OR IGNORE INTO usage_events
-             (tenant_id, session_id, agent_id, kind, value, created_at,
+             (tenant_id, session_id, agent_id, actor_type, actor_id, kind, value, created_at,
               correlation_id, interval_start_ms, interval_end_ms,
               input_tokens, cached_read_tokens, output_tokens, cached_write_tokens,
               model_id, tool_name, runtime_id, schema_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2)`,
         )
         .bind(
           e.tenantId,
           e.sessionId,
           e.agentId ?? null,
+          e.actorType ?? null,
+          e.actorId ?? null,
           e.kind,
           e.value,
           Date.now(),
@@ -247,6 +249,17 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
     const cap = Math.max(1, Math.min(5000, Math.floor(q.limit) || 25));
     const conds = ["tenant_id = ?", "created_at >= ?", "created_at < ?"];
     const binds: unknown[] = [q.tenantId, q.fromMs, q.toMs];
+    if (q.actorType) {
+      conds.push("actor_type = ?");
+      binds.push(q.actorType);
+    }
+    if (q.actorId === null) {
+      // SQL NULL never matches '='; the null actor (workspace key) needs IS NULL.
+      conds.push("actor_id IS NULL");
+    } else if (q.actorId !== undefined) {
+      conds.push("actor_id = ?");
+      binds.push(q.actorId);
+    }
     if (q.sessionId) {
       conds.push("session_id = ?");
       binds.push(q.sessionId);
@@ -364,6 +377,7 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
         by_model: [],
         by_agent: [],
         by_sandbox: [],
+        by_actor: [],
       };
     }
     // Fill between the window START and the LAST DATA DAY (not toMs —
@@ -447,12 +461,27 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
       .bind(...range)
       .all<Omit<LedgerRollup["by_sandbox"][number], "name">>();
 
+    const byActor = await this.client
+      .prepare(
+        `SELECT actor_type, actor_id, COUNT(DISTINCT session_id) AS sessions,
+                SUM(CASE WHEN kind = 'model_call' THEN 1 ELSE 0 END) AS model_calls,
+                SUM(CASE WHEN kind = 'model_call' THEN COALESCE(input_tokens, 0) ELSE 0 END) AS input_tokens,
+                SUM(CASE WHEN kind = 'model_call' THEN COALESCE(output_tokens, 0) ELSE 0 END) AS output_tokens,
+                ROUND(SUM(CASE WHEN kind = 'sandbox_active_seconds' THEN value ELSE 0 END) / 60.0) AS sandbox_minutes
+           FROM usage_events
+          WHERE tenant_id = ? AND created_at >= ? AND created_at < ?
+          GROUP BY actor_type, actor_id ORDER BY input_tokens DESC`,
+      )
+      .bind(...range)
+      .all<LedgerRollup["by_actor"][number]>();
+
     return {
       totals,
       daily,
       by_model: byModel.results ?? [],
       by_agent: (byAgent.results ?? []).map((r) => ({ ...r, agent_name: r.agent_id })),
       by_sandbox: (bySandbox.results ?? []).map((r) => ({ ...r, name: r.runtime_id })),
+      by_actor: byActor.results ?? [],
     };
   }
 
@@ -490,6 +519,9 @@ export interface LedgerEntryInput {
   tenantId: string;
   sessionId: string;
   agentId?: string | null;
+  /** Attribution inherited from the session's creating auth context. */
+  actorType?: "member" | "api_key" | "integration";
+  actorId?: string | null;
   kind: LedgerKind;
   /** Quantity only. Prices never enter the ledger. */
   value: number;
@@ -522,6 +554,8 @@ export interface LedgerQuery {
   tenantId: string;
   fromMs: number;
   toMs: number;
+  actorType?: "member" | "api_key" | "integration";
+  actorId?: string | null;
   sessionId?: string;
   agentId?: string;
   modelId?: string;
@@ -536,6 +570,8 @@ export interface LedgerQuery {
 
 /** A persisted row (DB naming, like UsageEventRow). */
 export interface LedgerRow extends UsageEventRow {
+  actor_type: string | null;
+  actor_id: string | null;
   correlation_id: string | null;
   interval_start_ms: number | null;
   interval_end_ms: number | null;
@@ -599,6 +635,15 @@ export interface LedgerRollup {
     sessions: number;
     sandbox_minutes: number;
   }>;
+  by_actor: Array<{
+    actor_type: string | null;
+    actor_id: string | null;
+    sessions: number;
+    model_calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    sandbox_minutes: number;
+  }>;
 }
 
 export interface LedgerStore extends UsageStore {
@@ -613,7 +658,7 @@ export interface LedgerStore extends UsageStore {
 }
 
 /** Shared column list for v2 reads (DB naming, snake_case). */
-const LEDGER_COLUMNS = `id, tenant_id, session_id, agent_id, kind, value, created_at, billed_at,
+const LEDGER_COLUMNS = `id, tenant_id, session_id, agent_id, actor_type, actor_id, kind, value, created_at, billed_at,
   correlation_id, interval_start_ms, interval_end_ms, input_tokens, cached_read_tokens,
   output_tokens, cached_write_tokens, model_id, tool_name, runtime_id, schema_version`;
 

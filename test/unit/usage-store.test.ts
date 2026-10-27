@@ -548,3 +548,46 @@ describe("SqlUsageStore — v2 dailyRollup", () => {
     expect(future.daily).toHaveLength(0);
   });
 });
+
+// ── Actor attribution (0025): the member/api_key dimension ──────────────
+
+describe("SqlUsageStore — actor attribution", () => {
+  it("persists actor on rows and filters by type and id", async () => {
+    const s = ledgerStore();
+    await s.recordLedger([
+      callEntry({ correlationId: "act_m1", actorType: "member", actorId: "user_alice" }),
+      callEntry({ correlationId: "act_m2", actorType: "member", actorId: "user_bob" }),
+      callEntry({ correlationId: "act_k1", actorType: "api_key", actorId: null }),
+      callEntry({ correlationId: "act_n1" }), // no actor context path
+    ]);
+    const member = await s.query({ tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 1000, actorType: "member", limit: 10 });
+    expect(member.total).toBe(2);
+    expect(member.rows.every((r) => r.actor_type === "member")).toBe(true);
+    const alice = await s.query({ tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 1000, actorType: "member", actorId: "user_alice", limit: 10 });
+    expect(alice.total).toBe(1);
+    expect(alice.rows[0].actor_id).toBe("user_alice");
+    const keys = await s.query({ tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 1000, actorType: "api_key", actorId: null, limit: 10 });
+    expect(keys.total).toBe(1);
+    // Unattributed rows: actor columns NULL, reachable without filter
+    const all = await s.query({ tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 1000, limit: 10 });
+    expect(all.rows.find((r) => r.correlation_id === "act_n1")!.actor_type).toBeNull();
+  });
+
+  it("rollup breaks down by actor (member vs api_key)", async () => {
+    const s = ledgerStore();
+    await s.recordLedger([
+      callEntry({ sessionId: "s_a", agentId: "ag1", correlationId: "rb1", actorType: "member", actorId: "u1",
+        input_tokens: 1000, output_tokens: 100 }),
+      callEntry({ sessionId: "s_k", agentId: "ag2", correlationId: "rb2", actorType: "api_key", actorId: null,
+        input_tokens: 500, output_tokens: 50 }),
+    ]);
+    const r = await s.dailyRollup({ tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 86_400_000 });
+    const member = r.by_actor.find((a) => a.actor_type === "member");
+    const key = r.by_actor.find((a) => a.actor_type === "api_key");
+    expect(member).toMatchObject({ actor_id: "u1", sessions: 1, input_tokens: 1000 });
+    expect(key).toMatchObject({ actor_id: null, sessions: 1, input_tokens: 500 });
+    // Totals reconcile: by_actor sums equal rollup totals
+    const sum = r.by_actor.reduce((a, x) => a + x.input_tokens, 0);
+    expect(sum).toBe(r.totals.input_tokens);
+  });
+});

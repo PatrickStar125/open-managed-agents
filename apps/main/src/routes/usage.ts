@@ -25,18 +25,24 @@ const app = new Hono<{
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_SPAN_DAYS = 90;
 
-/** Inclusive YYYY-MM-DD window → UTC ms range, clamped to 90 days. */
+/** Parse a YYYY-MM-DD bound; null = absent or calendar-invalid
+ *  (2026-13-01 passes the regex but not the Date parse). Invalid is a
+ *  400, consistent with unknown-kind — never a silent default window. */
+function parseDay(v: string | undefined): Date | null {
+  if (!v || !DATE_RE.test(v)) return null;
+  const d = new Date(`${v}T00:00:00Z`);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+/** Inclusive valid window → UTC ms range, clamped to 90 days. */
 function rangeOf(from: string | undefined, to: string | undefined) {
-  const today = new Date().toISOString().slice(0, 10);
-  const toIso = to && DATE_RE.test(to) ? to : today;
-  const toD = new Date(`${toIso}T00:00:00Z`);
-  let fromD: Date;
-  if (from && DATE_RE.test(from)) {
-    fromD = new Date(`${from}T00:00:00Z`);
-  } else {
-    fromD = new Date(toD);
-    fromD.setUTCDate(fromD.getUTCDate() - 13);
-  }
+  const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  const toD = parseDay(to) ?? today;
+  const toIso = toD.toISOString().slice(0, 10);
+  let fromD = new Date(toD);
+  fromD.setUTCDate(fromD.getUTCDate() - 13);
+  const parsedFrom = parseDay(from);
+  if (parsedFrom) fromD = parsedFrom;
   // Clamp: at most MAX_SPAN_DAYS, from never after to.
   if (fromD > toD) fromD = new Date(toD);
   const minFrom = new Date(toD);
@@ -50,7 +56,14 @@ function rangeOf(from: string | undefined, to: string | undefined) {
   };
 }
 
+const invalidDate = (v?: string) => v !== undefined && !DATE_RE.test(v);
+const badDate = (v?: string) => DATE_RE.test(v ?? "") && Number.isNaN(Date.parse(`${v}T00:00:00Z`));
+
 app.get("/", async (c) => {
+  for (const v of [c.req.query("from"), c.req.query("to")]) {
+    if (invalidDate(v) || badDate(v))
+      return c.json({ error: { type: "invalid_request", message: `invalid date: ${v}` } }, 400);
+  }
   const r = rangeOf(c.req.query("from"), c.req.query("to"));
   const rollup = await c.get("services").usage.dailyRollup({
     tenantId: c.get("tenant_id"),
@@ -71,6 +84,8 @@ function toConsoleRow(r: LedgerRow) {
   return {
     id: r.id,
     ts: new Date(r.created_at).toISOString(),
+    actor_type: r.actor_type ?? undefined,
+    actor_id: r.actor_id ?? undefined,
     correlation_id: r.correlation_id,
     session_id: r.session_id,
     agent_id: r.agent_id ?? "",
@@ -89,19 +104,36 @@ function toConsoleRow(r: LedgerRow) {
 }
 
 app.get("/ledger", async (c) => {
+  const actorType = c.req.query("actor_type") as
+    | "member"
+    | "api_key"
+    | "integration"
+    | undefined;
+  const actorIdRaw = c.req.query("actor_id");
   const tenantId = c.get("tenant_id");
+  for (const v of [c.req.query("from"), c.req.query("to")]) {
+    if (invalidDate(v) || badDate(v))
+      return c.json({ error: { type: "invalid_request", message: `invalid date: ${v}` } }, 400);
+  }
+  const kind = c.req.query("kind");
+  // Contract: an unregistered kind is an error, never a silent empty page.
+  if (kind && !UNIT_BY_KIND.has(kind as LedgerKind)) {
+    return c.json({ error: { type: "invalid_request", message: `unknown kind: ${kind}` } }, 400);
+  }
   const r = rangeOf(c.req.query("from"), c.req.query("to"));
   const limitRaw = Number(c.req.query("limit") ?? 25);
   const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 25, 1), 5000);
   const page = await c.get("services").usage.query({
     tenantId,
+    actorType,
+    actorId: actorIdRaw !== undefined ? actorIdRaw : undefined,
     fromMs: r.fromMs,
     toMs: r.toMs,
     sessionId: c.req.query("session_id"),
     agentId: c.req.query("agent_id"),
     modelId: c.req.query("model_id"),
     runtimeId: c.req.query("runtime_id"),
-    kind: c.req.query("kind") as LedgerKind | undefined,
+    kind: kind as LedgerKind | undefined,
     q: c.req.query("q") ?? undefined,
     cursor: c.req.query("cursor"),
     limit,

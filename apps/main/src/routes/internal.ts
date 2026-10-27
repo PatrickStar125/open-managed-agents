@@ -314,6 +314,8 @@ app.post("/sessions", async (c) => {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      actor_type: "member",
+      actor_id: body.userId,
       agent_id: body.agentId,
       environment_id: body.environmentId,
       title: "",

@@ -49,8 +49,12 @@ function serializeSessionPage(page: ListSessionsPage): object | null {
 
 export function buildSessionRoutes(
   source: ApplicationPortSource<SessionsApplicationPort>,
-): Hono {
-  const app = new Hono();
+): Hono<{
+  Variables: { tenant_id: string; user_id?: string };
+}> {
+  const app = new Hono<{
+    Variables: { tenant_id: string; user_id?: string };
+  }>();
   app.use("*", requireBeta(MANAGED_AGENTS_BETA));
 
   app.get("/", async (c) => {
@@ -230,8 +234,16 @@ export function buildSessionRoutes(
       );
     }
 
+    // Attribution from auth context: a resolved user (cookie or personal
+    // key) is the member; anything else is the workspace key (machine).
+    const userId = c.get("user_id");
     const result = await resolveApplicationPort(source, c).createSession(
-      toCreateSessionCommand(parsed.data),
+      toCreateSessionCommand(
+        parsed.data,
+        userId !== undefined
+          ? { type: "member", id: userId }
+          : { type: "api_key", id: null },
+      ),
     );
     if (result.type === "invalid_request") {
       return c.json(invalidRequest(result.message), 400);

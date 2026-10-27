@@ -24,6 +24,8 @@ export interface ManagedSessionMappingRuntime {
   assertAgentConfiguration?(configuration: ResourceObject, findings: AgentRuntimeMappingFinding[], environment: ResourceObject): Promise<void> | void;
 }
 export interface ManagedSessionMappingDependencies {
+  /** Auth-context attribution stamped onto created sessions. */
+  actor?: CreateSessionCommand["actor"];
   agents: AgentsApplicationPort;
   environments: EnvironmentsApplicationPort;
   resources: {
@@ -176,6 +178,7 @@ export function createManagedSessionMapping(deps: ManagedSessionMappingDependenc
         initialEvents: inputs,
         metadata: encodeResourceMetadata(body.metadata ?? {}, 'session', { sealed: await deps.secrets.seal(JSON.stringify(saved)) }),
         vaultIds: body.vault_ids ?? [],
+        ...(deps.actor !== undefined && { actor: deps.actor }),
       };
     },
     async sessionView(session) {

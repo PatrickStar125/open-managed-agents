@@ -138,6 +138,8 @@ import {
 } from "@open-managed-agents/session-wakeup-cloudflare";
 
 interface SessionInitParams {
+  actor_type?: "member" | "api_key" | "integration";
+  actor_id?: string | null;
   agent_id: string;
   environment_id: string;
   title: string;
@@ -207,6 +209,9 @@ type ActiveOutcome = ActiveOutcomeState;
 type PersistedOutcomeEvaluation = OutcomeEvaluationRecord;
 
 interface SessionState {
+  /** Attribution stamped at /init from the creating auth context. */
+  actor_type?: "member" | "api_key" | "integration" | null;
+  actor_id?: string | null;
   agent_id: string;
   environment_id: string;
   session_id: string;
@@ -1940,6 +1945,8 @@ export class SessionDO extends DurableObject<Env> {
       const params = (await request.json()) as SessionInitParams;
       this.setState({
         ...this.state,
+        actor_type: params.actor_type ?? null,
+        actor_id: params.actor_id ?? null,
         agent_id: params.agent_id,
         environment_id: params.environment_id,
         title: params.title,
@@ -4051,6 +4058,8 @@ export class SessionDO extends DurableObject<Env> {
               tenantId,
               sessionId,
               agentId: this.state.agent_id || null,
+              actorType: this.state.actor_type ?? undefined,
+              actorId: this.state.actor_id ?? undefined,
               kind: "model_call",
               value: 1,
               correlationId: `call:${corr}`,
@@ -4072,6 +4081,8 @@ export class SessionDO extends DurableObject<Env> {
               tenantId,
               sessionId,
               agentId: this.state.agent_id || null,
+              actorType: this.state.actor_type ?? undefined,
+              actorId: this.state.actor_id ?? undefined,
               kind: "tool_use",
               value: 1,
               correlationId: `tool:${e.id}`,
@@ -5951,6 +5962,8 @@ export class SessionDO extends DurableObject<Env> {
           tenantId,
           sessionId,
           agentId: this.state.agent_id || null,
+          actorType: this.state.actor_type ?? undefined,
+          actorId: this.state.actor_id ?? undefined,
           kind: "session_alive_seconds",
           value: seconds,
           correlationId: `alive:${sessionId}`,

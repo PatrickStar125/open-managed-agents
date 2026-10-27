@@ -591,6 +591,8 @@ interface RuntimeAgentSnapshot {
 }
 
 export interface RuntimeSessionStart {
+  actor_type?: "member" | "api_key" | "integration";
+  actor_id?: string | null;
   agent_id: string;
   environment_id: string;
   title: string;
@@ -755,6 +757,10 @@ export function encodeRuntimeSessionStart(
 ): RuntimeSessionStart {
   const { session, environment } = input;
   return {
+    ...(session.actor !== undefined && {
+      actor_type: session.actor.type,
+      actor_id: session.actor.id,
+    }),
     agent_id: session.agent.id,
     environment_id: session.environmentId,
     title: session.title ?? "",

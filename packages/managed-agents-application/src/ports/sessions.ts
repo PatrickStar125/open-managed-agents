@@ -38,6 +38,8 @@ export type SessionAgentSelector =
     };
 
 export interface CreateSessionCommand {
+  /** Attribution stamped at creation from auth context; see SessionActor. */
+  actor?: import("@open-managed-agents/domain/sessions").SessionActor;
   agent: SessionAgentSelector;
   environmentId: string;
   budget?: SpendLimit;

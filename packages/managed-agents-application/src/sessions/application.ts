@@ -223,6 +223,7 @@ function patchMetadata(
 }
 
 interface InternalCreateSessionCommand {
+  actor?: CreateSessionCommand["actor"];
   agent: SessionAgentSelector;
   environmentId: string;
   initialEvents: SessionBootstrapEvent[];
@@ -327,6 +328,7 @@ export class SessionsApplicationService
       ...(command.deploymentId !== null && {
         deploymentId: command.deploymentId,
       }),
+      ...(command.actor !== undefined && { actor: command.actor }),
     };
     const inserted = await this.dependencies.store.insert({
       workspaceId: this.dependencies.workspaceId,
