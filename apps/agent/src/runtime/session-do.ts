@@ -4010,6 +4010,14 @@ export class SessionDO extends DurableObject<Env> {
    * turn, and correlation_id dedupes redeliveries. shortcut: a DO
    * eviction mid-flight can drop the row (at-most-once window); an
    * outbox-grade source closes it if ledger gaps ever matter.
+   *
+   * ACP harnesses (Claude Code, Codex, DSH, …) are metered by this
+   * same tap: acp-translate projects the child's PromptResponse.usage
+   * into a span.model_request_end per PROMPT TURN (one translator per
+   * run() ⇒ unique correlation per turn). Two ACP-specific gaps, by
+   * protocol: the row aggregates the child's internal calls (coarser
+   * than native per-request rows), and children that report no usage
+   * yield no row at all (tap skips on !usage).
    */
   private emitLedgerRows(event: SessionEvent): void {
     if (

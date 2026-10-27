@@ -455,7 +455,7 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
 }
 
 /** CF wiring — wraps a D1Database in CfD1SqlClient + SqlUsageStore. */
-export function createCfUsageStore(deps: { db: D1Database }): UsageStore {
+export function createCfUsageStore(deps: { db: D1Database }): LedgerStore {
   return new SqlUsageStore(new CfD1SqlClient(deps.db));
 }
 
