@@ -267,6 +267,10 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
       conds.push("kind = ?");
       binds.push(q.kind);
     }
+    if (q.q) {
+      conds.push("session_id LIKE ?");
+      binds.push(`%${q.q}%`);
+    }
     const where = conds.join(" AND ");
 
     // Newest-first; cursor is the prior page's last row id. An invalid
@@ -303,6 +307,101 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
       completeness: "complete",
       projectionLagMs: 0,
       total: c?.total ?? rows.length,
+    };
+  }
+
+  /**
+   * Day-bucketed rollup over the ledger — the dashboard's projection,
+   * computed at read time (GROUP BY over the indexed table; no
+   * materialized usage_daily until a workload needs one).
+   */
+  async dailyRollup(q: {
+    tenantId: string;
+    fromMs: number;
+    toMs: number;
+  }): Promise<LedgerRollup> {
+    const range = [q.tenantId, q.fromMs, q.toMs];
+    const day = await this.client
+      .prepare(
+        `SELECT date(created_at / 1000, 'unixepoch') AS date,
+                COUNT(DISTINCT session_id) AS sessions,
+                SUM(CASE WHEN kind = 'model_call' THEN 1 ELSE 0 END) AS model_calls,
+                SUM(CASE WHEN kind = 'model_call' THEN COALESCE(input_tokens, 0) END) AS input_tokens,
+                SUM(CASE WHEN kind = 'model_call' THEN COALESCE(output_tokens, 0) END) AS output_tokens,
+                SUM(CASE WHEN kind = 'model_call' THEN COALESCE(cached_read_tokens, 0) END) AS cached_read_tokens,
+                ROUND(SUM(CASE WHEN kind = 'sandbox_active_seconds' THEN value ELSE 0 END) / 60.0) AS sandbox_minutes
+           FROM usage_events
+          WHERE tenant_id = ? AND created_at >= ? AND created_at < ?
+          GROUP BY date ORDER BY date`,
+      )
+      .bind(...range)
+      .all<LedgerDailyRow>();
+    const daily = (day.results ?? []).map((r) => ({
+      ...r,
+      sessions: r.sessions ?? 0,
+      model_calls: r.model_calls ?? 0,
+      input_tokens: r.input_tokens ?? 0,
+      output_tokens: r.output_tokens ?? 0,
+      cached_read_tokens: r.cached_read_tokens ?? 0,
+      sandbox_minutes: r.sandbox_minutes ?? 0,
+    }));
+    const totals = daily.reduce(
+      (a, d) => ({
+        sessions: a.sessions + d.sessions,
+        model_calls: a.model_calls + d.model_calls,
+        input_tokens: a.input_tokens + d.input_tokens,
+        output_tokens: a.output_tokens + d.output_tokens,
+        cached_read_tokens: a.cached_read_tokens + d.cached_read_tokens,
+        sandbox_minutes: a.sandbox_minutes + d.sandbox_minutes,
+      }),
+      { sessions: 0, model_calls: 0, input_tokens: 0, output_tokens: 0, cached_read_tokens: 0, sandbox_minutes: 0 },
+    );
+
+    const byModel = await this.client
+      .prepare(
+        `SELECT model_id, COUNT(*) AS model_calls,
+                SUM(COALESCE(input_tokens, 0)) AS input_tokens,
+                SUM(COALESCE(output_tokens, 0)) AS output_tokens,
+                SUM(COALESCE(cached_read_tokens, 0)) AS cached_read_tokens
+           FROM usage_events
+          WHERE tenant_id = ? AND created_at >= ? AND created_at < ?
+            AND kind = 'model_call' AND model_id IS NOT NULL
+          GROUP BY model_id ORDER BY input_tokens DESC`,
+      )
+      .bind(...range)
+      .all<LedgerRollup["by_model"][number]>();
+
+    const byAgent = await this.client
+      .prepare(
+        `SELECT agent_id, COUNT(DISTINCT session_id) AS sessions,
+                SUM(CASE WHEN kind = 'model_call' THEN COALESCE(input_tokens, 0) ELSE 0 END) AS input_tokens,
+                SUM(CASE WHEN kind = 'model_call' THEN COALESCE(output_tokens, 0) ELSE 0 END) AS output_tokens,
+                ROUND(SUM(CASE WHEN kind = 'sandbox_active_seconds' THEN value ELSE 0 END) / 60.0) AS sandbox_minutes
+           FROM usage_events
+          WHERE tenant_id = ? AND created_at >= ? AND created_at < ? AND agent_id IS NOT NULL
+          GROUP BY agent_id ORDER BY input_tokens DESC`,
+      )
+      .bind(...range)
+      .all<Omit<LedgerRollup["by_agent"][number], "agent_name">>();
+
+    const bySandbox = await this.client
+      .prepare(
+        `SELECT runtime_id, COUNT(DISTINCT session_id) AS sessions,
+                ROUND(SUM(value) / 60.0) AS sandbox_minutes
+           FROM usage_events
+          WHERE tenant_id = ? AND created_at >= ? AND created_at < ?
+            AND kind = 'sandbox_active_seconds' AND runtime_id IS NOT NULL
+          GROUP BY runtime_id ORDER BY sandbox_minutes DESC`,
+      )
+      .bind(...range)
+      .all<Omit<LedgerRollup["by_sandbox"][number], "name">>();
+
+    return {
+      totals,
+      daily,
+      by_model: byModel.results ?? [],
+      by_agent: (byAgent.results ?? []).map((r) => ({ ...r, agent_name: r.agent_id })),
+      by_sandbox: (bySandbox.results ?? []).map((r) => ({ ...r, name: r.runtime_id })),
     };
   }
 
@@ -373,6 +472,8 @@ export interface LedgerQuery {
   modelId?: string;
   runtimeId?: string;
   kind?: LedgerKind;
+  /** Session-id substring search (the console's q box). */
+  q?: string;
   /** Opaque cursor from a prior page (single tier: the last row id). */
   cursor?: string;
   limit: number;
@@ -406,11 +507,51 @@ export interface LedgerPage {
   total?: number;
 }
 
+/** Day-bucketed rollup — the shape the usage dashboard consumes. */
+export interface LedgerDailyRow {
+  /** YYYY-MM-DD, UTC */
+  date: string;
+  sessions: number;
+  model_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_read_tokens: number;
+  sandbox_minutes: number;
+}
+
+export interface LedgerRollup {
+  totals: Omit<LedgerDailyRow, "date">;
+  daily: LedgerDailyRow[];
+  by_model: Array<{
+    model_id: string;
+    model_calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cached_read_tokens: number;
+  }>;
+  by_agent: Array<{
+    agent_id: string;
+    /** shortcut: no names in the ledger — display join is the UI's job. */
+    agent_name: string;
+    sessions: number;
+    input_tokens: number;
+    output_tokens: number;
+    sandbox_minutes: number;
+  }>;
+  by_sandbox: Array<{
+    runtime_id: string;
+    name: string;
+    sessions: number;
+    sandbox_minutes: number;
+  }>;
+}
+
 export interface LedgerStore extends UsageStore {
   /** Idempotent batch write. Rows failing per-kind validation are
    *  dropped, never silently reshaped. */
   recordLedger(entries: LedgerEntryInput[]): Promise<void>;
   query(q: LedgerQuery): Promise<LedgerPage>;
+  dailyRollup(q: { tenantId: string; fromMs: number; toMs: number }): Promise<LedgerRollup>;
   describe(): LedgerCapabilities;
   /** Kind enumeration so UIs are data-driven, not hardcoded tab lists. */
   listKinds(): Array<{ kind: LedgerKind; unit: string }>;

@@ -180,6 +180,7 @@ import dreamsRoutes from "./routes/dreams";
 import legacyFilesRoutes from "./routes/files";
 import legacySkillsRoutes from "./routes/skills";
 import modelCardsRoutes from "./routes/model-cards";
+import usageRoutes from "./routes/usage";
 import clawhubRoutes from "./routes/clawhub";
 import evalsRoutes from "./routes/evals";
 import costReportRoutes from "./routes/cost-report";
@@ -1449,6 +1450,7 @@ app.route("/v1/oma/integrations", integrationsRoutes);
 app.route("/v1/oma/runtimes", runtimesRoutes);
 app.route("/v1/oma/oauth", oauthRoutes);
 app.route("/v1/oma/model_cards", modelCardsRoutes);
+app.route("/v1/oma/usage", usageRoutes);
 // /v1/oma/mcp-proxy is intentionally NOT aliased: auth.ts path-prefix skip is
 // scoped to that exact prefix, and the proxy does its own session-ownership
 // check downstream. Re-mounting under /v1/oma/mcp-proxy would route through

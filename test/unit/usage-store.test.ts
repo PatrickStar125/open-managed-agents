@@ -472,3 +472,77 @@ describe("SqlUsageStore — v2 describe/listKinds", () => {
     ]);
   });
 });
+
+// ── Phase 3: q substring + dailyRollup (the dashboard projection) ────────
+
+describe("SqlUsageStore — v2 query q (session substring)", () => {
+  it("matches session ids by substring, and totals follow", async () => {
+    const s = ledgerStore();
+    await s.recordLedger([
+      callEntry({ sessionId: "sess_alpha", correlationId: "cq1" }),
+      callEntry({ sessionId: "sess_beta", correlationId: "cq2" }),
+      callEntry({ sessionId: "sess_alpha_2", correlationId: "cq3" }),
+    ]);
+    const p = await s.query({
+      tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 1000,
+      q: "alpha", limit: 10,
+    });
+    expect(p.total).toBe(2);
+    expect(p.rows.every((r) => r.session_id.includes("alpha"))).toBe(true);
+  });
+});
+
+describe("SqlUsageStore — v2 dailyRollup", () => {
+  beforeEach(async () => {
+    const s = ledgerStore();
+    const today = new Date().toISOString().slice(0, 10);
+    // Two sessions, two models, one sandbox window; v1 seconds row mixed in.
+    await s.recordLedger([
+      callEntry({ sessionId: "sess_r1", agentId: "agent_r", correlationId: "r1a",
+        input_tokens: 1000, cached_read_tokens: 3000, output_tokens: 100,
+        dimensions: { modelId: "gpt-5" } }),
+      callEntry({ sessionId: "sess_r1", agentId: "agent_r", correlationId: "r1b",
+        input_tokens: 500, cached_read_tokens: 1000, output_tokens: 50,
+        dimensions: { modelId: "claude-sonnet-4-6" } }),
+      callEntry({ sessionId: "sess_r2", agentId: "agent_d", correlationId: "r2a",
+        input_tokens: 200, cached_read_tokens: 0, output_tokens: 20,
+        dimensions: { modelId: "gpt-5" } }),
+      { tenantId: TENANT_A, sessionId: "sess_r1", agentId: "agent_r",
+        kind: "sandbox_active_seconds", value: 120, // 2 minutes
+        correlationId: `sbx:sess_r1:${Date.parse(`${today}T00:00:00Z`)}`,
+        interval: { startMs: Date.parse(`${today}T00:00:00Z`), endMs: Date.parse(`${today}T00:00:00Z`) + 120_000 },
+        dimensions: { runtimeId: "cloudflare-sandbox" } },
+    ]);
+    // A v1-style row (recordUsage) must still count in the rollup.
+    await s.recordUsage({ tenantId: TENANT_A, sessionId: "sess_r2", agentId: "agent_d",
+      kind: "session_alive_seconds", value: 600 });
+  });
+
+  it("aggregates totals, day buckets, and the three breakdowns", async () => {
+    const s = ledgerStore();
+    const r = await s.dailyRollup({ tenantId: TENANT_A, fromMs: 0, toMs: Date.now() + 86_400_000 });
+    expect(r.totals).toMatchObject({
+      sessions: 2, model_calls: 3, input_tokens: 1700,
+      cached_read_tokens: 4000, output_tokens: 170, sandbox_minutes: 2,
+    });
+    expect(r.daily).toHaveLength(1);
+    expect(r.daily[0].model_calls).toBe(3);
+    const gpt5 = r.by_model.find((m) => m.model_id === "gpt-5");
+    expect(gpt5).toMatchObject({ model_calls: 2, input_tokens: 1200 });
+    const agentR = r.by_agent.find((a) => a.agent_id === "agent_r");
+    expect(agentR).toMatchObject({ sessions: 1, input_tokens: 1500, sandbox_minutes: 2 });
+    expect(agentR!.agent_name).toBe("agent_r"); // id-as-name shortcut
+    expect(r.by_sandbox[0]).toMatchObject({
+      runtime_id: "cloudflare-sandbox", sessions: 1, sandbox_minutes: 2,
+    });
+  });
+
+  it("respects the time window (rows outside excluded)", async () => {
+    const s = ledgerStore();
+    const future = await s.dailyRollup({
+      tenantId: TENANT_A, fromMs: Date.now() + 86_400_000, toMs: Date.now() + 2 * 86_400_000,
+    });
+    expect(future.totals.model_calls).toBe(0);
+    expect(future.daily).toHaveLength(0);
+  });
+});

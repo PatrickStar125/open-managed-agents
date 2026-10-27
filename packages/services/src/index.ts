@@ -127,6 +127,8 @@ export type {
   LedgerQuery,
   LedgerRow,
   LedgerPage,
+  LedgerDailyRow,
+  LedgerRollup,
 } from "./usage";
 
 /**
