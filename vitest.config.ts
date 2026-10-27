@@ -65,7 +65,6 @@ const cfWorkerOptions = {
   miniflare: {
     bindings: {
       API_KEY: "test-key",
-      ANTHROPIC_API_KEY: "sk-ant-test-key",
       DREAM_CURATOR_MODE: "dedup",
       BETTER_AUTH_SECRET: "test-auth-secret-for-vitest",
       // Required by buildServices for at-rest encryption of credentials.auth
@@ -441,6 +440,8 @@ export default defineConfig({
       "scripts/release-check.history.test.mjs",
       "scripts/setup-cf.test.mjs",
       "scripts/setup-fly.test.mjs",
+      // Self-host bootstrap script; node:test, run by test:self-host.
+      "scripts/bootstrap-model-card.test.mjs",
       // Credential certification orchestrates real Node child processes and
       // is run explicitly by test:certification:runner.
       "scripts/live-certification.test.mjs",
