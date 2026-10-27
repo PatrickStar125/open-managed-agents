@@ -120,6 +120,7 @@ export const zhCN: Messages = {
     colDetail: "明细",
     colValue: "值",
     kindSessionAlive: "会话时长",
+    kindBrowserActive: "浏览器时长",
     kindSandboxActive: "沙箱时长",
     kindInputTokens: "输入 tokens",
     kindOutputTokens: "输出 tokens",

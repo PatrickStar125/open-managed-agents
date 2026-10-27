@@ -268,8 +268,10 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
       binds.push(q.kind);
     }
     if (q.q) {
-      conds.push("session_id LIKE ?");
-      binds.push(`%${q.q}%`);
+      // Escape LIKE wildcards so %/_ in user input match literally.
+      // ESCAPE char is a single backslash; input wildcards get one too.
+      conds.push(`session_id LIKE ? ESCAPE '\\'`);
+      binds.push(`%${q.q.replace(/[%_\\]/g, "\\$&")}%`);
     }
     const where = conds.join(" AND ");
 
@@ -345,6 +347,42 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
       cached_read_tokens: r.cached_read_tokens ?? 0,
       sandbox_minutes: r.sandbox_minutes ?? 0,
     }));
+    // Zero-fill the requested window: GROUP BY only yields days with
+    // rows, and the dashboard's chart spaces points by index — missing
+    // days would compress the timeline instead of showing the gap.
+    const byDate = new Map(daily.map((d) => [d.date, d]));
+    const filled: LedgerDailyRow[] = [];
+    const dayMs = 86_400_000;
+    // Fill between the window START and the LAST DATA DAY (not toMs —
+    // callers pass open-ended windows; past the last data day, zero
+    // rows add no information). Also bounded by the data's first day so
+    // an absurd fromMs doesn't mint decades of zeros.
+    const lastMs = daily.length
+      ? Date.parse(`${daily[daily.length - 1].date}T00:00:00Z`)
+      : q.fromMs;
+    const firstDataMs = daily.length
+      ? Date.parse(`${daily[0].date}T00:00:00Z`)
+      : q.fromMs;
+    const firstMs = Math.max(
+      Date.parse(`${new Date(q.fromMs).toISOString().slice(0, 10)}T00:00:00Z`),
+      firstDataMs,
+    );
+    for (let t = firstMs; t <= lastMs; t += dayMs) {
+      const iso = new Date(t).toISOString().slice(0, 10);
+      filled.push(
+        byDate.get(iso) ?? {
+          date: iso,
+          sessions: 0,
+          model_calls: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          cached_read_tokens: 0,
+          sandbox_minutes: 0,
+        },
+      );
+    }
+    daily.length = 0;
+    daily.push(...filled);
     const totals = daily.reduce(
       (a, d) => ({
         sessions: a.sessions + d.sessions,
@@ -423,6 +461,10 @@ export function createCfUsageStore(deps: { db: D1Database }): UsageStore {
 
 // ═══════════════════════════════════════════════════════════════════════
 // v2 — the itemized usage ledger (design: docs/usage-ledger-design.md).
+// Volume note: model_call/tool_use rows flow into the v1 billing pull
+// (listUnbilled has no kind filter) — 100–1000× the old seconds-only
+// volume. Hosted rate maps must cover the new kinds before rollout or
+// rows pile up unbilled (by design: never silently acked).
 // Same table, extended in place: new kinds, correlation-id idempotency,
 // token measures, dimension columns, and a cursor query. The v1 methods
 // above are untouched — seconds emitters keep calling recordUsage until

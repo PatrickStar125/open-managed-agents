@@ -42,10 +42,9 @@ import { Select, SelectOption } from "../components/Select";
  * The transport reuses the console's existing OMA cursor envelope
  * (data/next_cursor/total); the design note's richer LedgerPage fields
  * (completeness, projection lag) arrive with the real endpoint.
- * Further demo-only divergence from the contract rows, by design:
- * per-row `unit` and `agent_name` travel inline (v3 serves them via
- * listKinds + a display join), and `q` is a demo-only session-id
- * substring search.
+ * The real route (apps/main/src/routes/usage.ts) provides unit,
+ * agent_name (id-as-name), and the q substring inline — same shapes,
+ * so this page is identical against mock or deployment.
  */
 
 const MAX_SPAN_DAYS = 90;
@@ -60,6 +59,7 @@ interface LedgerRow {
     | "model_call"
     | "sandbox_active_seconds"
     | "session_alive_seconds"
+    | "browser_active_seconds"
     | "tool_use";
   value: number;
   unit: "s" | "call";
@@ -203,6 +203,8 @@ export function UsageLedger() {
         return t.usage.kindSandboxActive;
       case "session_alive_seconds":
         return t.usage.kindSessionAlive;
+      case "browser_active_seconds":
+        return t.usage.kindBrowserActive;
       default:
         return t.usage.kindToolUse;
     }

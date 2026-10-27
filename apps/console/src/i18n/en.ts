@@ -121,6 +121,7 @@ export const en: Messages = {
     colDetail: "Detail",
     colValue: "Value",
     kindSessionAlive: "Session time",
+    kindBrowserActive: "Browser time",
     kindSandboxActive: "Sandbox time",
     kindInputTokens: "Input tokens",
     kindOutputTokens: "Output tokens",

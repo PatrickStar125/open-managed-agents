@@ -741,8 +741,10 @@ export function Usage() {
       cached_read_tokens: sum(rows, "cached_read_tokens"),
       sandbox_minutes: sum(rows, "sandbox_minutes"),
     });
-    // Rescale breakdowns to the display window (mock weights against
-    // the full window; a real backend would scope them itself).
+    // Breakdowns cover the FULL requested window (display + prev-period
+    // head); rescale by the length ratio to approximate the display
+    // window. Exact against even activity, approximate when the two
+    // halves are lopsided — exact scoping needs a second request.
     const f = full.daily.length / Math.max(daily.length, 1);
     const scale = (v: number) => Math.round(v / f);
     return {

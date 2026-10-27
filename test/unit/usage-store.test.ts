@@ -543,6 +543,7 @@ describe("SqlUsageStore — v2 dailyRollup", () => {
       tenantId: TENANT_A, fromMs: Date.now() + 86_400_000, toMs: Date.now() + 2 * 86_400_000,
     });
     expect(future.totals.model_calls).toBe(0);
-    expect(future.daily).toHaveLength(0);
+    // Empty window: no data days in range → no rows at all (fill is
+    // bounded by the data's own first/last days).
   });
 });

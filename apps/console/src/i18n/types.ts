@@ -131,6 +131,7 @@ export interface Messages {
     colDetail: string;
     colValue: string;
     kindSessionAlive: string;
+    kindBrowserActive: string;
     kindSandboxActive: string;
     kindInputTokens: string;
     kindOutputTokens: string;

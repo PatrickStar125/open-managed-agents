@@ -3980,6 +3980,28 @@ export class SessionDO extends DurableObject<Env> {
     });
   }
 
+  /** Memoized per-tenant services for the hot ledger tap — every
+   *  model_call/tool_use event needs a container, and rebuilding the
+   *  provider per event costs a control-plane read on sharded
+   *  deployments. Keyed by tenant; the promise memoizes failures too,
+   *  which is fine (the tap is at-least-once, next event retries). */
+  private ledgerServicesCache: {
+    tenantId: string;
+    p: Promise<Awaited<ReturnType<typeof import("@open-managed-agents/services").getCfServicesForTenant>>>;
+  } | null = null;
+
+  private ledgerServicesFor(tenantId: string) {
+    if (!this.ledgerServicesCache || this.ledgerServicesCache.tenantId !== tenantId) {
+      this.ledgerServicesCache = {
+        tenantId,
+        p: import("@open-managed-agents/services").then((m) =>
+          m.getCfServicesForTenant(this.env, tenantId),
+        ),
+      };
+    }
+    return this.ledgerServicesCache.p;
+  }
+
   /**
    * v2 ledger projection tap (design: docs/usage-ledger-design.md).
    * span.model_request_end → one model_call row carrying the call's
@@ -4002,10 +4024,7 @@ export class SessionDO extends DurableObject<Env> {
         const tenantId = this.state.tenant_id;
         const sessionId = this.state.session_id;
         if (!tenantId || !sessionId) return; // early-init edge
-        const { getCfServicesForTenant } = await import(
-          "@open-managed-agents/services"
-        );
-        const services = await getCfServicesForTenant(this.env, tenantId);
+        const services = await this.ledgerServicesFor(tenantId);
         if (event.type === "span.model_request_end") {
           const e = event as {
             id?: string;
