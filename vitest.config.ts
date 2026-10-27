@@ -349,6 +349,7 @@ export default defineConfig({
       { find: "@open-managed-agents/acp-runtime/native-state", replacement: "./packages/acp-runtime/src/native-state.ts" },
       { find: "@open-managed-agents/acp-runtime/placement", replacement: "./packages/acp-runtime/src/placement.ts" },
       { find: "@open-managed-agents/acp-runtime/sandbox-agent", replacement: "./packages/acp-runtime/src/sandbox-agent.ts" },
+      { find: "@open-managed-agents/acp-runtime/registry-pins", replacement: "./packages/acp-runtime/src/acp-registry-pins.ts" },
       { find: "@open-managed-agents/acp-runtime/sandbox-spawner", replacement: "./packages/acp-runtime/src/spawners/sandbox.ts" },
       { find: "@open-managed-agents/acp-runtime/node-spawner", replacement: "./packages/acp-runtime/src/node-spawner.ts" },
       { find: "@open-managed-agents/acp-runtime/registry", replacement: "./packages/acp-runtime/src/registry.ts" },

@@ -108,7 +108,14 @@ export function setActiveTenantId(id: string | null): void {
  *  way by the sidebar bootstrapping path. */
 const SILENT_AUTH_PATHS = ["/auth-info", "/v1/oma/me"];
 
+/** Optional OMA capability probes: a 404 only means "this deployment does
+ *  not offer it", which the caller renders as an absent feature. */
+const SILENT_NOT_FOUND_PATHS = ["/v1/oma/sandbox_images"];
+
 function shouldSilenceAuthError(path: string, status: number): boolean {
+  if (status === 404 && SILENT_NOT_FOUND_PATHS.some((p) => path === p || path.startsWith(`${p}?`))) {
+    return true;
+  }
   if (status !== 401 && status !== 403) return false;
   return SILENT_AUTH_PATHS.some((p) => path === p || path.startsWith(`${p}?`));
 }

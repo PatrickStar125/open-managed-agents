@@ -18,6 +18,7 @@
 import { serveStatic } from "@hono/node-server/serve-static";
 import { buildMatterProxyRoutes, buildMatterWebhookRoutes, matterTrustedAuth } from "../lib/matter-proxy.js";
 import { Hono } from "hono";
+import { getHarnessCatalog } from "@open-managed-agents/agent/harness/registry";
 import { OpenAIAgentsProtocolError } from "@open-managed-agents/openai-agents-api";
 import { createArtifactsHandler, createManagedSessionMapping, createResourcesHandler, createSessionsHandler } from "@open-managed-agents/openai-agents-compat";
 
@@ -36,8 +37,9 @@ import {
 
 import { listAuthProviders } from "@open-managed-agents/shared";
 
-import { buildAgentRoutes as buildLegacyAgentRoutes, buildVaultRoutes as buildLegacyVaultRoutes, buildModelCardRoutes, buildEnvironmentRoutes as buildLegacyEnvironmentRoutes, buildSessionRoutes, buildMemoryRoutes as buildLegacyMemoryRoutes, buildDreamRoutes, buildTenantRoutes, buildMeRoutes, buildApiKeyRoutes, buildEvalRoutes, buildIntegrationsRoutes, buildIntegrationsGatewayRoutes, type InstallProxyForwarder, mintApiKeyOnStorage, sha256Hex } from "@open-managed-agents/http-routes";
+import { buildAgentRoutes as buildLegacyAgentRoutes, buildVaultRoutes as buildLegacyVaultRoutes, buildModelCardRoutes, buildEnvironmentRoutes as buildLegacyEnvironmentRoutes, buildSessionRoutes, buildMemoryRoutes as buildLegacyMemoryRoutes, buildDreamRoutes, buildTenantRoutes, buildMeRoutes, buildApiKeyRoutes, buildEvalRoutes, buildIntegrationsRoutes, buildIntegrationsGatewayRoutes, buildSandboxImageRoutes, type InstallProxyForwarder, mintApiKeyOnStorage, sha256Hex } from "@open-managed-agents/http-routes";
 import { buildAgentRoutes as buildManagedAgentRoutes, buildManagedSessionsApi } from "@open-managed-agents/managed-agents-api";
+import { EMPTY_SANDBOX_IMAGE_CATALOG } from "@open-managed-agents/sandbox";
 import { SessionRuntimeHistoryApplicationService, SessionRuntimeProjectionApplicationService } from "@open-managed-agents/managed-agents-application";
 
 import { managedAgentsPortTokens } from "@open-managed-agents/app/managed-agents";
@@ -116,6 +118,7 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     sessionRegistry,
     resolveNodeMcpProxyTarget,
     resolveNodeInferenceUpstream,
+    managedAcpCapabilities,
     managedRuntimeRunner,
     managedRuntimeReaders,
     managedSessionRuntimeStream,
@@ -240,7 +243,8 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
     },
     resolveBearerToken: async ({ token, method, path }) => {
       if (managedEnvironmentWorkSessionTokenCrypto === null) return null;
-      const scoped = await authenticateEnvironmentWorkSessionBearer({
+      const scoped = await managedAcpCapabilities.authenticate({ token, method, path })
+        ?? await authenticateEnvironmentWorkSessionBearer({
         token,
         method,
         path,
@@ -345,7 +349,14 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
       .port(managedAgentsPortTokens.agents),
   ));
   v1.route("/oma/agents", buildLegacyAgentRoutes({
+    application: (context) => managedPlatform.app({
+      workspaceId: (context.var as { tenant_id: string }).tenant_id,
+    }).port(managedAgentsPortTokens.agents),
     services,
+    hasActiveSessionsByAgent: async (tenantId, agentId) =>
+      await sessionsService.hasActiveByAgent({ tenantId, agentId }) ||
+      (await sql.prepare("SELECT id FROM managed_sessions WHERE workspace_id = ? AND agent_id = ? AND archived_at IS NULL LIMIT 1").bind(tenantId, agentId).first()) !== null,
+    hasActiveEvalsByAgent: (tenantId, agentId) => evalsService.hasActiveByAgent({ tenantId, agentId }),
     validateModel: async (tenantId, model) => {
       const cards = await modelCardsService.list({ tenantId });
       const active = cards.filter((card) => card.archived_at === null);
@@ -521,6 +532,9 @@ export async function mountNodeHttp(runtime: NodeRuntime, disposables: Disposabl
       };
     },
   }));
+  v1.get("/oma/harnesses", (c) => c.json(getHarnessCatalog()));
+  // Operator SANDBOX_IMAGES catalog for `_oma.sandbox_image`; aliases only.
+  v1.route("/oma/sandbox_images", buildSandboxImageRoutes(config.sandbox.images ?? EMPTY_SANDBOX_IMAGE_CATALOG));
   v1.get("/oma/runtimes", (c) => c.json({ data: [] }));
   v1.get("/oma/stats", async (c) => {
     const tenantId = c.get("tenant_id");

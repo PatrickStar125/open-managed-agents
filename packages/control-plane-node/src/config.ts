@@ -5,6 +5,8 @@
 // createNodeControlPlane() inside NodeComponents. The control plane never
 // reads the environment itself.
 
+import type { SandboxImageCatalog } from "@open-managed-agents/sandbox";
+
 export type NodeEnvironment = Readonly<Record<string, string | undefined>>;
 
 export type NodeProcessMode = "standalone" | "serverless";
@@ -136,6 +138,12 @@ export interface NodeConfig {
      * selected SandboxFactory, whose contract is env-shaped.
      */
     environment: NodeEnvironment;
+    /**
+     * SANDBOX_IMAGES: operator-curated images an Environment may select by
+     * alias (`_oma.sandbox_image`). Absent or empty: only the provider
+     * default (`SANDBOX_IMAGE`) exists and any selection is rejected.
+     */
+    images?: SandboxImageCatalog;
   };
 }
 

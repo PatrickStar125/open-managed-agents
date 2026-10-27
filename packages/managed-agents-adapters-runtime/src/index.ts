@@ -580,13 +580,17 @@ interface RuntimeAgentSnapshot {
   version: number;
   created_at: string;
   updated_at: string;
-  callable_agents?: Array<{ type: "agent"; id: string; version: number }>;
   multiagent?: {
-    type: "coordinator";
-    agents: Array<
-      | { type: "agent"; id: string; version: number }
-      | { type: "advisor"; model: string }
-    >;
+    type: "multiagent_20261001";
+    advisor: { type: "disabled" };
+    subagents:
+      | { type: "disabled" }
+      | {
+          type: "enabled";
+          inline_agents: { type: "enabled" } | { type: "disabled" };
+          predefined_agents: Array<RuntimeAgentSnapshot & { type: "agent" }>;
+        };
+    workflows: { type: "disabled" };
   };
 }
 
@@ -704,12 +708,10 @@ function runtimeAgentTool(tool: AgentTool): RuntimeAgentTool {
 
 function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapshot {
   const { agent } = input.session;
-  const roster = agent.multiagent?.agents ?? [];
-  const callableAgents = roster.flatMap((member) =>
-    member.type === "agent"
-      ? [{ type: member.type, id: member.id, version: member.version }]
-      : [],
-  );
+  const roster = agent.multiagent?.subagents.type === "enabled"
+    ? agent.multiagent.subagents.predefinedAgents
+        .filter((member): member is Extract<typeof member, { type: "agent" }> => member.type === "agent")
+    : [];
   return {
     id: agent.id,
     name: agent.name,
@@ -725,6 +727,18 @@ function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapsho
       }),
       ...(agent.model.speed !== undefined && { speed: agent.model.speed }),
     },
+    ...(agent.openma?.auxiliaryModel !== undefined && { aux_model: {
+      id: agent.openma.auxiliaryModel.id,
+      ...(agent.openma.auxiliaryModel.effort !== undefined && { effort: agent.openma.auxiliaryModel.effort }),
+      ...(agent.openma.auxiliaryModel.inferenceGeo !== undefined && { inference_geo: agent.openma.auxiliaryModel.inferenceGeo }),
+      ...(agent.openma.auxiliaryModel.speed !== undefined && { speed: agent.openma.auxiliaryModel.speed }),
+      ...(agent.openma.auxiliaryModel.maxTokens !== undefined && { max_tokens: agent.openma.auxiliaryModel.maxTokens }),
+      ...(agent.openma.auxiliaryModel.providerOptions !== undefined && { provider_options: structuredClone(agent.openma.auxiliaryModel.providerOptions) }),
+    } }),
+    ...(agent.openma?.appendablePrompts !== undefined && { appendable_prompts: structuredClone(agent.openma.appendablePrompts) }),
+    ...(agent.openma?.harness !== undefined && { harness: agent.openma.harness }),
+    ...(agent.openma?.contextManagement !== undefined && { context_management: structuredClone(agent.openma.contextManagement) }),
+    ...(agent.openma?.openaiModelSettings !== undefined && { model_settings: structuredClone(agent.openma.openaiModelSettings) }),
     system: agent.system ?? "",
     tools: agent.tools.map(runtimeAgentTool),
     mcp_servers: agent.mcpServers.map((server) => ({ ...server })),
@@ -736,15 +750,24 @@ function runtimeAgentSnapshot(input: StartSessionExecution): RuntimeAgentSnapsho
     version: agent.version,
     created_at: input.session.createdAt,
     updated_at: input.session.updatedAt,
-    ...(callableAgents.length > 0 && { callable_agents: callableAgents }),
     ...(agent.multiagent !== null && {
       multiagent: {
         type: agent.multiagent.type,
-        agents: roster.map((member) =>
-          member.type === "advisor"
-            ? { type: member.type, model: member.model }
-            : { type: member.type, id: member.id, version: member.version },
-        ),
+        advisor: { type: "disabled" },
+        subagents:
+          agent.multiagent.subagents.type === "disabled"
+            ? { type: "disabled" }
+            : {
+                type: "enabled",
+                inline_agents: agent.multiagent.subagents.inlineAgents,
+                predefined_agents: roster.map((member) => ({
+                  type: "agent" as const,
+                  ...runtimeAgentSnapshot({ ...input, session: {
+                    ...input.session, agent: { ...member, multiagent: null },
+                  } }),
+                })),
+              },
+        workflows: { type: "disabled" },
       },
     }),
   };

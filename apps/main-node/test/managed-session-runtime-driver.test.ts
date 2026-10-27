@@ -12,6 +12,11 @@ import type {
 } from "@open-managed-agents/session-realtime";
 import type { SessionExecutionFence } from "@open-managed-agents/session-runtime-contract/coordination";
 import { MemorySessionRealtimeHub } from "@open-managed-agents/session-realtime-memory";
+import {
+  parseSandboxImageCatalog,
+  resolveSandboxImage,
+  SandboxImageUnavailableError,
+} from "@open-managed-agents/sandbox";
 import * as runtimeModule from "../../../packages/control-plane-node/src/lib/node-managed-session-runtime.js";
 
 const session: Session = {
@@ -143,6 +148,21 @@ describe("DefaultNodeManagedSessionRuntimeDriver", () => {
       { type: "session.status_idle", stopReason: { type: "retries_exhausted" } },
     ]);
     expect(projectionCalls.every((call) => call.executionFence === executionFence || call.executionFence?.executionId === executionFence.executionId)).toBe(true);
+  });
+
+  it("fails at once without backoff when the Environment's sandbox image left the catalog", async () => {
+    let starts = 0;
+    const { accept, events } = startFailureDriver(async () => {
+      starts++;
+      resolveSandboxImage(parseSandboxImageCatalog("{}"), "retired", "env_01");
+    });
+    const message = 'Sandbox image "retired" selected by environment env_01 is not in this deployment\'s SANDBOX_IMAGES catalog. Ask the operator to restore it, or update the environment to another image or the default image.';
+    await expect(accept()).rejects.toBeInstanceOf(SandboxImageUnavailableError);
+    expect(starts).toBe(1);
+    expect(events()).toEqual([
+      { type: "session.error", error: { type: "unknown_error", message, retryStatus: "exhausted" } },
+      { type: "session.status_idle", stopReason: { type: "retries_exhausted" } },
+    ]);
   });
 
   it("recovers from a transient sandbox startup failure without going idle", async () => {

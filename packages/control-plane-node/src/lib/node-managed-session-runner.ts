@@ -189,6 +189,7 @@ export interface DefaultNodeManagedSessionRunnerDependencies {
   buildHarness(): HarnessInterface;
   buildHarnessContext(input: ManagedRunnerContext & ManagedRunnerSubagentContext & {
     acceptedEvents: NodeManagedSessionRunnerAcceptInput["events"];
+    executionFence?: SessionExecutionFence;
     sandbox: SandboxExecutor;
     runtime: ManagedNodeHarnessRuntime;
     model: HarnessContext["model"];
@@ -255,6 +256,8 @@ export class DefaultNodeManagedSessionRunner
         resources: input.session.resources,
         skills: input.session.agent.skills,
         environment: input.environment.config,
+        // A different catalog image needs a different sandbox, like packages.
+        sandboxImage: input.environment.openma?.sandboxImage ?? null,
       });
       const existing = this.sandboxes.get(input);
       if (this.dependencies.workspaceCheckpoints !== undefined && input.executionFence === undefined) {
@@ -661,6 +664,7 @@ export class DefaultNodeManagedSessionRunner
           ...context,
           ...subagentContext,
           acceptedEvents: input.events,
+          executionFence: input.executionFence,
           sandbox,
           runtime,
           model,

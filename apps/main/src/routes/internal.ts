@@ -199,14 +199,15 @@ app.post("/sessions", async (c) => {
   // (and so the per-session MCP-server augmentation actually takes effect on
   // the snapshot the DO uses, not just the one we persist below).
   const vaultIds = body.vaultIds ?? [];
-  const { tenant_id: _atid, ...agentBase } = agentRow;
-  let agentSnapshot: AgentConfig = agentBase;
+  const agentBase = await c.var.services.agents.getRuntimeSnapshot({ tenantId, agentId: body.agentId });
+  if (!agentBase) return c.json({ error: "agent not found in tenant" }, 404);
+  let agentSnapshot = agentBase;
   if (body.mcpServers && body.mcpServers.length > 0) {
-    agentSnapshot = injectMcpServersIntoSnapshot(agentSnapshot, body.mcpServers);
+    agentSnapshot = { ...agentSnapshot, mcp_servers: injectMcpServersIntoSnapshot(agentSnapshot, body.mcpServers).mcp_servers };
   }
   // Provider-supplied system-prompt augmentation (Slack signal protocol etc.).
   // Idempotent on falsy input so it's safe to pass unconditionally.
-  agentSnapshot = appendToAgentSnapshotSystemPrompt(agentSnapshot, body.additionalSystemPrompt);
+  agentSnapshot = { ...agentSnapshot, system: appendToAgentSnapshotSystemPrompt(agentSnapshot, body.additionalSystemPrompt).system };
 
   // Allocate the session id by inserting the row first — sessions-store owns
   // id generation. Linear MCP wiring below augments the snapshot + metadata

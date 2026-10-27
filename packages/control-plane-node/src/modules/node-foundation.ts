@@ -38,6 +38,7 @@ import { generateEventId } from "@open-managed-agents/shared";
 import { registerCoreHarnesses } from "@open-managed-agents/agent/harness/builtins";
 import { resolveHarness } from "@open-managed-agents/agent/harness/registry";
 import { buildTools } from "@open-managed-agents/agent/harness/tools";
+import { assertRuntimeAgentSnapshot } from "@open-managed-agents/agent/runtime/multiagent";
 import { createPiModelRuntime, toAiSdkLanguageModel } from "@open-managed-agents/agent/harness/pi-provider";
 import type { PiModelConfig } from "@open-managed-agents/agent/harness/pi-provider";
 
@@ -266,9 +267,14 @@ export async function createNodeFoundation(
   async function buildSandbox(
     sessionId: string,
     workdir: string,
+    scope: Pick<
+      import("@open-managed-agents/sandbox").SandboxFactoryContext,
+      "environmentId" | "workspaceId" | "image"
+    > = {},
   ): Promise<import("@open-managed-agents/sandbox").SandboxExecutor> {
     return components.sandbox(
       {
+        ...scope,
         sessionId,
         workdir,
         memoryRoot: memoryBlobLocalDir ?? "",
@@ -393,6 +399,7 @@ export async function createNodeFoundation(
     sqlDialect: dialect,
     buildModel: (agent, tenantId) => buildNodeLanguageModel(tenantId, agent.model),
     buildTools: async (agent, sandbox, tenantId, sessionId) => {
+      assertRuntimeAgentSnapshot(agent);
       const creds = await resolveNodeModelCreds(tenantId, agent.model);
       return buildTools(agent, sandbox, {
         ANTHROPIC_API_KEY: creds.apiKey,
@@ -413,6 +420,7 @@ export async function createNodeFoundation(
       };
     },
     buildHarnessContext: async (input) => {
+      assertRuntimeAgentSnapshot(input.agent);
       const creds = await resolveNodeModelCreds(input.tenantId, input.agent.model);
       const pi = createPiModelRuntime({
         model: creds.wireModel,

@@ -182,6 +182,30 @@ describe("E2B SDK v2 adapter", () => {
     expect(await handle.getLogs()).toEqual({ stdout: "boot\n", stderr: "crash\n" });
   });
 
+  it.each(["BAD=NAME", "BAD;echo injected", "-u", ""])("rejects invalid duplex env names before remote execution: %s", async name => {
+    const sandbox = makeSdkSandbox("bad-env");
+    const adapter = new E2BSandboxExecutor(sandbox as never, {});
+    await expect(adapter.spawnDuplexProcess({ command: "node", env: { [name]: undefined } })).rejects.toThrow(/environment variable name/i);
+    expect(sandbox.commands.run).not.toHaveBeenCalled();
+  });
+
+  it("removes inherited credentials from the remote duplex process environment", async () => {
+    let launch = "";
+    const sandbox = makeSdkSandbox("unset");
+    sandbox.commands.run.mockImplementation(async (command: string, options: { envs: Record<string, string> }) => {
+      launch = command;
+      expect(options.envs).not.toHaveProperty("ANTHROPIC_API_KEY");
+      return { wait: async () => ({ exitCode: 0 }), sendStdin: async () => {}, closeStdin: async () => {}, kill: async () => {} };
+    });
+    const adapter = new E2BSandboxExecutor(sandbox as never, {});
+    const child = await adapter.spawnDuplexProcess({ command: "node", args: ["-e", "process.stdout.write(process.env.ANTHROPIC_API_KEY ?? 'absent')"], env: { ANTHROPIC_API_KEY: undefined } });
+    await child.exited;
+    // Execute the actual remote command under an inherited secret, not just
+    // an assertion on the SDK mock's object shape.
+    const { execFileSync } = await import("node:child_process");
+    expect(execFileSync("sh", ["-c", launch], { env: { ...process.env, ANTHROPIC_API_KEY: "test-inherited-key" }, encoding: "utf8" })).toBe("absent");
+  });
+
   it("uses the official live-stdin command channel for ACP", async () => {
     let commandOptions:
       | {

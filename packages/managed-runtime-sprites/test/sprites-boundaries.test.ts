@@ -7,6 +7,7 @@ import {
   createSpritesManagedRuntime,
   createSpritesManagedRuntimeDriver,
   createSpritesProvider,
+  sandboxFactory,
   type SpriteCommandPort,
   type SpriteExecResult,
   type SpriteFilesystemPort,
@@ -144,6 +145,13 @@ describe("Sprites provider boundary contracts", () => {
       },
     )).rejects.toThrow("sprites cannot launch Environment artifact image");
     expect(sprites.createSprite).not.toHaveBeenCalled();
+  });
+
+  it("rejects an Environment-selected catalog image at the Node sandbox factory", async () => {
+    await expect(sandboxFactory(
+      { sessionId: scope.sessionId, workdir: "/workspace", image: { alias: "analytics", reference: "img:1" } },
+      {},
+    )).rejects.toThrow('SANDBOX_PROVIDER=sprites does not support per-environment sandbox images (environment selected "analytics")');
   });
 
   it("adapts the official SDK constructor and environment options", async () => {

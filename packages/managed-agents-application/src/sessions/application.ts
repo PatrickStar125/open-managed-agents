@@ -140,17 +140,17 @@ async function snapshotAgent(
   workspaceId: string,
 ): Promise<SessionAgent | null> {
   const roster: SessionThreadAgent[] = [];
-  for (const entry of agent.multiagent?.agents ?? []) {
-    if (entry.type === "advisor") {
-      roster.push({ type: entry.type, model: entry.model });
-      continue;
-    }
-    const member = await findPinnedAgent(
-      source,
-      workspaceId,
-      entry.agentId,
-      entry.version,
-    );
+  const configuredMultiagent = agent.multiagent;
+  if (configuredMultiagent !== null && (
+    configuredMultiagent.type !== "multiagent_20261001" ||
+    configuredMultiagent.advisor?.type !== "disabled" ||
+    configuredMultiagent.workflows?.type !== "disabled" ||
+    configuredMultiagent.subagents == null
+  )) return null;
+  const subagents = configuredMultiagent?.subagents;
+  const entries = subagents?.type === "enabled" ? subagents.predefinedAgents : [];
+  for (const entry of entries) {
+    const member = await findPinnedAgent(source, workspaceId, entry.agentId, entry.version);
     if (member === null) return null;
     roster.push(snapshotThreadAgent(member));
   }
@@ -162,7 +162,21 @@ async function snapshotAgent(
     multiagent:
       agent.multiagent === null
         ? null
-        : { type: "coordinator", agents: roster },
+        : {
+            type: "multiagent_20261001",
+            advisor: { type: "disabled" },
+            subagents:
+              subagents?.type === "disabled"
+                ? { type: "disabled" }
+                : {
+                    type: "enabled",
+                    inlineAgents: subagents?.type === "enabled"
+                      ? subagents.inlineAgents
+                      : { type: "disabled" },
+                    predefinedAgents: roster,
+                  },
+            workflows: { type: "disabled" },
+          },
     name: agent.name,
     ...(agent.openma !== undefined && { openma: agent.openma }),
     skills: agent.skills,

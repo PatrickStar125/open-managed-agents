@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@open-managed-agents/managed-agents-api": "workspace:*",
     "@open-managed-agents/agents-store": "workspace:*",
     "@open-managed-agents/api-types": "workspace:*",
     "@open-managed-agents/blob-store": "workspace:*",

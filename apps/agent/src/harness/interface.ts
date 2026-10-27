@@ -1,6 +1,7 @@
 import type { ModelMessage, LanguageModel } from "ai";
 import type { SharedV3ProviderOptions } from "@ai-sdk/provider";
-import type { AgentConfig, SessionEvent, UserMessageEvent } from "@open-managed-agents/shared";
+import type { RuntimeAgentConfig as AgentConfig } from "@open-managed-agents/api-types";
+import type { SessionEvent, UserMessageEvent } from "@open-managed-agents/shared";
 import type { FileResolver } from "../runtime/history";
 import type { PiModelRuntime } from "./pi-provider";
 
@@ -199,6 +200,9 @@ export interface HarnessRuntime {
 export interface HarnessContext {
   agent: AgentConfig;
   userMessage: UserMessageEvent;
+  /** Host-scoped canonical history for ACP recovery, excluding this execution's
+   * accepted inputs and future queued inputs. Undefined retains legacy hosts. */
+  acpRecoveryHistory?: readonly SessionEvent[];
   /**
    * The OMA session id this turn belongs to. Optional during the transition
    * for legacy harnesses; AcpProxyHarness needs it to address the

@@ -394,7 +394,8 @@ async function removeBestEffort(path: string, recursive = false): Promise<void> 
 
 export const sandboxFactory: SandboxFactory = async (ctx, env) => {
   return new LiteBoxSandbox({
-    image: env.SANDBOX_IMAGE,
+    // An Environment-selected catalog image overrides the process default.
+    image: ctx.image?.reference ?? env.SANDBOX_IMAGE,
     memoryMib: env.LITEBOX_MEMORY_MIB ? Number(env.LITEBOX_MEMORY_MIB) : undefined,
     cpus: env.LITEBOX_CPUS ? Number(env.LITEBOX_CPUS) : undefined,
     name: `oma-${ctx.sessionId}`,

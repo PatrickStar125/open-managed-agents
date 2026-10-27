@@ -283,6 +283,15 @@ export interface SandboxFactoryContext {
    *  per-(tenant, session) dirs under here when mountSessionOutputs
    *  is called; remote adapters that don't host-mount can ignore it. */
   outputsRoot?: string;
+  /** Environment that owns the session, when the host knows it. */
+  environmentId?: string;
+  /** Workspace (tenant) that owns the session, when the host knows it. */
+  workspaceId?: string;
+  /** Operator-catalog image selected by the Environment, already resolved
+   * against `SANDBOX_IMAGES`. When present it overrides the provider's
+   * default `SANDBOX_IMAGE`; adapters that cannot honour a per-session image
+   * must throw rather than ignore it. Absent means "provider default". */
+  image?: { alias: string; reference: string };
 }
 
 export interface SandboxMemoryWorkspacePort {

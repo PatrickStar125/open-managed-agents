@@ -43,6 +43,25 @@ export interface CustomToolConfig {
 
 export type ToolConfig = ToolsetConfig | CustomToolConfig;
 
+export type MultiagentConfig<T> = {
+  type: "multiagent_20261001";
+  advisor: { type: "disabled" };
+  subagents: { type: "disabled" } | {
+    type: "enabled";
+    inline_agents: { type: "enabled" } | { type: "disabled" };
+    predefined_agents: T[];
+  };
+  workflows: { type: "disabled" };
+};
+
+export type RuntimeAgentConfig = Omit<AgentConfig, "multiagent"> & {
+  multiagent?: MultiagentConfig<Omit<AgentConfig, "multiagent"> & {
+    type: "agent";
+    mcp_servers: NonNullable<AgentConfig["mcp_servers"]>;
+    skills: NonNullable<AgentConfig["skills"]>;
+  }>;
+};
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -74,7 +93,9 @@ export interface AgentConfig {
       }
   >;
   skills?: Array<{ skill_id: string; type: string; version?: string }>;
+  /** @deprecated Not consumed by the managed runtime. */
   callable_agents?: Array<{ type: "agent"; id: string; version?: number }>;
+  multiagent?: MultiagentConfig<{ type: "agent"; id: string; version: number }>;
   /**
    * Optional auxiliary model used by tools for in-process LLM work
    * (e.g. web_fetch summarization). Same shape as `model`.
@@ -97,7 +118,12 @@ export interface AgentConfig {
       /** Canonical ACP registry id. Enables the matching native-state adapter;
        * legacy records without it fall back to matching the command basename. */
       id?: string;
-      command: string;
+      /** Explicit process (Harbor's `local` distribution). Exactly one of
+       * `command` or `registry` is set. */
+      command?: string;
+      /** Pinned ACP registry reference such as `claude-acp@0.94.0`; the
+       * sandbox installs it and spawns a generated launcher. */
+      registry?: string;
       args?: string[];
       env?: Record<string, string | undefined>;
       cwd?: string;

@@ -30,6 +30,31 @@ export interface EnvironmentPackagesOptions {
    * whose network reaches a mirror faster than pypi.org.
    */
   pipIndexUrl?: string;
+  /**
+   * Alias of the operator catalog image the sandbox runs (`SANDBOX_IMAGES`).
+   * Unset means the deployment default image, and the setup markers are
+   * exactly as before. When set, the alias is part of both markers, so a
+   * workspace restored onto a different image is not trusted: the fresh path
+   * removes its `/workspace/.venv` (bound to the old image's Python) and
+   * reinstalls.
+   */
+  sandboxImage?: string;
+}
+
+const SANDBOX_IMAGE_ALIAS = /^[a-z0-9][a-z0-9._-]{0,62}$/;
+
+/** The markers for a package list on a given image. */
+function setupMarkers(
+  packages: EnvironmentPackages | undefined,
+  sandboxImage: string | undefined,
+): { full: string; lang: string } {
+  const full = fullHash(packages);
+  const lang = langHash(packages);
+  if (sandboxImage === undefined) return { full, lang };
+  if (!SANDBOX_IMAGE_ALIAS.test(sandboxImage)) {
+    throw new TypeError(`Invalid sandbox image alias for environment packages: ${JSON.stringify(sandboxImage)}`);
+  }
+  return { full: `${full}:${sandboxImage}`, lang: `${lang}:${sandboxImage}` };
 }
 
 /** Directories the installed tools live in, in PATH order. */
@@ -95,7 +120,8 @@ export function buildAptScript(apt: readonly string[] | undefined): string {
  * It stops at the first failing step, so a failed install is reported
  * rather than masked by the steps after it.
  *
- *   pip   → /workspace/.venv (uv; installed with pip when the image lacks it)
+ *   pip   → /workspace/.venv (uv; installed with pip when the image lacks it;
+ *           created with --system-site-packages so image-baked packages resolve)
  *   npm   → /workspace/.npm-global
  *   cargo → /workspace/.cargo
  *   go    → /workspace/.go
@@ -106,13 +132,31 @@ export function buildFullSetupScript(
   packages: EnvironmentPackages | undefined,
   options: EnvironmentPackagesOptions = {},
 ): string {
-  if (!hasEnvironmentPackages(packages)) return "";
+  return buildSetupScript(packages, options, options.sandboxImage !== undefined);
+}
+
+/** `dropVenv`: the workspace venv may belong to another image's Python, so
+ * the fresh path must recreate it instead of reusing it. */
+function buildSetupScript(
+  packages: EnvironmentPackages | undefined,
+  options: EnvironmentPackagesOptions,
+  dropVenv: boolean,
+): string {
+  // On a catalog image, or when the workspace was last set up on one, the
+  // fresh path never trusts a restored venv: it may target the Python of
+  // another image. It is dropped even when no pip packages are listed now,
+  // so a stale interpreter is not left first on PATH or reused later.
+  const dropStaleVenv = dropVenv ? [`rm -rf /workspace/.venv`] : [];
+  if (!hasEnvironmentPackages(packages)) {
+    return dropStaleVenv.length > 0 ? `(\nset -e\n${dropStaleVenv.join("\n")}\n)` : "";
+  }
   const sections: string[] = ["set -e"];
 
   const apt = buildAptScript(packages!.apt);
   if (apt) sections.push(apt);
 
   const pip = packages!.pip ?? [];
+  if (pip.length === 0) sections.push(...dropStaleVenv);
   if (pip.length > 0) {
     const index = options.pipIndexUrl?.trim();
     if (index) {
@@ -120,9 +164,13 @@ export function buildFullSetupScript(
     }
     sections.push(
       `mkdir -p /workspace`,
+      ...dropStaleVenv,
       // Images without uv get it from pip; PEP 668 images need the override.
       `if command -v uv >/dev/null 2>&1; then UV=uv; else python3 -m pip install -q --user --break-system-packages uv 2>/dev/null || python3 -m pip install -q --user uv; UV="python3 -m uv"; fi`,
-      `[ -d /workspace/.venv ] || $UV venv -q /workspace/.venv`,
+      // --system-site-packages: packages baked into the image's system Python
+      // (e.g. an operator SANDBOX_IMAGES entry) stay importable from the venv,
+      // so an Environment only lists what the image lacks.
+      `[ -d /workspace/.venv ] || $UV venv -q --system-site-packages /workspace/.venv`,
       `$UV pip install --python /workspace/.venv/bin/python -q ${pip.map(shellQuote).join(" ")}`,
     );
   }
@@ -187,7 +235,7 @@ async function probeSetupState(
   sandbox: PackageSandbox,
   full: string,
   lang: string,
-): Promise<EnvironmentPackagesPath> {
+): Promise<{ path: EnvironmentPackagesPath; restoredMarker: string }> {
   try {
     const raw = await sandbox.exec(
       `WARM=$(cat ${WARM_MARKER} 2>/dev/null || echo MISSING); ` +
@@ -198,11 +246,11 @@ async function probeSetupState(
     const { stdout } = parseExecResult(raw);
     const warm = (stdout.match(/WARM=(\S+)/)?.[1] ?? "MISSING").trim();
     const rest = (stdout.match(/REST=(\S+)/)?.[1] ?? "MISSING").trim();
-    if (warm === full) return "warm";
-    if (rest === lang) return "restored";
-    return "fresh";
+    if (warm === full) return { path: "warm", restoredMarker: rest };
+    if (rest === lang) return { path: "restored", restoredMarker: rest };
+    return { path: "fresh", restoredMarker: rest };
   } catch {
-    return "fresh";
+    return { path: "fresh", restoredMarker: "MISSING" };
   }
 }
 
@@ -219,11 +267,11 @@ export async function ensureEnvironmentPackages(
   options: EnvironmentPackagesOptions = {},
 ): Promise<{ path: EnvironmentPackagesPath; durationMs: number; error?: string }> {
   const startMs = Date.now();
-  const full = fullHash(packages);
-  const lang = langHash(packages);
+  const { full, lang } = setupMarkers(packages, options.sandboxImage);
   const markers = `echo "${full}" > ${WARM_MARKER}; mkdir -p /workspace; echo "${lang}" > ${RESTORED_MARKER}`;
 
-  const state = await probeSetupState(sandbox, full, lang);
+  const probe = await probeSetupState(sandbox, full, lang);
+  const state = probe.path;
   if (state === "warm") {
     onProgress?.({ kind: "done", path: "warm", durationMs: Date.now() - startMs });
     return { path: "warm", durationMs: Date.now() - startMs };
@@ -248,7 +296,15 @@ export async function ensureEnvironmentPackages(
   }
 
   onProgress?.({ kind: "step", step: "running_setup" });
-  const fullScript = buildFullSetupScript(packages, options);
+  // Catalog-image markers are `<hash>:<alias>`. A workspace last set up on a
+  // catalog image keeps that image's venv even when switching back to the
+  // default image, so it is dropped too. Default-only workspaces never carry
+  // the suffix and get exactly the script they always did.
+  const fullScript = buildSetupScript(
+    packages,
+    options,
+    options.sandboxImage !== undefined || probe.restoredMarker.includes(":"),
+  );
   if (fullScript) {
     const r = parseExecResult(await sandbox.exec(fullScript, 600_000));
     if (r.exitCode !== 0) {

@@ -976,29 +976,35 @@ importers:
         specifier: ^0.9.1
         version: 0.9.1(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-feishu':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@larksuiteoapi/node-sdk@1.76.0)(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@larksuiteoapi/node-sdk@1.76.0)(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-gitlab':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-host-local':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-inbox-mysql':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-inbox-sqlite':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter-loop':
+        specifier: 0.2.6
+        version: 0.2.6
       '@openma/matter-store-mysql':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@openma/matter-store-sqlite':
-        specifier: 0.2.5
-        version: 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        specifier: 0.2.6
+        version: 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      cron-parser:
+        specifier: 5.10.2
+        version: 5.10.2
       effect:
         specifier: 3.22.1
         version: 3.22.1
@@ -2190,6 +2196,9 @@ importers:
       '@open-managed-agents/kv-store':
         specifier: workspace:*
         version: link:../kv-store
+      '@open-managed-agents/managed-agents-api':
+        specifier: workspace:*
+        version: link:../managed-agents-api
       '@open-managed-agents/memory-store':
         specifier: workspace:*
         version: link:../memory-store
@@ -2505,6 +2514,9 @@ importers:
 
   packages/managed-agents-api:
     dependencies:
+      '@open-managed-agents/acp-runtime':
+        specifier: workspace:*
+        version: link:../acp-runtime
       '@open-managed-agents/managed-agents-application':
         specifier: workspace:*
         version: link:../managed-agents-application
@@ -2712,6 +2724,9 @@ importers:
         specifier: ^0.9.1
         version: 0.9.1(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
     devDependencies:
+      '@open-managed-agents/session-store-memory':
+        specifier: workspace:*
+        version: link:../session-store-memory
       vitest:
         specifier: ^4.1.3
         version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@26.6.3)(@vitest/coverage-v8@4.1.4)(jiti@2.6.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.14.6(@types/node@26.6.3)(typescript@7.0.2))(tsx@4.21.0)(yaml@2.9.1)
@@ -7024,8 +7039,8 @@ packages:
       react-dom:
         optional: true
 
-  '@openma/matter-feishu@0.2.5':
-    resolution: {integrity: sha512-1NsXv8mnWEQDuXFbA5PPlEMW6dp6TocHhJFu1O2r7eTw2exraJRXEjOv03iIoAw7DkUk6AW0wdn7ERci6ZC6ag==}
+  '@openma/matter-feishu@0.2.6':
+    resolution: {integrity: sha512-t9Ax/bLSlgII+Akn78OHDrHvuwxvuytEWMeQ7PW0gdcQmCEEZrdjyZTxLRQWfchyHswSEz7+Q/Cy6yPpA0KAfg==}
     peerDependencies:
       '@larksuiteoapi/node-sdk': ^1.76.0
       effect: ^3.22.1
@@ -7033,45 +7048,45 @@ packages:
       '@larksuiteoapi/node-sdk':
         optional: true
 
-  '@openma/matter-gitlab@0.2.5':
-    resolution: {integrity: sha512-Z+xSSWGT0Or7hus6wZwQF9V82w11HFjc46fTjgh8OyNdw6oZWHJML6gkJsXwu4ISqvcx7qs67wXgYUtq0y6D7g==}
+  '@openma/matter-gitlab@0.2.6':
+    resolution: {integrity: sha512-Yhk1xVaWArA2OtHscpFBzkjNxTZyPC0x4/wNZ93V8PbYjZrWgJMZ1dv3WYt/j2Ba1Z+gUXj0BAD/9qsbjvHy4g==}
     peerDependencies:
       effect: ^3.22.1
 
-  '@openma/matter-host-local@0.2.5':
-    resolution: {integrity: sha512-q+OKErxV2W3JvZsM1sdCdDoZDs/eLh2AEHvSddF0Br94je4TE0SiaBEN6HHvzBbsn93IQo/z+fcxno+Mx7PZuw==}
+  '@openma/matter-host-local@0.2.6':
+    resolution: {integrity: sha512-pI2dpkwSPIPT/pbxr4cgVGrZzXwiRkUnZOPGRbudEr6Fjl73Lp0hoet560X7ZiCmuPmuS3rIJcIoNNugMZziRA==}
     peerDependencies:
       effect: ^3.22.1
 
-  '@openma/matter-inbox-mysql@0.2.5':
-    resolution: {integrity: sha512-msqDVTlGkCSWls0jjXK74x0HCiZYrSVVgR/U9W21Ltz/K9bP6OC278TEH/FshoO+DLsbkJIQutO/PzcEwJ+GYw==}
+  '@openma/matter-inbox-mysql@0.2.6':
+    resolution: {integrity: sha512-hdQqE9xSVU4ZvrHnpjvitBPVRrirxX7C8kcKqGpKuLcGwYgdDiVpnIskKYIsTAYmUimsrlYSfH2qdwOufW1YrA==}
     engines: {node: '>=22.13'}
     peerDependencies:
       effect: ^3.22.1
 
-  '@openma/matter-inbox-sqlite@0.2.5':
-    resolution: {integrity: sha512-G+IJArXpr6FX7v/w5VwJKHi/JVyUQMt0AFRZ3y2PCbgbL60gSXT2A62RQ4SXvwT0YL9q2e3y1n/CwE+cP1kzyw==}
+  '@openma/matter-inbox-sqlite@0.2.6':
+    resolution: {integrity: sha512-7MNpCOKc+TbjxAhtGGMavXzTgm37EDloVutgJdebKWFhTrPf+yFelCC11gaw4nhLlYSPXK8pz6HGpGqyEfH0Fw==}
     engines: {node: '>=22.5'}
     peerDependencies:
       effect: ^3.22.1
 
-  '@openma/matter-loop@0.2.5':
-    resolution: {integrity: sha512-eHTNM7hqS1uImLZJU/1APlwWZobvNdpPaXjNETNNYG1XjUrb+ogabn9vK+uM0F6EqE+9rF6Vd0ZM7/HwFhG3dg==}
+  '@openma/matter-loop@0.2.6':
+    resolution: {integrity: sha512-dz6OSpcJqlI7KvKUT37442r5lMqlxE/2j4+sT5v0zYN1+A2tA9ue++Nse5Nlwjdpo/UEwdGkC7YsVUx3HgCqQQ==}
 
-  '@openma/matter-store-mysql@0.2.5':
-    resolution: {integrity: sha512-gp94tCF1lsHATI2tan+Lh+is23iqR4/T6wiTnUZ1RL+IHjJvVUYdSUSc/jNlVeDYlyn7xJcB5yqnUZauWMpsow==}
+  '@openma/matter-store-mysql@0.2.6':
+    resolution: {integrity: sha512-V92H4/npXjNbri8q8W79Ic/JkUXIVeBQlyQn31ep/pjLIRfeHbhcgK8HkOJyNxQOM40Rf+pvhu2Hxndx0I/3Bg==}
     engines: {node: '>=22.13'}
     peerDependencies:
       effect: ^3.22.1
 
-  '@openma/matter-store-sqlite@0.2.5':
-    resolution: {integrity: sha512-+dkU3DGrE+DZL6lX7W4Ma/EWVJCikVAsJqlx+03Bb10a37yqTW7XpihXxQf9sp69Cb5ig/GyixPMzvVonPJhdQ==}
+  '@openma/matter-store-sqlite@0.2.6':
+    resolution: {integrity: sha512-d1OvQUNBpP5ooigLnh7xRBVxb3cw1K/vi2ZKmW/ruEBN58q0OvXZEP2EYYNhE0xTnVgAJR2vap48cVYux0iacg==}
     engines: {node: '>=22.13'}
     peerDependencies:
       effect: ^3.22.1
 
-  '@openma/matter@0.2.5':
-    resolution: {integrity: sha512-How8q260dZPedBwnVrfpQzEfN/mM8W1WYbgYR6kPZl71OlOUEXgbKikGGq3vn95gYtIsKGbEPtqCtsqGPdFxag==}
+  '@openma/matter@0.2.6':
+    resolution: {integrity: sha512-fOid390kqrD5EQBPrAYnL1PXpqnCvo0KdekCr2WjuzGWcO0px7veJ+Qcgvo253ysiftKnEmOKIpets8x0mjv9g==}
     peerDependencies:
       effect: ^3.22.1
 
@@ -10139,6 +10154,10 @@ packages:
     resolution: {integrity: sha512-piICUB6ei4IlTv1+653yq5+KoqfBYmj9bw6LqXoOneTMDXk5nM1qt12mFW1caG3LlJXEKW1Bp0WggEmIfQB34g==}
     engines: {node: '>= 14'}
 
+  cron-parser@5.10.2:
+    resolution: {integrity: sha512-JfAYMY0LZaWQTuict8PhtF/ksSnq8xefSDmQUnnoqvkPYkU/y3UP0DTWzJKFBz0P1IXsDG8q0vY3zHkoFZOhvw==}
+    engines: {node: '>=18'}
+
   cron-schedule@6.0.0:
     resolution: {integrity: sha512-BoZaseYGXOo5j5HUwTaegIog3JJbuH4BbrY9A1ArLjXpy+RWb3mV28F/9Gv1dDA7E2L8kngWva4NWisnLTyfgQ==}
     engines: {node: '>=20'}
@@ -11809,6 +11828,10 @@ packages:
     resolution: {integrity: sha512-yXCCWxGFYT6bLIPYC4SY6fPQPRs/d797rRIue+J9XP2Td6vQvD53gaQRBCnIVT1kTQRHtAtxlfOQNWAuIF8ELg==}
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  luxon@3.7.2:
+    resolution: {integrity: sha512-vtEhXh/gNjI9Yg1u4jX/0YVPMvxzHuGgCm6tC5kZyb08yjGWGnqAjGJvcXbqQR2P3MyMEFnRbpcdFS6PBcLqew==}
+    engines: {node: '>=12'}
 
   lz-string@1.5.0:
     resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
@@ -17087,10 +17110,10 @@ snapshots:
       - '@types/react-dom'
       - supports-color
 
-  '@openma/matter-feishu@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@larksuiteoapi/node-sdk@1.76.0)(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter-feishu@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@larksuiteoapi/node-sdk@1.76.0)(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@openma/matter': 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@openma/matter-loop': 0.2.5
+      '@openma/matter': 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter-loop': 0.2.6
       effect: 3.22.1
     optionalDependencies:
       '@larksuiteoapi/node-sdk': 1.76.0
@@ -17102,10 +17125,10 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@openma/matter-gitlab@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter-gitlab@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@openma/matter': 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@openma/matter-loop': 0.2.5
+      '@openma/matter': 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter-loop': 0.2.6
       effect: 3.22.1
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
@@ -17115,9 +17138,9 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@openma/matter-host-local@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter-host-local@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@openma/matter': 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter': 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       '@slack/socket-mode': 3.0.0(undici@7.29.0)
       effect: 3.22.1
       undici: 7.29.0
@@ -17129,9 +17152,9 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@openma/matter-inbox-mysql@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter-inbox-mysql@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@openma/matter': 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter': 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       effect: 3.22.1
       mysql2: 3.15.3
     transitivePeerDependencies:
@@ -17142,9 +17165,9 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@openma/matter-inbox-sqlite@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter-inbox-sqlite@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@openma/matter': 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter': 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       effect: 3.22.1
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
@@ -17154,11 +17177,11 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@openma/matter-loop@0.2.5': {}
+  '@openma/matter-loop@0.2.6': {}
 
-  '@openma/matter-store-mysql@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter-store-mysql@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@openma/matter': 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter': 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       effect: 3.22.1
       mysql2: 3.15.3
     transitivePeerDependencies:
@@ -17169,9 +17192,9 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@openma/matter-store-sqlite@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter-store-sqlite@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
-      '@openma/matter': 0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@openma/matter': 0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       effect: 3.22.1
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
@@ -17181,10 +17204,10 @@ snapshots:
       - react-dom
       - supports-color
 
-  '@openma/matter@0.2.5(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+  '@openma/matter@0.2.6(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(effect@3.22.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
       '@openma/common': 0.9.1(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@openma/matter-loop': 0.2.5
+      '@openma/matter-loop': 0.2.6
       effect: 3.22.1
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
@@ -20686,6 +20709,10 @@ snapshots:
       crc-32: 1.2.2
       readable-stream: 4.7.0
 
+  cron-parser@5.10.2:
+    dependencies:
+      luxon: 3.7.2
+
   cron-schedule@6.0.0: {}
 
   croner@9.1.0: {}
@@ -22491,6 +22518,8 @@ snapshots:
   lucide-react@1.35.0(react@19.2.8):
     dependencies:
       react: 19.2.8
+
+  luxon@3.7.2: {}
 
   lz-string@1.5.0: {}
 

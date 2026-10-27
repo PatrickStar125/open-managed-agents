@@ -316,6 +316,11 @@ export class E2BSandboxExecutor
   async spawnDuplexProcess(
     spec: SandboxDuplexProcessSpec,
   ): Promise<SandboxDuplexProcess> {
+    for (const name of Object.keys(spec.env ?? {})) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw new TypeError(`Invalid environment variable name: ${JSON.stringify(name)}`);
+      }
+    }
     let stdoutController!: ReadableStreamDefaultController<Uint8Array>;
     let stderrController!: ReadableStreamDefaultController<Uint8Array>;
     let streamsSettled = false;
@@ -350,7 +355,12 @@ export class E2BSandboxExecutor
       }
     };
 
-    const command = [spec.command, ...(spec.args ?? [])]
+    const unset = Object.entries(spec.env ?? {})
+      .filter(([, value]) => value === undefined)
+      .flatMap(([name]) => ["-u", name]);
+    // Omitting an envs entry does not remove envd/image-inherited values.
+    // env -u implements the duplex Port's explicit-undefined contract remotely.
+    const command = [...(unset.length ? ["env", ...unset, "--"] : []), spec.command, ...(spec.args ?? [])]
       .map(shellEscape)
       .join(" ");
     const handle = (await this.sandbox.commands.run(command, {
@@ -378,28 +388,32 @@ export class E2BSandboxExecutor
 
     let requestedSignal: "SIGTERM" | "SIGKILL" | null = null;
     let exitedSettled = false;
+    // A broken wait transport settles the observation, not the remote process.
+    let exitConfirmed = false;
     let resolveExited!: (
       value: { code: number | null; signal: string | null },
     ) => void;
+    let rejectExited!: (error: Error) => void;
     const exited = new Promise<{ code: number | null; signal: string | null }>(
-      (resolve) => { resolveExited = resolve; },
+      (resolve, reject) => { resolveExited = resolve; rejectExited = reject; },
     );
+    void exited.catch(() => undefined);
     const finish = (code: number | null, signal: string | null, error?: Error) => {
       settleStreams(error);
       if (exitedSettled) return;
       exitedSettled = true;
-      resolveExited({ code, signal });
+      if (error) rejectExited(error);
+      else {
+        exitConfirmed = true;
+        resolveExited({ code, signal });
+      }
     };
     void handle.wait().then(
       (result) => finish(result.exitCode, requestedSignal),
       (cause: unknown) => {
-        if (requestedSignal !== null) {
-          finish(null, requestedSignal);
-          return;
-        }
         const exitCode = readExitCode(cause);
         if (exitCode !== null) {
-          finish(exitCode, null);
+          finish(exitCode, requestedSignal);
           return;
         }
         const error = cause instanceof Error ? cause : new Error(String(cause));
@@ -416,10 +430,10 @@ export class E2BSandboxExecutor
         if (!exitedSettled) await handle.closeStdin!();
       },
       abort: async () => {
-        if (exitedSettled) return;
+        if (exitConfirmed) return;
         requestedSignal = "SIGKILL";
         await handle.kill();
-        finish(null, requestedSignal);
+        // Only wait() confirms exit; kill's acknowledgement is not a barrier.
       },
     });
 
@@ -429,12 +443,12 @@ export class E2BSandboxExecutor
       stderr,
       exited,
       kill: async (signal = "SIGTERM") => {
-        if (exitedSettled) return;
+        if (exitConfirmed) return;
         // E2B v2 currently exposes SIGKILL only. Preserve the caller's
         // requested signal in the portable lifecycle result.
         requestedSignal = signal;
         await handle.kill();
-        finish(null, requestedSignal);
+        // Only wait() confirms exit; kill's acknowledgement is not a barrier.
       },
     };
   }
@@ -849,7 +863,10 @@ function parseCreateMetadata(value: string | undefined): Record<string, string> 
   return parsed as Record<string, string>;
 }
 
-function optionsFromFactory(env: SandboxFactoryEnv): E2BSandboxOptions {
+function optionsFromFactory(
+  env: SandboxFactoryEnv,
+  ctx?: Pick<SandboxFactoryContext, "image">,
+): E2BSandboxOptions {
   return {
     apiKey: env.E2B_API_KEY,
     apiUrl: env.E2B_API_URL,
@@ -857,13 +874,14 @@ function optionsFromFactory(env: SandboxFactoryEnv): E2BSandboxOptions {
     domain: env.E2B_DOMAIN,
     createMetadata: parseCreateMetadata(env.E2B_CREATE_METADATA),
     lifetimeMs: parseLifetime(env.E2B_SANDBOX_TIMEOUT_MS),
-    templateId: env.SANDBOX_IMAGE,
+    // An Environment-selected catalog image overrides the process default.
+    templateId: ctx?.image?.reference ?? env.SANDBOX_IMAGE,
     memoryBucket: readS3MemoryBucket(env),
   };
 }
 
 export const sandboxProvider: SandboxProviderPort<E2BSandboxExecutor> = {
-  create: async (_ctx, env) => createE2BSandbox(optionsFromFactory(env)),
+  create: async (ctx, env) => createE2BSandbox(optionsFromFactory(env, ctx)),
   resume: async (handle, _ctx, env) => {
     if (handle.provider !== "e2b" || !handle.runtimeId) {
       throw new Error("E2B provider received an incompatible runtime handle");

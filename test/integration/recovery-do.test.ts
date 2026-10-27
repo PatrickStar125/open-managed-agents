@@ -2,8 +2,7 @@
 import { env, exports } from "cloudflare:workers";
 import { runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { describe, it, expect, beforeAll } from "vitest";
-import { registerHarness } from "../../apps/agent/src/harness/registry";
-import type { HarnessInterface, HarnessContext } from "../../apps/agent/src/harness/interface";
+import { registerTestHarnesses } from "../harnesses";
 import { CfDoStreamRepo, ensureSchema as ensureEventLogSchema } from "@open-managed-agents/event-log/cf-do";
 import { SqliteHistory } from "../../apps/agent/src/runtime/history";
 
@@ -23,10 +22,7 @@ import { SqliteHistory } from "../../apps/agent/src/runtime/history";
 //   4. Trigger any endpoint that calls ensureSchema → recovery fires,
 //   5. Read events back via the DO's own GET /events endpoint.
 
-class NoopHarness implements HarnessInterface {
-  async run(_ctx: HarnessContext): Promise<void> { /* no LLM */ }
-}
-registerHarness("noop", () => new NoopHarness());
+registerTestHarnesses();
 
 const H = { "x-api-key": "test-key", "Content-Type": "application/json" };
 function api(path: string, init?: RequestInit) {
@@ -37,7 +33,7 @@ function post(path: string, body: unknown) {
 }
 
 async function newSession(): Promise<string> {
-  const a = await post("/v1/oma/agents", { name: "RecoveryTest", model: "claude-sonnet-4-6", harness: "noop" });
+  const a = await post("/v1/oma/agents", { name: "RecoveryTest", model: "claude-sonnet-4-6", _oma: { harness: "noop" } });
   const agent = await a.json();
   const e = await post("/v1/oma/environments", { name: "rec-env", config: { type: "cloud" } });
   const environment = await e.json();

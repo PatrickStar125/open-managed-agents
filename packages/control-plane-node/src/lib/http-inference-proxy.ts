@@ -1,13 +1,7 @@
 import { Hono } from "hono";
-import { forwardHostedInferenceRequest } from "@open-managed-agents/inference-proxy";
+import { forwardHostedInferenceRequest, type ResolvedSessionModelUpstream } from "@open-managed-agents/inference-proxy";
 
-export interface NodeInferenceUpstream {
-  wireModel: string;
-  apiKey: string;
-  baseURL?: string;
-  provider?: string;
-  customHeaders?: Record<string, string>;
-}
+export type NodeInferenceUpstream = ResolvedSessionModelUpstream;
 
 export interface NodeHttpInferenceProxyDependencies {
   resolveUpstream(input: {
@@ -24,9 +18,10 @@ export function buildNodeHttpInferenceProxyRoutes(
   routes.all("/:sessionId/*", async (context) => {
     const tenantId = context.get("tenant_id");
     const sessionId = context.req.param("sessionId");
-    const prefix = `/${sessionId}/`;
+    // Hono keeps the full mounted path in req.path, not the child route path.
+    const prefix = `/v1/oma/inference-proxy/${encodeURIComponent(sessionId)}/`;
     const subPath = context.req.path.startsWith(prefix)
-      ? context.req.path.slice(prefix.length)
+      ? context.req.path.slice(prefix.length) + new URL(context.req.url).search
       : "";
     const upstream = await dependencies.resolveUpstream({ tenantId, sessionId });
     if (upstream === null) {
