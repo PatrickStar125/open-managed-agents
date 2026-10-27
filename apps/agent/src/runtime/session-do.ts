@@ -3321,6 +3321,9 @@ export class SessionDO extends DurableObject<Env> {
               try {
                 const { getCfServicesForTenant } = await import("@open-managed-agents/services");
                 const services = await getCfServicesForTenant(this.env, tenantId);
+                // shortcut: still v1 recordUsage — the close hook carries no
+                // stable correlation anchor (no window start / browser session
+                // id); migrate when the hook gains one.
                 await services.usage.recordUsage({
                   tenantId,
                   sessionId,
@@ -3947,15 +3950,17 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Inspect an outbound event for a `span.model_request_end` carrying
-   * `model_usage` and credit cache tokens to the given thread. Input /
-   * output token totals already arrive via reportUsage at the end of the
-   * turn (default-loop step 10), so this only handles the cache-bucket
-   * deltas reportUsage doesn't carry. Idempotent across primary +
-   * sub-agent broadcast paths because each model_request_end event is
-   * emitted exactly once per LLM step.
+   * Outbound-event usage tap. Two jobs on every broadcast event:
+   *
+   * 1. Credit cache tokens to the thread (input/output totals arrive
+   *    via reportUsage; this only handles the cache deltas). Idempotent
+   *    because each model_request_end is emitted exactly once per step.
+   * 2. Fire the v2 ledger projection for the itemized usage rows
+   *    (model_call / tool_use) — see emitLedgerRows below.
    */
   private maybeCreditCacheTokens(threadId: string, event: SessionEvent): void {
+    this.emitLedgerRows(event);
+    if (event.type === "agent.tool_use" || event.type === "agent.mcp_tool_use") return;
     if (event.type !== "span.model_request_end") return;
     const usage = (event as unknown as {
       model_usage?: {
@@ -3973,6 +3978,90 @@ export class SessionDO extends DurableObject<Env> {
       cache_creation_input_tokens: cc,
       cache_read_input_tokens: cr,
     });
+  }
+
+  /**
+   * v2 ledger projection tap (design: docs/usage-ledger-design.md).
+   * span.model_request_end → one model_call row carrying the call's
+   * full token economics; agent.tool_use / agent.mcp_tool_use → one
+   * tool_use row. Fire-and-forget: a usage emit must never fail the
+   * turn, and correlation_id dedupes redeliveries. shortcut: a DO
+   * eviction mid-flight can drop the row (at-most-once window); an
+   * outbox-grade source closes it if ledger gaps ever matter.
+   */
+  private emitLedgerRows(event: SessionEvent): void {
+    if (
+      event.type !== "span.model_request_end" &&
+      event.type !== "agent.tool_use" &&
+      event.type !== "agent.mcp_tool_use"
+    ) {
+      return;
+    }
+    void (async () => {
+      try {
+        const tenantId = this.state.tenant_id;
+        const sessionId = this.state.session_id;
+        if (!tenantId || !sessionId) return; // early-init edge
+        const { getCfServicesForTenant } = await import(
+          "@open-managed-agents/services"
+        );
+        const services = await getCfServicesForTenant(this.env, tenantId);
+        if (event.type === "span.model_request_end") {
+          const e = event as {
+            id?: string;
+            model_request_start_id?: string;
+            provider_response_id?: string;
+            model?: string;
+            model_usage?: {
+              input_tokens: number;
+              output_tokens: number;
+              cache_read_input_tokens?: number;
+              cache_creation_input_tokens?: number;
+            };
+          };
+          const u = e.model_usage;
+          // No id at all → can't dedupe; skip rather than risk dupes.
+          const corr = e.id ?? e.model_request_start_id ?? e.provider_response_id;
+          if (!u || !corr) return;
+          await services.usage.recordLedger([
+            {
+              tenantId,
+              sessionId,
+              agentId: this.state.agent_id || null,
+              kind: "model_call",
+              value: 1,
+              correlationId: `call:${corr}`,
+              input_tokens: u.input_tokens,
+              output_tokens: u.output_tokens,
+              cached_read_tokens: u.cache_read_input_tokens,
+              cached_write_tokens: u.cache_creation_input_tokens,
+              dimensions: e.model ? { modelId: e.model } : undefined,
+            },
+          ]);
+        } else {
+          const e = event as { id: string; name: string; mcp_server_name?: string };
+          const toolName =
+            event.type === "agent.mcp_tool_use" && e.mcp_server_name
+              ? `${e.mcp_server_name}:${e.name}`
+              : e.name;
+          await services.usage.recordLedger([
+            {
+              tenantId,
+              sessionId,
+              agentId: this.state.agent_id || null,
+              kind: "tool_use",
+              value: 1,
+              correlationId: `tool:${e.id}`,
+              dimensions: { toolName },
+            },
+          ]);
+        }
+      } catch (err) {
+        console.error(
+          `[session_do] ledger emit failed: ${(err as Error).message ?? err}`,
+        );
+      }
+    })();
   }
 
   /**
@@ -5830,13 +5919,19 @@ export class SessionDO extends DurableObject<Env> {
       // the Services container — the same path used for backup writes.
       const { getCfServicesForTenant } = await import("@open-managed-agents/services");
       const services = await getCfServicesForTenant(this.env, tenantId);
-      await services.usage.recordUsage({
-        tenantId,
-        sessionId,
-        agentId: this.state.agent_id || null,
-        kind: "session_alive_seconds",
-        value: seconds,
-      });
+      // v2 ledger emit: correlation fixes the latent double-emit when a
+      // crash lands between the write and the billed-flag setState.
+      await services.usage.recordLedger([
+        {
+          tenantId,
+          sessionId,
+          agentId: this.state.agent_id || null,
+          kind: "session_alive_seconds",
+          value: seconds,
+          correlationId: `alive:${sessionId}`,
+          interval: { startMs: createdAt, endMs: Date.now() },
+        },
+      ]);
       this.setState({ ...this.state, session_alive_billed: true });
       console.log(
         `[session_do] usage emit session_alive_seconds=${seconds} session=${sessionId.slice(0, 12)}`,

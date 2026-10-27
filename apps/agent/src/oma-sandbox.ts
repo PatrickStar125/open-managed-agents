@@ -589,13 +589,21 @@ export class OmaSandbox extends Sandbox {
       const seconds = Math.floor(elapsedMs / 1000);
       if (seconds <= 0) return;
       const services = await getCfServicesForTenant(env, ctx.tenantId);
-      await services.usage.recordUsage({
-        tenantId: ctx.tenantId,
-        sessionId: ctx.sessionId,
-        agentId: ctx.agentId,
-        kind: "sandbox_active_seconds",
-        value: seconds,
-      });
+      // v2 ledger emit: correlation on the billing window makes the
+      // stop-emit exactly-once (a crash between emit and ctx-delete
+      // can no longer double-bill the same window).
+      await services.usage.recordLedger([
+        {
+          tenantId: ctx.tenantId,
+          sessionId: ctx.sessionId,
+          agentId: ctx.agentId,
+          kind: "sandbox_active_seconds",
+          value: seconds,
+          correlationId: `sbx:${ctx.sessionId}:${ctx.startedAt}`,
+          interval: { startMs: ctx.startedAt, endMs: ctx.startedAt + elapsedMs },
+          dimensions: { runtimeId: "cloudflare-sandbox" },
+        },
+      ]);
       // Drop the stored context so a re-start in the same DO mints a
       // fresh window (re-warm = new billing window, not "continue prior
       // window"). The next setBillingContext() call from SessionDO at
