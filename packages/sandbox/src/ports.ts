@@ -146,6 +146,43 @@ export interface SandboxSessionOutputMountPort {
   }): Promise<void>;
 }
 
+/** Serializable reference to a provider-owned prepared base: a snapshot of a
+ * sandbox on which the Environment setup has already run. Hosts persist it
+ * opaquely and hand it back as {@link SandboxFactoryContext.preparedBase}. */
+export interface SandboxPreparedBaseHandle {
+  provider: string;
+  id: string;
+}
+
+/** Provider primitive for capturing the current sandbox as a prepared base
+ * that later sandboxes can be created from. Separate from
+ * {@link SandboxRuntimePort.checkpoint}: a prepared base is a reusable
+ * creation source shared across Sessions, not a restore point of one. */
+export interface SandboxPreparedBasePort {
+  capturePreparedBase(input: { name: string }): Promise<SandboxPreparedBaseHandle>;
+}
+
+export function supportsPreparedBase(
+  value: unknown,
+): value is SandboxPreparedBasePort {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<SandboxPreparedBasePort>;
+  return typeof candidate.capturePreparedBase === "function";
+}
+
+/** For adapters that cannot create a sandbox from a prepared base: a
+ * requested base must fail the create, never be ignored. */
+export function rejectPreparedBase(
+  provider: string,
+  preparedBase: SandboxPreparedBaseHandle | undefined,
+): void {
+  if (preparedBase === undefined) return;
+  throw new Error(
+    `SANDBOX_PROVIDER=${provider} cannot create a sandbox from a prepared base ` +
+      `(requested ${preparedBase.provider}:${preparedBase.id})`,
+  );
+}
+
 export function supportsWorkspaceBackup(
   value: unknown,
 ): value is SandboxWorkspaceBackupPort {
@@ -292,6 +329,12 @@ export interface SandboxFactoryContext {
    * default `SANDBOX_IMAGE`; adapters that cannot honour a per-session image
    * must throw rather than ignore it. Absent means "provider default". */
   image?: { alias: string; reference: string };
+  /** Prepared base to create the sandbox from instead of the provider's
+   * template/image. When present the adapter MUST create from it; adapters
+   * that cannot, or that receive a base of another provider, must throw
+   * rather than ignore it (same rule as `image`). A base captured on a
+   * catalog image already contains that image, so `image` may accompany it. */
+  preparedBase?: SandboxPreparedBaseHandle;
 }
 
 export interface SandboxMemoryWorkspacePort {
@@ -309,10 +352,31 @@ export interface SandboxMemoryWorkspacePort {
  *  (e.g. BoxRun reads `BOXRUN_URL`, E2B reads `E2B_API_KEY`). */
 export type SandboxFactoryEnv = Readonly<Record<string, string | undefined>>;
 
-export type SandboxFactory = (
+/** What a factory's sandboxes can do, declared by whoever composes it. The
+ * control plane enables optional features from these declarations instead of
+ * from deployment switches. */
+export interface SandboxFactoryCapabilities {
+  /** Sandboxes implement {@link SandboxPreparedBasePort}, and the factory
+   * creates from {@link SandboxFactoryContext.preparedBase}. */
+  preparedBase?: boolean;
+}
+
+export type SandboxFactory = ((
   ctx: SandboxFactoryContext,
   env: SandboxFactoryEnv,
-) => Promise<SandboxPort>;
+) => Promise<SandboxPort>) & {
+  readonly capabilities?: SandboxFactoryCapabilities;
+};
+
+/** Declare capabilities on a factory, e.g. a custom composition that wraps an
+ * adapter: `withSandboxFactoryCapabilities(factory, { preparedBase: true })`. */
+export function withSandboxFactoryCapabilities(
+  factory: (ctx: SandboxFactoryContext, env: SandboxFactoryEnv) => Promise<SandboxPort>,
+  capabilities: SandboxFactoryCapabilities,
+): SandboxFactory {
+  const wrapped = (ctx: SandboxFactoryContext, env: SandboxFactoryEnv) => factory(ctx, env);
+  return Object.assign(wrapped, { capabilities: { ...capabilities } });
+}
 
 /** SDK-style provider composition. `SandboxFactory` remains the v0 create
  * adapter; new runtime hosts use this Port when resources must survive the
