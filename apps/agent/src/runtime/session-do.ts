@@ -4883,6 +4883,7 @@ export class SessionDO extends DurableObject<Env> {
           this.broadcastEvent(taggedEvent);
           this.fanOutToHooks(taggedEvent);
           this.maybeCreditCacheTokens(threadId, taggedEvent);
+          this.emitLedgerRows(taggedEvent);
         },
         ...this.buildStreamRuntimeMethods(
           threadId,
@@ -5426,6 +5427,7 @@ export class SessionDO extends DurableObject<Env> {
           this.broadcastEvent(event, activeFence);
           this.fanOutToHooks(event);
           this.maybeCreditCacheTokens(turnThreadId, event);
+          this.emitLedgerRows(event);
         },
         ...this.buildStreamRuntimeMethods(turnThreadId, activeFence),
         reportUsage: async (input_tokens: number, output_tokens: number) => {

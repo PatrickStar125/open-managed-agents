@@ -296,6 +296,9 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
       .all<Omit<LedgerRow, "rowKind">>();
     const rows = (r.results ?? []).map((row) => ({ ...row, rowKind: "detail" as const }));
 
+    // shortcut: COUNT runs on every page; the console also pays a second
+    // count via its limit=1 total probe — add a total:false opt-out read
+    // from the first page's envelope if ledger growth makes this hot.
     const totalBinds = cursorBound ? binds.slice(0, -1) : binds;
     const c = await this.client
       .prepare(`SELECT COUNT(*) AS total FROM usage_events WHERE ${where}`)
@@ -353,6 +356,16 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
     const byDate = new Map(daily.map((d) => [d.date, d]));
     const filled: LedgerDailyRow[] = [];
     const dayMs = 86_400_000;
+    // No data days in range → no rows at all (not one phantom zero row).
+    if (daily.length === 0) {
+      return {
+        totals: { sessions: 0, model_calls: 0, input_tokens: 0, output_tokens: 0, cached_read_tokens: 0, sandbox_minutes: 0 },
+        daily: [],
+        by_model: [],
+        by_agent: [],
+        by_sandbox: [],
+      };
+    }
     // Fill between the window START and the LAST DATA DAY (not toMs —
     // callers pass open-ended windows; past the last data day, zero
     // rows add no information). Also bounded by the data's first day so
@@ -627,6 +640,8 @@ export function normalizeLedgerEntry(
   const value = e.kind.endsWith("_seconds")
     ? clampUsageValue(e.value)
     : e.value;
+  // Zero-value rows are dropped (v1 parity): no garbage in the billing pull.
+  if (value === 0) return null;
   for (const t of [
     e.input_tokens,
     e.cached_read_tokens,

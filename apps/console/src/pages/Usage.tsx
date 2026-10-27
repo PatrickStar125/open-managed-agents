@@ -805,6 +805,12 @@ export function Usage() {
 
   const totals = data?.totals;
   const prev = data?.prev;
+  // The server clamps the fetched (2×span) window to 90 days ending at
+  // `to`; when the clamp bit, the prev-period head is truncated and
+  // deltas would overstate growth (or +∞ against an empty prev) — hide.
+  const prevValid = !!full && full.range.from <= isoAdd(from, -span);
+  const deltaVs = (cur: number, p: number | undefined): string =>
+    prevValid ? deltaPct(cur, p ?? 0) : "–";
   const vsPrev = `${t.usage.vsPrevPrefix}${span}${t.usage.vsPrevSuffix}`;
   const estCost = totals
     ? totals.sandbox_minutes * SANDBOX_RATE_USD_PER_MIN
@@ -884,7 +890,7 @@ export function Usage() {
                 label={t.usage.totalTokens}
                 value={(data.totals.input_tokens + data.totals.output_tokens).toLocaleString()}
                 unit={t.usage.tokensUnit}
-                delta={deltaPct(
+                delta={deltaVs(
                   data.totals.input_tokens + data.totals.output_tokens,
                   (data.prev?.input_tokens ?? 0) + (data.prev?.output_tokens ?? 0),
                 )}
@@ -893,13 +899,13 @@ export function Usage() {
                 label={t.usage.modelCalls}
                 value={data.totals.model_calls.toLocaleString()}
                 unit={t.usage.callsUnit}
-                delta={deltaPct(data.totals.model_calls, data.prev?.model_calls ?? 0)}
+                delta={deltaVs(data.totals.model_calls, data.prev?.model_calls)}
               />
               <HeroCard
                 label={t.usage.sandboxMinutes}
                 value={data.totals.sandbox_minutes.toLocaleString()}
                 unit={t.usage.minutesUnit}
-                delta={deltaPct(data.totals.sandbox_minutes, data.prev?.sandbox_minutes ?? 0)}
+                delta={deltaVs(data.totals.sandbox_minutes, data.prev?.sandbox_minutes)}
               />
             </div>
 
@@ -909,7 +915,7 @@ export function Usage() {
                 label={t.usage.inputTokens}
                 value={formatCompact(data.totals.input_tokens)}
                 unit={t.usage.tokensUnit}
-                delta={deltaPct(data.totals.input_tokens, data.prev?.input_tokens ?? 0)}
+                delta={deltaVs(data.totals.input_tokens, data.prev?.input_tokens)}
                 vsPrev={vsPrev}
                 spark={spark("input_tokens")}
               />
@@ -917,7 +923,7 @@ export function Usage() {
                 label={t.usage.outputTokens}
                 value={formatCompact(data.totals.output_tokens)}
                 unit={t.usage.tokensUnit}
-                delta={deltaPct(data.totals.output_tokens, data.prev?.output_tokens ?? 0)}
+                delta={deltaVs(data.totals.output_tokens, data.prev?.output_tokens)}
                 vsPrev={vsPrev}
                 spark={spark("output_tokens")}
               />
@@ -925,7 +931,7 @@ export function Usage() {
                 label={t.usage.cachedRead}
                 value={formatCompact(data.totals.cached_read_tokens)}
                 unit={t.usage.tokensUnit}
-                delta={deltaPct(data.totals.cached_read_tokens, data.prev?.cached_read_tokens ?? 0)}
+                delta={deltaVs(data.totals.cached_read_tokens, data.prev?.cached_read_tokens)}
                 vsPrev={vsPrev}
                 spark={spark("cached_read_tokens")}
               />

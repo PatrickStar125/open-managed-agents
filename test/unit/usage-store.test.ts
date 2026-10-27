@@ -390,6 +390,7 @@ describe("SqlUsageStore — v2 recordLedger", () => {
       callEntry({ correlationId: "corr_neg", input_tokens: -5 }),
       callEntry({ correlationId: "corr_frac", input_tokens: 10.5 }),
       callEntry({ correlationId: "corr_badval", value: -1 }),
+      callEntry({ correlationId: "corr_zero", value: 0 }),
     ]);
     const r = await db()
       .prepare(`SELECT COUNT(*) AS n FROM usage_events WHERE correlation_id LIKE 'corr_%'`)
@@ -543,7 +544,7 @@ describe("SqlUsageStore — v2 dailyRollup", () => {
       tenantId: TENANT_A, fromMs: Date.now() + 86_400_000, toMs: Date.now() + 2 * 86_400_000,
     });
     expect(future.totals.model_calls).toBe(0);
-    // Empty window: no data days in range → no rows at all (fill is
-    // bounded by the data's own first/last days).
+    // Empty window: no data days in range → no rows at all.
+    expect(future.daily).toHaveLength(0);
   });
 });
