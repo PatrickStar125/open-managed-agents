@@ -3950,17 +3950,13 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Outbound-event usage tap. Two jobs on every broadcast event:
-   *
-   * 1. Credit cache tokens to the thread (input/output totals arrive
-   *    via reportUsage; this only handles the cache deltas). Idempotent
-   *    because each model_request_end is emitted exactly once per step.
-   * 2. Fire the v2 ledger projection for the itemized usage rows
-   *    (model_call / tool_use) — see emitLedgerRows below.
+   * Inspect an outbound event for a `span.model_request_end` carrying
+   * `model_usage` and credit cache tokens to the given thread. Input /
+   * output token totals arrive via reportUsage at turn end; this only
+   * handles the cache-bucket deltas. The v2 ledger projection
+   * (emitLedgerRows) runs beside this at the two broadcast call sites.
    */
   private maybeCreditCacheTokens(threadId: string, event: SessionEvent): void {
-    this.emitLedgerRows(event);
-    if (event.type === "agent.tool_use" || event.type === "agent.mcp_tool_use") return;
     if (event.type !== "span.model_request_end") return;
     const usage = (event as unknown as {
       model_usage?: {
