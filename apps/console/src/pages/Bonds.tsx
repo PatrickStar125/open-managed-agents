@@ -18,8 +18,10 @@ import { useI18n } from "../i18n";
 import { matter, MatterError, type Bond, type Loop } from "../lib/matter";
 import {
   bondPath,
+  FeishuAppForm,
   FeishuLinker,
   GitLabLinker,
+  GitLabTokenReplacer,
   loopPath,
   MatterNotice,
   MatterSection,
@@ -190,6 +192,10 @@ export function BondDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  // Bumped to load the Bond again after its token changed.
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -205,7 +211,7 @@ export function BondDetailPage() {
     };
     // errorText only reads the current locale's messages.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, revision]);
 
   if (error) return <BondPageShell><MatterNotice tone="danger">{error}</MatterNotice></BondPageShell>;
   if (bond === undefined) return <BondPageShell><MatterNotice>{t.common.loading}</MatterNotice></BondPageShell>;
@@ -235,7 +241,14 @@ export function BondDetailPage() {
     <BondPageShell>
       <MatterTitle provider={bond.provider} title={bond.label} subtitle={m.providers[bond.provider]} status={<BondStatus bond={bond} />} />
 
-      <MatterSection title={m.bonds.sectionInfo}>
+      <MatterSection
+        title={m.bonds.sectionInfo}
+        action={
+          <Button size="sm" variant="outline" onClick={() => setReplacing((open) => !open)}>
+            {bond.provider === "gitlab" ? m.bonds.replaceToken : m.bonds.replaceSecret}
+          </Button>
+        }
+      >
         <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2 text-sm">
           {details.map(([k, v]) => (
             <div key={k} className="contents">
@@ -252,6 +265,32 @@ export function BondDetailPage() {
             </>
           )}
         </dl>
+        {notice && <p className="mt-3 text-sm text-success">{notice}</p>}
+        {replacing && bond.provider === "gitlab" && (
+          <div className="mt-4 border-t border-border pt-4">
+            <GitLabTokenReplacer
+              connectionId={bond.id.replace(/^gitlab:/, "")}
+              onReplaced={() => {
+                setReplacing(false);
+                setNotice(m.bonds.tokenReplaced);
+                setRevision((n) => n + 1);
+              }}
+            />
+          </div>
+        )}
+        {replacing && bond.provider === "feishu" && (
+          <div className="mt-4 border-t border-border pt-4">
+            <FeishuAppForm
+              fixed={{ appId: String(bond.details.appId ?? ""), brand: bond.details.brand === "lark" ? "lark" : "feishu" }}
+              submitLabel={m.bonds.replace}
+              onLinked={() => {
+                setReplacing(false);
+                setNotice(m.bonds.secretReplaced);
+                setRevision((n) => n + 1);
+              }}
+            />
+          </div>
+        )}
       </MatterSection>
 
       {bond.provider === "feishu" && (

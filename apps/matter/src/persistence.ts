@@ -95,7 +95,8 @@ export interface GitLabConnectionRecord {
   readonly id: string;
   /** The instance root, for example `https://gitlab.example.com`. */
   readonly baseUrl: string;
-  /** The bot user's token (API scope); notes are posted as this user. */
+  /** The bot user's token; notes are posted as this user. `read_repository`
+   * is enough to clone, `api` is needed to post notes. */
   readonly token: string;
   /** The bot user's username, without @; comments mentioning it are answered. */
   readonly username: string;
@@ -106,6 +107,10 @@ export interface GitLabConnectionRecord {
   readonly tenantId: string;
   readonly userId?: string;
   readonly agentId: string;
+  /** The token's scopes and expiry (YYYY-MM-DD), when GitLab told them at
+   * link time; shown to the user only. */
+  readonly tokenScopes?: readonly string[];
+  readonly tokenExpiresAt?: string;
   readonly connectedAt: string;
 }
 
@@ -138,7 +143,9 @@ export interface ConnectionError {
 
 export interface MatterDatabase {
   readonly apps: {
-    /** Insert or replace: connecting the same app again moves it. */
+    /** Insert, or replace the same tenant's app (connecting it again). An
+     * app another tenant linked stays theirs: the record returned is
+     * theirs, unchanged. */
     save(connection: FeishuConnection, extra?: { readonly botOpenId?: string }): Promise<FeishuAppRecord>;
     list(): Promise<readonly FeishuAppRecord[]>;
     get(appId: string): Promise<FeishuAppRecord | undefined>;
@@ -149,6 +156,13 @@ export interface MatterDatabase {
   readonly gitlab: {
     /** Insert or replace by id. */
     save(connection: GitLabConnectionInput): Promise<GitLabConnectionRecord>;
+    /** Give the tenant's existing connection a new token (and its user and
+     * facts); undefined, and nothing written, when there is no such row. */
+    updateToken(
+      id: string,
+      tenantId: string,
+      update: Pick<GitLabConnectionRecord, "token" | "username" | "tokenScopes" | "tokenExpiresAt">,
+    ): Promise<GitLabConnectionRecord | undefined>;
     list(): Promise<readonly GitLabConnectionRecord[]>;
     get(id: string): Promise<GitLabConnectionRecord | undefined>;
     delete(id: string): Promise<boolean>;
@@ -257,19 +271,36 @@ const tables = (kind: "sqlite" | "mysql"): string[] => {
   ];
 };
 
-/** `INSERT … ON CONFLICT DO UPDATE` in each dialect. */
+/** Nullable text columns added after a table was first created, as
+ * `[table, column]`; added when missing. */
+const addedColumns: readonly (readonly [string, string])[] = [
+  ["openmatter_gitlab_connections", "token_scopes"],
+  ["openmatter_gitlab_connections", "token_expires_at"],
+];
+
+/** `INSERT … ON CONFLICT DO UPDATE` in each dialect. With `guard`, an
+ * existing row is replaced only when its `guard` column already has the
+ * new value (the same owner). Columns in `keep` keep their value when the
+ * new one is NULL. */
 const upsert = (
   kind: "sqlite" | "mysql",
   table: string,
   columns: readonly string[],
   key: string,
+  options: { readonly guard?: string; readonly keep?: readonly string[] } = {},
 ): string => {
+  const { guard, keep = [] } = options;
   const updates = columns.filter((c) => c !== key);
   const placeholders = columns.map(() => "?").join(", ");
   const head = `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`;
-  return kind === "mysql"
-    ? `${head} ON DUPLICATE KEY UPDATE ${updates.map((c) => `${c} = VALUES(${c})`).join(", ")}`
-    : `${head} ON CONFLICT (${key}) DO UPDATE SET ${updates.map((c) => `${c} = excluded.${c}`).join(", ")}`;
+  if (kind === "mysql") {
+    const next = (c: string) => (keep.includes(c) ? `COALESCE(VALUES(${c}), ${c})` : `VALUES(${c})`);
+    const value = (c: string) => (guard === undefined ? next(c) : `IF(${guard} = VALUES(${guard}), ${next(c)}, ${c})`);
+    return `${head} ON DUPLICATE KEY UPDATE ${updates.map((c) => `${c} = ${value(c)}`).join(", ")}`;
+  }
+  const value = (c: string) => (keep.includes(c) ? `COALESCE(excluded.${c}, ${table}.${c})` : `excluded.${c}`);
+  const where = guard === undefined ? "" : ` WHERE ${table}.${guard} = excluded.${guard}`;
+  return `${head} ON CONFLICT (${key}) DO UPDATE SET ${updates.map((c) => `${c} = ${value(c)}`).join(", ")}${where}`;
 };
 
 const insertIgnore = (kind: "sqlite" | "mysql") =>
@@ -336,6 +367,8 @@ const createMatterDatabase = (
     tenant_id: string;
     user_id: string | null;
     agent_id: string;
+    token_scopes: string | null;
+    token_expires_at: string | null;
     connected_at: string;
   };
   const toGitLab = (row: GitLabRow): GitLabConnectionRecord => ({
@@ -348,6 +381,8 @@ const createMatterDatabase = (
     tenantId: row.tenant_id,
     ...(row.user_id === null ? {} : { userId: row.user_id }),
     agentId: row.agent_id,
+    ...(row.token_scopes === null ? {} : { tokenScopes: JSON.parse(row.token_scopes) as string[] }),
+    ...(row.token_expires_at === null ? {} : { tokenExpiresAt: row.token_expires_at }),
     connectedAt: row.connected_at,
   });
   type RegistrationRow = {
@@ -398,6 +433,8 @@ const createMatterDatabase = (
     "tenant_id",
     "user_id",
     "agent_id",
+    "token_scopes",
+    "token_expires_at",
     "connected_at",
   ];
   const getApp = async (appId: string) => {
@@ -466,7 +503,12 @@ const createMatterDatabase = (
     apps: {
       save: async (connection, extra = {}) => {
         const { app } = connection;
-        await sql.run(upsert(sql.kind, "openmatter_feishu_apps", appColumns, "app_id"), [
+        // A relink that could not read the bot keeps the open_id it had.
+        const statement = upsert(sql.kind, "openmatter_feishu_apps", appColumns, "app_id", {
+          guard: "tenant_id",
+          keep: ["bot_open_id"],
+        });
+        await sql.run(statement, [
           app.appId,
           box.seal(app.appSecret, appSecretPurpose(app.appId)),
           app.brand,
@@ -499,9 +541,28 @@ const createMatterDatabase = (
           c.tenantId,
           c.userId ?? null,
           c.agentId,
+          c.tokenScopes === undefined ? null : JSON.stringify(c.tokenScopes),
+          c.tokenExpiresAt ?? null,
           now().toISOString(),
         ]);
         return (await getGitLab(c.id))!;
+      },
+      updateToken: async (id, tenantId, update) => {
+        const changed = await sql.run(
+          `UPDATE openmatter_gitlab_connections
+           SET token = ?, username = ?, token_scopes = ?, token_expires_at = ?, connected_at = ?
+           WHERE id = ? AND tenant_id = ?`,
+          [
+            box.seal(update.token, gitlabTokenPurpose(id)),
+            update.username,
+            update.tokenScopes === undefined ? null : JSON.stringify(update.tokenScopes),
+            update.tokenExpiresAt ?? null,
+            now().toISOString(),
+            id,
+            tenantId,
+          ],
+        );
+        return changed > 0 ? getGitLab(id) : undefined;
       },
       list: async () =>
         (await sql.rows<GitLabRow>(`SELECT * FROM openmatter_gitlab_connections ORDER BY connected_at, id`)).map(
@@ -740,6 +801,10 @@ export const openSqliteMatterDatabase = (options: {
       db.exec(`INSERT OR IGNORE INTO ${to} SELECT * FROM ${from}; DROP TABLE ${from};`);
     }
   }
+  for (const [table, column] of addedColumns) {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!columns.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+  }
   return createMatterDatabase(
     sqliteDriver(db),
     options.box,
@@ -781,6 +846,14 @@ export const openMysqlMatterDatabase = async (options: {
         // CREATE INDEX has no IF NOT EXISTS in MySQL 8; a second replica
         // (or a restart) finds it already there.
         if ((error as { code?: string }).code !== "ER_DUP_KEYNAME") throw error;
+      }
+    }
+    for (const [table, column] of addedColumns) {
+      try {
+        await pool.query(`ALTER TABLE ${table} ADD COLUMN ${column} LONGTEXT NULL`);
+      } catch (error) {
+        // Added by an earlier start or another replica.
+        if ((error as { code?: string }).code !== "ER_DUP_FIELDNAME") throw error;
       }
     }
   } catch (error) {
