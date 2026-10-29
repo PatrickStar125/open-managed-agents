@@ -313,6 +313,7 @@ type AppCtx = import("hono").Context<{
     tenant_id: string;
     user_id?: string;
     auth_credential?: ApiKeyResolution["credential"];
+    auth_key_id?: string;
     services: import("@open-managed-agents/services").Services;
     tenantDb: D1Database;
   };
@@ -1346,7 +1347,7 @@ app.route("/openai", buildOpenAIAgentsProtocolApi(context => {
     // Auth-context attribution for every session this surface creates.
     actor: ctx.var.user_id !== undefined
       ? { type: "member", id: ctx.var.user_id }
-      : { type: "api_key", id: null },
+      : { type: "api_key", id: ctx.var.auth_key_id ?? null },
     history: new SessionRuntimeHistoryApplicationService({ workspaceId, source: new SqlSessionRuntimeHistorySource(new CfD1SqlClient(ctx.var.tenantDb)) }),
     mapping: createManagedSessionMapping({ agents, environments, resources, secrets, runtime: createSandboxOptionalSessionMapping(environments) }),
     resources: { execute: artifacts },

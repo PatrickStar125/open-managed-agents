@@ -53,7 +53,7 @@ export function buildSessionRoutes(
   Variables: { tenant_id: string; user_id?: string };
 }> {
   const app = new Hono<{
-    Variables: { tenant_id: string; user_id?: string };
+    Variables: { tenant_id: string; user_id?: string; auth_key_id?: string };
   }>();
   app.use("*", requireBeta(MANAGED_AGENTS_BETA));
 
@@ -242,7 +242,7 @@ export function buildSessionRoutes(
         parsed.data,
         userId !== undefined
           ? { type: "member", id: userId }
-          : { type: "api_key", id: null },
+          : { type: "api_key", id: c.get("auth_key_id") ?? null },
       ),
     );
     if (result.type === "invalid_request") {

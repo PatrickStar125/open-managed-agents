@@ -46,6 +46,10 @@ export interface UsageEventRow {
   tenant_id: string;
   session_id: string;
   agent_id: string | null;
+  /** Attribution (0025), additive so the v1 billing pull and cost
+   *  attribution readers see who created the session. */
+  actor_type: string | null;
+  actor_id: string | null;
   kind: UsageKind;
   value: number;
   created_at: number;
@@ -136,7 +140,7 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
     const cap = Math.max(1, Math.min(5000, Math.floor(limit) || 500));
     const r = await this.client
       .prepare(
-        `SELECT id, tenant_id, session_id, agent_id, kind, value, created_at, billed_at
+        `SELECT id, tenant_id, session_id, agent_id, actor_type, actor_id, kind, value, created_at, billed_at
            FROM usage_events
           WHERE tenant_id = ? AND billed_at IS NULL AND id > ?
           ORDER BY id ASC
@@ -161,7 +165,7 @@ export class SqlUsageStore implements UsageStore, LedgerStore {
     bindings.push(cap);
     const r = await this.client
       .prepare(
-        `SELECT id, tenant_id, session_id, agent_id, kind, value, created_at, billed_at
+        `SELECT id, tenant_id, session_id, agent_id, actor_type, actor_id, kind, value, created_at, billed_at
            FROM usage_events
           WHERE tenant_id = ?
             AND created_at >= ? AND created_at < ?
