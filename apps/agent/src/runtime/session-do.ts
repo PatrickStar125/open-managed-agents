@@ -141,6 +141,8 @@ import {
 } from "@open-managed-agents/session-wakeup-cloudflare";
 
 interface SessionInitParams {
+  actor_type?: "member" | "api_key" | "integration";
+  actor_id?: string | null;
   agent_id: string;
   environment_id: string;
   title: string;
@@ -210,6 +212,9 @@ type ActiveOutcome = ActiveOutcomeState;
 type PersistedOutcomeEvaluation = OutcomeEvaluationRecord;
 
 interface SessionState {
+  /** Attribution stamped at /init from the creating auth context. */
+  actor_type?: "member" | "api_key" | "integration" | null;
+  actor_id?: string | null;
   agent_id: string;
   environment_id: string;
   session_id: string;
@@ -1954,6 +1959,8 @@ export class SessionDO extends DurableObject<Env> {
       const params = (await request.json()) as SessionInitParams;
       this.setState({
         ...this.state,
+        actor_type: params.actor_type ?? null,
+        actor_id: params.actor_id ?? null,
         agent_id: params.agent_id,
         environment_id: params.environment_id,
         title: params.title,
@@ -3335,6 +3342,9 @@ export class SessionDO extends DurableObject<Env> {
               try {
                 const { getCfServicesForTenant } = await import("@open-managed-agents/services");
                 const services = await getCfServicesForTenant(this.env, tenantId);
+                // shortcut: still v1 recordUsage — the close hook carries no
+                // stable correlation anchor (no window start / browser session
+                // id); migrate when the hook gains one.
                 await services.usage.recordUsage({
                   tenantId,
                   sessionId,
@@ -3963,11 +3973,9 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Inspect an outbound event for a `span.model_request_end` carrying
    * `model_usage` and credit cache tokens to the given thread. Input /
-   * output token totals already arrive via reportUsage at the end of the
-   * turn (default-loop step 10), so this only handles the cache-bucket
-   * deltas reportUsage doesn't carry. Idempotent across primary +
-   * sub-agent broadcast paths because each model_request_end event is
-   * emitted exactly once per LLM step.
+   * output token totals arrive via reportUsage at turn end; this only
+   * handles the cache-bucket deltas. The v2 ledger projection
+   * (emitLedgerRows) runs beside this at the two broadcast call sites.
    */
   private maybeCreditCacheTokens(threadId: string, event: SessionEvent): void {
     if (event.type !== "span.model_request_end") return;
@@ -3987,6 +3995,121 @@ export class SessionDO extends DurableObject<Env> {
       cache_creation_input_tokens: cc,
       cache_read_input_tokens: cr,
     });
+  }
+
+  /** Memoized per-tenant services for the hot ledger tap — every
+   *  model_call/tool_use event needs a container, and rebuilding the
+   *  provider per event costs a control-plane read on sharded
+   *  deployments. Keyed by tenant; the promise memoizes failures too,
+   *  which is fine (the tap is at-least-once, next event retries). */
+  private ledgerServicesCache: {
+    tenantId: string;
+    p: Promise<Awaited<ReturnType<typeof import("@open-managed-agents/services").getCfServicesForTenant>>>;
+  } | null = null;
+
+  private ledgerServicesFor(tenantId: string) {
+    if (!this.ledgerServicesCache || this.ledgerServicesCache.tenantId !== tenantId) {
+      this.ledgerServicesCache = {
+        tenantId,
+        p: import("@open-managed-agents/services").then((m) =>
+          m.getCfServicesForTenant(this.env, tenantId),
+        ),
+      };
+    }
+    return this.ledgerServicesCache.p;
+  }
+
+  /**
+   * v2 ledger projection tap (design: docs/usage-ledger-design.md).
+   * span.model_request_end → one model_call row carrying the call's
+   * full token economics; agent.tool_use / agent.mcp_tool_use → one
+   * tool_use row. Fire-and-forget: a usage emit must never fail the
+   * turn, and correlation_id dedupes redeliveries. shortcut: a DO
+   * eviction mid-flight can drop the row (at-most-once window); an
+   * outbox-grade source closes it if ledger gaps ever matter.
+   *
+   * ACP harnesses (Claude Code, Codex, DSH, …) are metered by this
+   * same tap: acp-translate projects the child's PromptResponse.usage
+   * into a span.model_request_end per PROMPT TURN (one translator per
+   * run() ⇒ unique correlation per turn). Two ACP-specific gaps, by
+   * protocol: the row aggregates the child's internal calls (coarser
+   * than native per-request rows), and children that report no usage
+   * yield no row at all (tap skips on !usage).
+   */
+  private emitLedgerRows(event: SessionEvent): void {
+    if (
+      event.type !== "span.model_request_end" &&
+      event.type !== "agent.tool_use" &&
+      event.type !== "agent.mcp_tool_use"
+    ) {
+      return;
+    }
+    void (async () => {
+      try {
+        const tenantId = this.state.tenant_id;
+        const sessionId = this.state.session_id;
+        if (!tenantId || !sessionId) return; // early-init edge
+        const services = await this.ledgerServicesFor(tenantId);
+        if (event.type === "span.model_request_end") {
+          const e = event as {
+            id?: string;
+            model_request_start_id?: string;
+            provider_response_id?: string;
+            model?: string;
+            model_usage?: {
+              input_tokens: number;
+              output_tokens: number;
+              cache_read_input_tokens?: number;
+              cache_creation_input_tokens?: number;
+            };
+          };
+          const u = e.model_usage;
+          // No id at all → can't dedupe; skip rather than risk dupes.
+          const corr = e.id ?? e.model_request_start_id ?? e.provider_response_id;
+          if (!u || !corr) return;
+          await services.usage.recordLedger([
+            {
+              tenantId,
+              sessionId,
+              agentId: this.state.agent_id || null,
+              actorType: this.state.actor_type ?? undefined,
+              actorId: this.state.actor_id ?? undefined,
+              kind: "model_call",
+              value: 1,
+              correlationId: `call:${corr}`,
+              input_tokens: u.input_tokens,
+              output_tokens: u.output_tokens,
+              cached_read_tokens: u.cache_read_input_tokens,
+              cached_write_tokens: u.cache_creation_input_tokens,
+              dimensions: e.model ? { modelId: e.model } : undefined,
+            },
+          ]);
+        } else {
+          const e = event as { id: string; name: string; mcp_server_name?: string };
+          const toolName =
+            event.type === "agent.mcp_tool_use" && e.mcp_server_name
+              ? `${e.mcp_server_name}:${e.name}`
+              : e.name;
+          await services.usage.recordLedger([
+            {
+              tenantId,
+              sessionId,
+              agentId: this.state.agent_id || null,
+              actorType: this.state.actor_type ?? undefined,
+              actorId: this.state.actor_id ?? undefined,
+              kind: "tool_use",
+              value: 1,
+              correlationId: `tool:${e.id}`,
+              dimensions: { toolName },
+            },
+          ]);
+        }
+      } catch (err) {
+        console.error(
+          `[session_do] ledger emit failed: ${(err as Error).message ?? err}`,
+        );
+      }
+    })();
   }
 
   /**
@@ -4718,6 +4841,7 @@ export class SessionDO extends DurableObject<Env> {
           this.broadcastEvent(taggedEvent);
           this.fanOutToHooks(taggedEvent);
           this.maybeCreditCacheTokens(threadId, taggedEvent);
+          this.emitLedgerRows(taggedEvent);
         },
         ...this.buildStreamRuntimeMethods(
           threadId,
@@ -5257,6 +5381,7 @@ export class SessionDO extends DurableObject<Env> {
           this.broadcastEvent(event, activeFence);
           this.fanOutToHooks(event);
           this.maybeCreditCacheTokens(turnThreadId, event);
+          this.emitLedgerRows(event);
         },
         ...this.buildStreamRuntimeMethods(turnThreadId, activeFence),
         reportUsage: async (input_tokens: number, output_tokens: number) => {
@@ -5777,13 +5902,21 @@ export class SessionDO extends DurableObject<Env> {
       // the Services container — the same path used for backup writes.
       const { getCfServicesForTenant } = await import("@open-managed-agents/services");
       const services = await getCfServicesForTenant(this.env, tenantId);
-      await services.usage.recordUsage({
-        tenantId,
-        sessionId,
-        agentId: this.state.agent_id || null,
-        kind: "session_alive_seconds",
-        value: seconds,
-      });
+      // v2 ledger emit: correlation fixes the latent double-emit when a
+      // crash lands between the write and the billed-flag setState.
+      await services.usage.recordLedger([
+        {
+          tenantId,
+          sessionId,
+          agentId: this.state.agent_id || null,
+          actorType: this.state.actor_type ?? undefined,
+          actorId: this.state.actor_id ?? undefined,
+          kind: "session_alive_seconds",
+          value: seconds,
+          correlationId: `alive:${sessionId}`,
+          interval: { startMs: createdAt, endMs: Date.now() },
+        },
+      ]);
       this.setState({ ...this.state, session_alive_billed: true });
       console.log(
         `[session_do] usage emit session_alive_seconds=${seconds} session=${sessionId.slice(0, 12)}`,

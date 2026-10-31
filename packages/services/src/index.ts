@@ -101,7 +101,7 @@ import {
 import { type BlobStore, blobStoreFromR2 } from "@open-managed-agents/blob-store";
 import { type KvStore, CfKvStore } from "@open-managed-agents/kv-store";
 import { parseStoreBackends, pickBackend } from "./store-backends";
-import { type UsageStore, createCfUsageStore } from "./usage";
+import { type LedgerStore, createCfUsageStore } from "./usage";
 
 export { parseStoreBackends, pickBackend } from "./store-backends";
 export type { StoreBackendName, BackendFactories } from "./store-backends";
@@ -111,13 +111,24 @@ export {
   createCfUsageStore,
   clampUsageValue,
   MAX_VALUE_PER_EMIT_SEC,
+  LEDGER_KIND_UNITS,
+  normalizeLedgerEntry,
 } from "./usage";
 export type {
   UsageStore,
+  LedgerStore,
   UsageKind,
+  LedgerKind,
   UsageEventInput,
   UsageEventRow,
   UsageHistoryQuery,
+  LedgerEntryInput,
+  LedgerCapabilities,
+  LedgerQuery,
+  LedgerRow,
+  LedgerPage,
+  LedgerDailyRow,
+  LedgerRollup,
 } from "./usage";
 
 /**
@@ -176,7 +187,7 @@ export interface Services {
    * the count, hosted owns the rate map + ledger debit. See
    * packages/services/src/usage.ts for details.
    */
-  usage: UsageStore;
+  usage: LedgerStore;
 }
 
 /**
