@@ -18,6 +18,7 @@ import {
   ModelCardsIcon,
   SessionsIcon,
   SkillsIcon,
+  UsageIcon,
   VaultIcon,
 } from "./icons";
 import { consolePlugins } from "../plugins/registry";
@@ -40,7 +41,10 @@ function useNavGroups(): NavGroup[] {
   return [
     {
       label: t.nav.overview,
-      items: [{ to: "/", label: t.nav.dashboard, icon: DashboardIcon, end: true }],
+      items: [
+        { to: "/", label: t.nav.dashboard, icon: DashboardIcon, end: true },
+        { to: "/usage", label: t.nav.usage, icon: UsageIcon },
+      ],
     },
     {
       label: t.nav.managedAgents,

@@ -56,3 +56,36 @@ export function pickTickStep(totalMs: number): number {
   for (const c of candidates) if (c >= target) return c;
   return candidates[candidates.length - 1];
 }
+
+/** Compact number for tiles/axis/table cells: 1_234_567 → "1.2M". */
+export function formatCompact(n: number): string {
+  if (!Number.isFinite(n)) return "–";
+  const abs = Math.abs(n);
+  if (abs < 1_000) return String(Math.round(n));
+  if (abs < 1_000_000) return `${trim1(n / 1_000)}K`;
+  if (abs < 1_000_000_000) return `${trim1(n / 1_000_000)}M`;
+  return `${trim1(n / 1_000_000_000)}G`;
+}
+
+function trim1(v: number): string {
+  const r = Math.abs(v) >= 100 ? Math.round(v) : Math.round(v * 10) / 10;
+  return String(r);
+}
+
+// ── UTC day-granularity date helpers (YYYY-MM-DD) ─────────────────────────
+
+export function isoToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function isoAdd(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+export function isoDiff(a: string, b: string): number {
+  return Math.round(
+    (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000,
+  );
+}
