@@ -37,8 +37,12 @@ export interface ManagedSessionsApiExtensions {
 export function buildManagedSessionsApi(
   ports: ManagedSessionsApplicationPortSources,
   extensions: ManagedSessionsApiExtensions = {},
-): Hono {
-  const app = new Hono();
+): Hono<{
+  Variables: { tenant_id: string; user_id?: string };
+}> {
+  const app = new Hono<{
+    Variables: { tenant_id: string; user_id?: string };
+  }>();
   if (extensions.outputs !== undefined) {
     app.route(
       "/",

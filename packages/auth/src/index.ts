@@ -29,6 +29,13 @@ export interface AuthSession {
 export interface ApiKeyResolution {
   tenantId: string;
   userId?: string;
+  /**
+   * The ak_ handle of the presented workspace key — the attribution id
+   * for ledger rows. A non-secret row handle (the raw key never
+   * persists anywhere); undefined when no key record backs the request
+   * (session cookies, the dev bootstrap key... which we name "dev").
+   */
+  keyId?: string;
   credential?:
     | { type: "workspace" }
     | { type: "environment"; environmentId: string }

@@ -13,6 +13,8 @@ export interface SessionSemanticMapping {
 }
 export interface SessionSemanticDependencies {
   workspaceId: string;
+  /** Auth-context attribution stamped onto sessions.create. */
+  actor?: import("@open-managed-agents/managed-agents-application/ports/sessions").CreateSessionCommand["actor"];
   sessions: SessionsApplicationPort;
   sessionEvents: SessionEventsApplicationPort;
   history: SessionRuntimeHistoryApplicationPort;
@@ -128,6 +130,9 @@ export function createSessionsHandler(deps: SessionSemanticDependencies): OpenAI
     const {operation,params,query,body} = request;
     if (operation === "sessions.create") {
       const command = await deps.mapping.prepareCreate(body);
+      if (deps.actor !== undefined && command.actor === undefined) {
+        command.actor = deps.actor;
+      }
       const created = await deps.sessions.createSession(command);
       if (created.type !== "created") return invalid(created.message);
       const current = await snapshot(created.session.id);

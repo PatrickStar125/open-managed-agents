@@ -27,32 +27,35 @@ async function sha256(data: string): Promise<string> {
     .join("");
 }
 
-async function resolveWorkspaceApiKey(env: Env, apiKey: string): Promise<{
-  tenantId: string;
-  userId?: string;
-  credential?: ApiKeyResolution["credential"];
-} | null> {
+async function resolveWorkspaceApiKey(
+  env: Env,
+  apiKey: string,
+): Promise<ApiKeyResolution | null> {
   if (env.API_KEY && env.API_KEY !== "" && apiKey === env.API_KEY) {
-    return { tenantId: "default" };
+    // Dev bootstrap key has no KV record; name it so dev rows attribute.
+    return { tenantId: "default", keyId: "dev" };
   }
   const hash = await sha256(apiKey);
   const keyData = await new CfKvStore(env.CONFIG_KV).get(`apikey:${hash}`);
   if (!keyData) return null;
-  const { tenant_id, user_id, credential } = JSON.parse(keyData) as {
+  const { tenant_id, user_id, credential, id: keyId } = JSON.parse(keyData) as {
     tenant_id: string;
     user_id?: string;
     credential?: ApiKeyResolution["credential"];
+    id?: string;
   };
-  if (user_id) return { tenantId: tenant_id, userId: user_id, credential };
-  if (!env.MAIN_DB) return { tenantId: tenant_id, credential };
+  if (user_id) {
+    return { tenantId: tenant_id, userId: user_id, credential, keyId };
+  }
+  if (!env.MAIN_DB) return { tenantId: tenant_id, credential, keyId };
   try {
     const result = await env.MAIN_DB
       .prepare(`SELECT id FROM "user" WHERE tenantId = ? LIMIT 2`)
       .bind(tenant_id)
       .all<{ id: string }>();
     return result.results?.length === 1
-      ? { tenantId: tenant_id, userId: result.results[0].id, credential }
-      : { tenantId: tenant_id, credential };
+      ? { tenantId: tenant_id, userId: result.results[0].id, credential, keyId }
+      : { tenantId: tenant_id, credential, keyId };
   } catch (err) {
     logWarn(
       { op: "auth.tenant_user_lookup", tenant_id, err },
@@ -131,6 +134,7 @@ export const authMiddleware = createMiddleware<{
     tenant_id: string;
     user_id?: string;
     auth_credential?: ApiKeyResolution["credential"];
+    auth_key_id?: string;
   };
 }>(async (c, next) => {
   // Internal endpoints have their own header-secret auth (see routes/internal.ts)
@@ -158,6 +162,7 @@ export const authMiddleware = createMiddleware<{
     }
     c.set("tenant_id", resolved.tenantId);
     if (resolved.userId) c.set("user_id", resolved.userId);
+    if (resolved.keyId) c.set("auth_key_id", resolved.keyId);
     if (resolved.credential !== undefined) {
       c.set("auth_credential", resolved.credential);
     }

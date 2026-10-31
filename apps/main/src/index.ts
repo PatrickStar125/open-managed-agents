@@ -182,6 +182,7 @@ import dreamsRoutes from "./routes/dreams";
 import legacyFilesRoutes from "./routes/files";
 import legacySkillsRoutes from "./routes/skills";
 import modelCardsRoutes from "./routes/model-cards";
+import usageRoutes from "./routes/usage";
 import clawhubRoutes from "./routes/clawhub";
 import evalsRoutes from "./routes/evals";
 import costReportRoutes from "./routes/cost-report";
@@ -314,6 +315,7 @@ type AppCtx = import("hono").Context<{
     tenant_id: string;
     user_id?: string;
     auth_credential?: ApiKeyResolution["credential"];
+    auth_key_id?: string;
     services: import("@open-managed-agents/services").Services;
     tenantDb: D1Database;
   };
@@ -1339,6 +1341,10 @@ app.route("/openai", buildOpenAIAgentsProtocolApi(context => {
   });
   const sessions = createSessionsHandler({
     workspaceId, sessions: native.sessions, sessionEvents: native.sessionEvents,
+    // Auth-context attribution for every session this surface creates.
+    actor: ctx.var.user_id !== undefined
+      ? { type: "member", id: ctx.var.user_id }
+      : { type: "api_key", id: ctx.var.auth_key_id ?? null },
     history: new SessionRuntimeHistoryApplicationService({ workspaceId, source: new SqlSessionRuntimeHistorySource(new CfD1SqlClient(ctx.var.tenantDb)) }),
     mapping: createManagedSessionMapping({ agents, environments, resources, secrets, runtime: createSandboxOptionalSessionMapping(environments) }),
     resources: { execute: artifacts },
@@ -1446,6 +1452,7 @@ app.route("/v1/oma/integrations", integrationsRoutes);
 app.route("/v1/oma/runtimes", runtimesRoutes);
 app.route("/v1/oma/oauth", oauthRoutes);
 app.route("/v1/oma/model_cards", modelCardsRoutes);
+app.route("/v1/oma/usage", usageRoutes);
 // Cloudflare sandboxes run one container image; there is no operator image
 // catalog, so the list is empty and `_oma.sandbox_image` is rejected.
 app.route("/v1/oma/sandbox_images", buildSandboxImageRoutes({ list: () => [] }));

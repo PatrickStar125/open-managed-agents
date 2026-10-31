@@ -76,6 +76,10 @@ describe("Managed Agents API — POST /v1/sessions", () => {
 
     expect(createCalls).toEqual([
       {
+        // Attribution from auth context: this test posts with no resolved
+        // user, so the actor is the workspace key path (id null — the test
+        // fake surfaces no key handle).
+        actor: { type: "api_key", id: null },
         agent: {
           type: "versioned",
           agentId: sessionView.agent.id,
